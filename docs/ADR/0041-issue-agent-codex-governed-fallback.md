@@ -2,251 +2,308 @@
 
 ## Status
 
-**Proposed** (2026-11-06, Issue #390, owner selection of Option 1: amend ADR 0037 before implementation).
+**Proposed, revision 2** (2026-11-06, Issue #390).
+
+Revision 2 rests on verified evidence about the Codex CLI's authentication methods and on the owner's cost
+constraint: an existing ChatGPT Pro plan, with no API key, new subscription or other spend.
 
 - This ADR is **not binding** and authorizes **no production change** until the owner accepts it.
-- Until acceptance, the Issue #390 branch keeps the fail-closed refusal in `run_executor`: Codex is never launched.
-- **Scope.** A proposed amendment of [ADR 0037](0037-github-native-issue-agent-execution.md) **D1** (topology) and **D8**
-  (no re-dispatch) only. It extends the state machine
+- The Issue #390 branch keeps the fail-closed refusal in `run_executor`: Codex is never launched.
+- The only implemented portion is the inert admission policy (F2), which nothing in the lifecycle calls.
+- **The fallback is not operational.** It may be described as operational only after a real end-to-end run (P8).
+- **Scope.** A proposed amendment of [ADR 0037](0037-github-native-issue-agent-execution.md) **D1** (topology) and
+  **D8** (no re-dispatch) only. It extends the state machine
   ([`ISSUE_AGENT_GITHUB_NATIVE_STATE_MACHINE.md`](../ISSUE_AGENT_GITHUB_NATIVE_STATE_MACHINE.md) §2, §4, §5, §6) by
-  one state. Every other decision of ADR 0037, ADR 0038 and ADR 0039 is reaffirmed unchanged, including D9: the
-  retired `agent-fallback-run`, n8n and Railway paths stay retired. This ADR adds no parallel orchestrator.
+  one state.
+- **Reaffirmed unchanged.** Every other decision of ADR 0037, ADR 0038 and ADR 0039, including D9: the retired
+  `agent-fallback-run`, n8n and Railway paths stay retired, and there is no parallel orchestrator.
 
 ## Context
 
-ADR 0037 runs the model exactly once per authorization: the executor is one fresh GitHub-hosted Ubuntu VM, the
-primary is Kilo inside `KiloContainerIsolation`, and D8 states that "the model is never re-dispatched". A
-transient provider failure of Kilo therefore ends the authorization as `FAILED`, and only an owner relabel starts
-a fresh execution.
+ADR 0037 runs the model exactly once per authorization, on one fresh GitHub-hosted Ubuntu VM, with Kilo inside
+`KiloContainerIsolation`. D8 says "the model is never re-dispatched". Issue #390 asks for a governed Codex
+fallback after a **recoverable** Kilo provider failure.
 
-Issue #390 asks for an automatic, governed fallback to Codex after a **recoverable** Kilo provider failure. Four
-facts constrain the design:
+### Facts the design rests on
 
-1. **Kilo stderr is not independent evidence.** `stderr_category` classifies output of a process that runs
-   model-influenced work, and the egress gateway is a TLS `CONNECT` proxy that cannot observe HTTP status. A model
-   could print `rate limit` to steer execution onto a different executor.
-2. **The available Codex host is a persistent, self-hosted macOS machine.** It is not a fresh VM, and ADR 0037
-   D1's isolation proofs (A-6, A-12) were made on Ubuntu.
-3. **The owner's sandbox probe passed** (2026-11-06: identity, workspace-write, private-read, outside-write all
-   PASS, as `hunteragent`, uid 502, under `sandbox-exec`). That probe denied **all** network access. Production
-   Codex needs provider egress, so the probe is a preliminary boundary, not a production attestation.
-4. **Owner constraints:**
-   - no permanent root/sudo privilege for the agent or the runner;
-   - no copy of the owner's personal Codex credentials;
-   - no push, PR or merge without owner approval.
+1. **Kilo's stderr is not independent evidence.** `stderr_category` classifies output of a process that runs
+   model-influenced work. The egress gateway is a TLS `CONNECT` proxy and cannot observe HTTP status codes.
+2. **The Codex host is the owner's persistent, self-hosted Mac,** not a fresh VM.
+3. **The owner's 2026-11-06 sandbox probe passed,** running as `hunteragent` (uid 502) under `sandbox-exec`. It
+   denied **all** network access, so it is a preliminary boundary, not a production attestation.
+4. **The repository is public.** `gh repo view fafa33/Project-Hunter` reports `PUBLIC`.
+
+### Codex CLI 0.167.0 authentication, verified 2026-11-06
+
+**From the installed CLI** (`codex login --help`, plus strings in the vendored `codex-darwin-x64` binary). The
+binary carries these modes:
+
+- `ApiKey`, through `--with-api-key` or the `OPENAI_API_KEY` / `CODEX_API_KEY` environment variables;
+- `Chatgpt`, the browser OAuth sign-in, or `--device-auth`;
+- `PersonalAccessToken`, through `--with-access-token` or the `CODEX_ACCESS_TOKEN` environment variable;
+- `AgentIdentity`;
+- workload-identity federation;
+- Bedrock.
+
+Credential storage can be `file`, `keyring`, `auto` or `ephemeral`.
+
+**From OpenAI's official documentation** (the Codex [Authentication], [Access tokens] and [CI/CD auth] pages,
+retrieved 2026-11-06):
+
+| Method | Plan / cost | Unattended? | Official position |
+|---|---|---|---|
+| API key | usage-billed | yes | "API keys are still the recommended default for automation" |
+| Codex access token (`CODEX_ACCESS_TOKEN`) | "currently supported for ChatGPT **Business and Enterprise** workspaces" | yes | for trusted scripts and private CI runners |
+| Persisted ChatGPT `auth.json` on a trusted runner | included plan usage (Pro) | yes | advanced and supported, but: "**Do not use this workflow for public or open-source repositories**" |
+| Device-code sign-in (`codex login --device-auth`, beta) | included plan usage (Pro) | **no**: a human approves each sign-in | the preferred sign-in for headless or remote hosts |
+| Copying the owner's personal `auth.json` | included plan usage | yes | prohibited by the owner, and the docs say to treat it like a password |
+
+[Authentication]: https://learn.chatgpt.com/docs/auth
+[Access tokens]: https://learn.chatgpt.com/docs/enterprise/access-tokens
+[CI/CD auth]: https://learn.chatgpt.com/docs/auth/ci-cd-auth.md
+
+**Conclusion.** On this public repository, with no additional cost, there is **no officially supported unattended
+ChatGPT Pro credential**:
+
+- the persisted-`auth.json` path is explicitly excluded for public repositories;
+- access tokens require a Business or Enterprise plan;
+- an API key costs money.
+
+The only supported zero-cost path is a ChatGPT session that the owner approves interactively with a device code.
+
+**One more constraint, which applies to any ChatGPT session.** Codex runs its tool commands as its own uid, inside
+the same outer sandbox, so the model can reach the session tokens the CLI holds. A ChatGPT refresh token speaks for
+the whole account, which is a broader grant than a scoped API key. Revision 2 therefore never persists such a
+token, and bounds its lifetime to one run.
 
 ## Decision
 
-### F1. Exactly one governed fallback dispatch (amends ADR 0037 D8)
+### F1. At most one governed fallback dispatch (amends ADR 0037 D8)
 
 D8 becomes: *the model is never re-dispatched, except for **at most one** Codex fallback dispatch per
-authorization. That dispatch happens in the **same** lifecycle run (`run_attempt == 1`), and only after the
-control domain has written a signed `FALLBACK_AUTHORIZED` ledger record (F4).*
+authorization, in the **same** lifecycle run (`run_attempt == 1`), and only after the control domain has written a
+signed `FALLBACK_AUTHORIZED` ledger record (F4).*
 
-- The fallback never falls back again.
-- Resumes never dispatch a model; `RESUME_STAGES` is unchanged.
-- The only other fresh execution is still an owner relabel.
-- **Kilo stays the primary.** The primary/secondary order is fixed in trusted code at `control_sha`. Issue text,
-  the prompt, repository content and workflow inputs cannot select or reorder providers.
+- **Admission is automatic.** Under F6, the **launch** additionally requires an owner-approved Codex session. If no
+  approval arrives within `fallback_session_window` (10 minutes), the authorization fails with
+  `EXECUTION_NOT_STARTED`. No model has run at that point.
+- **No chaining.** The fallback never falls back again.
+- **Resumes.** Resumes never dispatch a model.
+- **Fixed order.** Kilo stays the primary. The provider order is fixed in trusted code at `control_sha`. Issue
+  text, prompts, repository content and workflow inputs cannot select or reorder providers.
 
-### F2. Admissible cause: verified recoverable provider failure only
+### F2. Admissible cause: probe-verified recoverable provider failure only (implemented, inert)
 
-The executor job may claim a fallback cause only when **all** of these hold:
+A fallback is admissible only when **all** of the following hold:
 
-- **Closed set of causes:**
-  - `RATE_LIMIT`
-  - `QUOTA_EXCEEDED`
-  - `NETWORK` (provider unreachable)
-  - `PROVIDER_5XX`
-- **Two independent observations agree:**
-  - Kilo's `stderr_category`, which is untrusted and only a hint.
-  - A **trusted provider probe**: model-free trusted code in the executor's trusted step (never the isolation uid)
-    sends one bounded request with the model key, after the isolated run has stopped. It classifies only the HTTP
-    status or transport error into the same closed set. The probe sends no prompt, repository content or model
-    output.
-- **No primary result was produced.** The executor sealed no result and uploaded no result artifact.
-- **The primary run was not refused.** Kilo started, was not refused by isolation, and exited non-zero or timed out
-  on a provider call.
+- **Closed set of causes:** `RATE_LIMIT`, `QUOTA_EXCEEDED`, or `NETWORK` (the provider is unreachable).
+- **Independent agreement:** the untrusted `stderr_category` **equals** the category from a **trusted provider
+  probe**.
+  - The probe is model-free trusted code in the executor's trusted step, never the isolation uid.
+  - It runs after the isolated run has stopped.
+  - It sends one bounded request with the model key, carrying no prompt, repository content or model output.
+  - It classifies only the HTTP status or the transport error.
+- **No primary result:** zero primary result artifacts.
+- **Primary single attempt:** exactly one primary attempt was started, with isolation and authorization verified.
 
 **Never a fallback cause.** These are terminal exactly as today:
 
 - authorization, transport-integrity, provenance or schema failures;
-- isolation or attestation failures (`EXECUTION_NOT_STARTED`);
-- `SECRET_IN_RESULT`, `EXECUTOR_RESULT_REJECTED`, `NO_CHANGES`, `MODEL_TIMEOUT` without a probe-verified cause;
+- isolation or attestation failures;
+- `SECRET_IN_RESULT`, `EXECUTOR_RESULT_REJECTED`, `NO_CHANGES`;
+- `MODEL_TIMEOUT` and `MODEL_NOT_FOUND`;
+- generic `PROVIDER_UNAVAILABLE`;
 - authentication or permission errors;
-- `UNCLASSIFIED` failures, or any disagreement between the two observations;
-- any validation, publication or acceptance failure (these occur after `RESULT_BOUND` and never reach F4).
+- `UNCLASSIFIED`;
+- any disagreement between the two observations;
+- every validation, publication or acceptance failure.
 
-`MODEL_NOT_FOUND`, which the current branch's draft policy admits, is **removed**. It is a primary configuration
-defect, and falling back would hide it.
+`src/hunter/automation/issue_agent_fallback_policy.py` implements this predicate. No lifecycle code calls it.
 
 ### F3. Authenticated Ubuntu-to-macOS execution transport (reuses ADR 0037 D3)
 
-No new channel is introduced. The fallback consumes the **same** sealed handoff over GitHub artifact transport:
+No new channel is introduced.
 
-- **Sealing.** `authorize` seals the identical handoff plaintext twice:
-  - to the primary's `X_EXEC`, as today;
-  - to a **distinct** fallback recipient key `X_FB`.
+- **Two seals.** `authorize` seals the identical handoff plaintext to two recipients:
+  - the primary's `X_EXEC`, as today;
+  - a **distinct** fallback key `X_FB`.
 
-  `AUTHORIZED` evidence binds both ciphertext digests: `handoff_artifact` (existing) and an optional
-  `fallback_handoff_artifact`.
-- **Key separation.** `X_EXEC` never leaves the Ubuntu executor environment. `X_FB` is held only by a new
-  environment `hunter-issue-agent-fallback-executor`, branch policy `main`, scoped to the fallback job. If the Mac
-  is compromised, only `X_FB` is exposed: no primary key and no ledger key.
+  `AUTHORIZED` binds both ciphertext digests (`handoff_artifact`, and an optional `fallback_handoff_artifact`).
+- **Where `X_FB` lives.** `X_FB` is held only by a new environment, `hunter-issue-agent-fallback-executor`, with
+  branch policy `main`.
 - **Download checks.** The fallback job downloads only the artifact whose id and digest match
-  `fallback_handoff_artifact` (`digest-mismatch: error`). `run_executor` then applies its existing checks unchanged:
-  - the ciphertext digest equals the ledger binding;
-  - the envelope opens under the expected `TransportBinding`;
-  - the issuer signature verifies (`PromptAutomationVerifier`);
-  - the lineage and the prompt digest equal the ledger.
-- **Precondition.** The fallback job also requires a `FALLBACK_AUTHORIZED` record on the anchored ledger, which it
-  reads and verifies itself. It never reads the Ubuntu job's outputs as authority.
+  (`digest-mismatch: error`). `run_executor` then applies its existing checks unchanged:
+  - the ciphertext digest;
+  - the `TransportBinding`;
+  - the issuer signature (`PromptAutomationVerifier`);
+  - the lineage and prompt digests.
+- **Authority.** The fallback job verifies `FALLBACK_AUTHORIZED` on the anchored ledger itself. It never takes the
+  Ubuntu job's outputs as authority.
 
 ### F4. Ledger: one new state, attempt-bound identity (extends SM §2, §5)
 
-**New state.** `FALLBACK_AUTHORIZED` changes the transition table as follows:
+**New state and transitions.**
 
 - `AUTHORIZED → {RESULT_BOUND, FALLBACK_AUTHORIZED, FAILED}`
 - `FALLBACK_AUTHORIZED → {RESULT_BOUND, FAILED}`
 
-**Writers.** `bind`, in the control domain, writes `FALLBACK_AUTHORIZED` in one CAS. `bind` and `reconcile` may
-fail it. No other role writes it.
+**Writers.** `bind` writes the new state in one CAS. `bind` and `reconcile` may fail it.
 
-**`FALLBACK_AUTHORIZED` evidence (closed schema):**
+**`FALLBACK_AUTHORIZED` evidence (closed schema).**
 
-- `primary_executor_job_id`, `primary_executor_conclusion`;
-- `primary_cause`, from the F2 closed set;
-- `stderr_category` and `probe_category`, which must be equal;
-- `primary_result_artifacts: 0`;
-- `fallback_execution_id`, defined below;
-- `fallback_handoff_artifact`, the same digest as in `AUTHORIZED`;
-- `fallback_runner_label`, pinned;
-- `attestation_policy_sha256`, the digest of the pinned attestation policy (F5);
-- `fallback_deadline`.
+| Field | Content |
+|---|---|
+| `primary_executor_job_id`, `primary_executor_conclusion` | the primary attempt's job facts |
+| `primary_cause` | one of the F2 causes |
+| `stderr_category`, `probe_category` | must be equal |
+| `primary_result_artifacts` | `0` |
+| `fallback_execution_id` | the attempt-2 identity (see below) |
+| `fallback_handoff_artifact` | the second sealed handoff |
+| `fallback_runner_label` | pinned |
+| `attestation_policy_sha256` | the pinned attestation policy |
+| `fallback_deadline` | the latest time the fallback may finish |
 
-**Attempt-bound identity.** `fallback_execution_id = execution_identity(…, execution_attempt=2)`. This is a new
-**ledger** attempt field, distinct from GitHub `run_attempt`, which stays 1. For attempt 1 the existing derivation
-is unchanged, so every existing `execution_id` is preserved.
+**Attempt-bound identity.**
 
-- The fallback result is sealed under a `TransportBinding` that carries `fallback_execution_id`.
-- The fallback uploads a distinct artifact name: `hunter-ia-result-fb-<digest>`.
-- A late attempt-1 result can therefore never be bound as the fallback result, and the reverse is also impossible.
+- `fallback_execution_id = execution_identity(…, execution_attempt=2)`. This is a **ledger** field. GitHub's
+  `run_attempt` stays 1. The attempt-1 derivation is unchanged, so existing `execution_id`s stay valid.
+- The fallback's result is sealed under that identity, with a distinct artifact name, `hunter-ia-result-fb-<digest>`.
+  A late attempt-1 result therefore cannot be bound as attempt 2, and the reverse is also impossible.
 
-**Bind rules from `FALLBACK_AUTHORIZED`:**
+**Binding the fallback result.**
 
-- exactly one fallback artifact: transition to `RESULT_BOUND`;
-- duplicate fallback artifacts, or any attempt-1 artifact appearing late: `TRANSPORT_INTEGRITY_FAILED`;
-- no artifact: the existing terminal mapping.
+- From `FALLBACK_AUTHORIZED`, exactly one fallback artifact moves the record to `RESULT_BOUND`.
+- A duplicate artifact, or any attempt-1 artifact, fails with `TRANSPORT_INTEGRITY_FAILED`.
+- `RESULT_BOUND` gains three fields:
+  - `execution_attempt`;
+  - `executor`;
+  - `attestation_sha256` (attempt 2 only).
+- If the run has finished and the state is still `FALLBACK_AUTHORIZED`, `reconcile` fails it with
+  `EXECUTION_NOT_COMPLETED`.
 
-**Additional `RESULT_BOUND` evidence:**
+**Compatibility.**
 
-- `execution_attempt`: 1 or 2;
-- `executor`: `kilo` or `codex`;
-- `attestation_sha256`: present only when the attempt is 2.
+- The schema version is bumped.
+- Readers that do not know the new state fail closed (`STATE_CORRUPT`).
+- No migration is needed.
 
-**Reconcile.** If the run has finished and `FALLBACK_AUTHORIZED` is still open, `reconcile` fails it with
-`EXECUTION_NOT_COMPLETED`.
+### F5. macOS fallback executor: least privilege with no sudoers grant (amends ADR 0037 D1)
 
-**Compatibility.** The record schema version is bumped. Readers that do not know `FALLBACK_AUTHORIZED` fail closed
-(`STATE_CORRUPT`). Old ledgers never contain the new state. No migration is needed.
+**What revision 1 got wrong.** Revision 1 proposed a standing `NOPASSWD` sudoers drop-in. It is withdrawn, because
+it had five weaknesses:
 
-### F5. macOS fallback executor isolation and per-run attestation (amends ADR 0037 D1)
+1. It was a permanent privilege grant, contrary to the owner's constraint.
+2. `exec *` let the caller choose any Codex arguments. A compromised runner could pass `-c` overrides,
+   `--add-dir`, a different provider `base_url`, or `--dangerously-bypass-approvals-and-sandbox`.
+3. Secrets could only pass `env_reset` with a `SETENV` tag, or on the command line.
+4. `kill -KILL -1` was a second standing entry.
+5. The isolation principal shared the owner's `staff` primary group.
 
-D1 gains a fifth trust domain, **Fallback executor**:
+**New trust domain.** D1 gains a fifth domain, **Fallback executor**:
 
-- **Job:** `execute-fallback`.
-- **Runner:** a dedicated self-hosted macOS runner with label `hunter-codex-fallback`, separate from
-  `hunter-reviewer`.
-- **Secrets:** `X_FB` and a dedicated Codex provider key.
-- **`GITHUB_TOKEN`:** `{}`.
-- **Model:** yes, as the isolation uid.
-- **Candidate code:** never executed by trusted code.
+| Property | Value |
+|---|---|
+| Job | `execute-fallback` |
+| Runner | a dedicated self-hosted macOS runner, label `hunter-codex-fallback`, separate from `hunter-reviewer` |
+| Secrets | `X_FB` only |
+| `GITHUB_TOKEN` | `{}` |
+| Model | yes, as `hunteragent` |
+| Candidate code | never run by trusted code |
 
-**Principals.** Both principals are non-admin:
+**Principals.** Both are non-admin, and they share no primary group:
 
-- `hunterrunner` runs the Actions runner service. It is never the owner's account, so the owner's `~/.codex` and
-  keychain are out of reach.
-- `hunteragent` is the model uid.
+- `hunterrunner` runs the Actions runner. It is never the owner's account, so the owner's `~/.codex` and keychain
+  are out of reach.
+- `hunteragent` runs the model.
 
-**One-time owner provisioning.** This is an interactive administrator action performed once. No standing root
-grant exists.
+**Launcher, with no sudo at runtime.**
 
-- Create `hunterrunner`.
-- Install a pinned Codex CLI at a root-owned path (`/opt/hunter/codex/<version>/`).
-- Install the root-owned sandbox profile `/Library/Hunter/codex-fallback.sb`.
-- Install one sudoers drop-in. Its rules may only switch to `hunteragent`, never to root:
-  ```
-  hunterrunner ALL=(hunteragent) NOPASSWD: /usr/bin/sandbox-exec -f /Library/Hunter/codex-fallback.sb /opt/hunter/codex/*/codex exec *
-  hunterrunner ALL=(hunteragent) NOPASSWD: /bin/kill -KILL -1
-  ```
-  `hunterrunner` gains no root privilege, and the agent never holds sudo.
+- A root-installed LaunchDaemon, `com.hunter.codex-fallback`, runs as `hunteragent` (`UserName`). launchd starts it
+  on demand through a socket-activated Unix socket that only `hunterrunner` can open.
+- The trusted launcher (`/Library/Hunter/codex-fallback-launcher`, pinned by hash) accepts **one fixed-schema
+  request**: a workroot identifier and a model name, both validated against closed patterns. It takes no argv, no
+  environment and no configuration from the caller.
+- The launcher itself builds the Codex argv (`codex_invocation`) and runs
+  `sandbox-exec -f /Library/Hunter/codex-fallback.sb …`, then reports only an exit category.
+- When the job ends, launchd kills the whole process group (`AbandonProcessGroup` false).
 
-If the owner rejects even this run-as-`hunteragent` rule, the alternative in A4 applies. It costs one more trusted
-component.
+**One-time owner provisioning.** This is interactive and done once. No standing privilege remains afterwards. The
+owner:
 
-**Workspace ownership without `chown`.** The trusted step creates a fresh `0700` workroot owned by `hunterrunner`.
-It grants `hunteragent` an inherited ACL on `workspace/` and `home/` only (`chmod +a`, which the owner of a file
-may set). After the run, the step removes the ACLs and kills every `hunteragent` process before collection.
-Collection reuses `collect_result` through the trusted git directory unchanged.
+- creates `hunterrunner`;
+- moves `hunteragent` to its own primary group;
+- installs the pinned Codex binary (`/opt/hunter/codex/<version>/`);
+- installs the profile, the launcher and the plist;
+- registers the runner.
 
-**Sandbox profile.** The profile denies by default. It allows:
+**Workspace.** The workroot is `0700` and owned by `hunterrunner`. `hunteragent` receives inherited ACLs on
+`workspace/` and `home/` only (`chmod +a`, which the file's owner may set, so no root is needed). The trusted step
+revokes the ACLs after the run, then collects with the unchanged `collect_result`.
 
-- reads of system paths, the pinned Codex install, `workspace/` and the per-run `home/`;
-- writes to `workspace/` and the per-run `home/` and tmp;
-- `network-outbound` **only** to `localhost:<gateway-port>`.
+**Sandbox profile.** It denies by default.
 
-The existing trusted `model_egress_gateway` runs as `hunterrunner` on localhost, with a `CONNECT` allowlist
-limited to the Codex provider hosts. This gives the same egress model as Kilo on Ubuntu.
+- **Reads:** system paths, the pinned Codex install, `workspace/`, and the per-run `home/`.
+- **Writes:** `workspace/`, and the per-run `home/` and tmp.
+- **Network:** `network-outbound` **only** to `localhost:<gateway-port>`. The existing `model_egress_gateway` runs as
+  `hunterrunner`, with a `CONNECT` allowlist limited to the OpenAI auth and Codex hosts.
 
-**Codex's own sandbox.** Codex's inner Seatbelt sandbox is defense in depth only. P0 must establish whether it
-nests under the outer profile. If it does not, the adapter launches Codex with its inner sandbox disabled, and the
-**outer** profile is the sole enforced boundary. The adapter must never fall back to running Codex unsandboxed.
+Codex's inner sandbox is defense in depth only. If P0 shows that it cannot nest inside the outer profile, the
+launcher disables it, and the outer profile is the sole boundary. Codex is never run without the outer profile.
 
-**Per-run attestation.** This runs in a trusted step, **before** `X_FB` or the provider key is used. Any failure
-returns `EXECUTION_NOT_STARTED` with no fallback.
+**Per-run attestation.** It runs in a trusted step before `X_FB` is used. Any failure gives `EXECUTION_NOT_STARTED`.
 
-- **Pinned SHA-256 values** must equal the policy pinned at `control_sha`, for:
-  - the profile file;
-  - the Codex binary;
-  - the sudoers drop-in;
-  - the gateway script.
-- **Principal checks:**
-  - `hunteragent` is not an admin;
-  - `hunteragent` does not share a primary group with `hunterrunner`;
-  - no `hunteragent` process is running.
-- **Live probe cases** under the production profile. Each must hold, and setup errors count as FAIL:
+- **Pinned hashes:** the profile, the launcher, the plist, the Codex binary and the gateway script.
+- **Principals:** `hunteragent` is not an admin; it shares no group with `hunterrunner`; and no `hunteragent`
+  process is running.
+- **Live cases under the production profile** (a setup error counts as FAIL):
   - identity is `hunteragent`;
-  - a workspace write is allowed;
-  - a read of the `hunterrunner` home is denied;
+  - a write inside the workspace succeeds;
+  - a read of the runner's home is denied;
   - a write outside the workspace is denied;
-  - a direct TCP/443 connection to a non-allowlisted host is denied;
-  - a `CONNECT` through the gateway to a non-allowlisted host is denied.
-- **Result.** `attestation_sha256` is the digest of the canonical attestation result. It is recorded in
-  `RESULT_BOUND`.
+  - a direct connection to TCP 443 is denied;
+  - a gateway `CONNECT` to a host that is not allowlisted is denied.
+- **Recording:** `attestation_sha256` is recorded in `RESULT_BOUND`.
 
-**Residual risk, accepted only on acceptance of this ADR.** The fallback host is persistent, not a fresh VM.
-Per-run mitigations:
+**Residual risk** (accepted only on acceptance of this ADR):
 
-- a fresh workroot;
-- ACL revocation;
-- kill-all of `hunteragent` processes;
-- removal of the workroot;
-- pinned hashes;
-- the attestation;
-- a single-job runner with concurrency `hunter-codex-fallback`, `queue: max`.
+- **Persistent host.** It is mitigated by a fresh workroot, ACL revocation, the process-group kill, pinned hashes,
+  the attestation, and a single-job runner (concurrency `hunter-codex-fallback`).
+- **Host compromise.** It exposes `X_FB` and at most one live session (F6). It never exposes `K_STATE`, the
+  publisher key or `X_RESULT`.
 
-A host compromise exposes `X_FB` and the Codex key, never `K_STATE`, the publisher key or `X_RESULT`.
+### F6. Codex credential: owner-attended, per-run ChatGPT Pro session
 
-### F6. Codex credential provisioning
+**Rules.**
 
-- **Dedicated key.** A **dedicated** provider API key in a dedicated provider project with a hard spend cap, stored
-  only as an environment secret of `hunter-issue-agent-fallback-executor`.
-- **No personal credentials.** The owner's personal `~/.codex/auth.json` and ChatGPT login are never read, copied
-  or referenced.
-- **Delivery.** The key reaches Codex only through `secret_env`, using the existing secret launch (no argv, no
-  logs). P0 confirms the exact environment variable that the pinned Codex CLI version reads in `exec` mode.
-- **Per-run `CODEX_HOME`.** `CODEX_HOME` is a per-run directory under `home/`, removed after the run.
-- **Secret scan.** `result_carries_secret` covers the key exactly as it covers the Kilo key.
+- **No personal credentials.** The owner's personal `~/.codex`, keyring entries and browser session are never read,
+  copied or referenced.
+- **No persistence.** No ChatGPT credential is persisted between runs, stored as a GitHub secret, or placed in a
+  public log, and no API key is used.
+
+**Per-run session.**
+
+1. **Login.** Inside the launcher, as `hunteragent` under the profile, with a fresh per-run
+   `CODEX_HOME` (`cli_auth_credentials_store = "file"`, mode `0700` / `0600`), the launcher starts
+   `codex login --device-auth`.
+2. **Code delivery.** The verification URL and the one-time user code go **only** to an owner-only local channel on
+   the Mac. They never go to the Actions log, which is public. P0 selects the channel.
+3. **Approval.** The owner approves in their own signed-in browser within `fallback_session_window`. If they don't,
+   the result is `EXECUTION_NOT_STARTED`.
+4. **Run.** `codex exec` runs once.
+5. **Teardown.** Then, in all cases, `codex logout` (P0 verifies that it revokes the session) and deletion of
+   `CODEX_HOME`.
+6. **Secret scan.** The trusted step reads the session's token values before teardown and adds them to the
+   `result_carries_secret` scan. A result that carries any of them is never sealed.
+
+**Exposure and usage.**
+
+- **Exposure window:** one fallback run.
+- **Exfiltration channels:** only the allowlisted OpenAI hosts and the scanned result.
+- **Usage:** the owner's included Pro quota.
+
+**This is not unattended.** The fallback is admitted automatically, but it executes only with a human approval per
+run. A fully unattended fallback becomes possible only through a separate owner decision (see A7 and A8), and it
+needs an amendment to this ADR.
 
 ### F7. Exact-head proof: no new authority
 
@@ -256,72 +313,63 @@ A fallback result enters the **identical** chain:
 2. T3 validator pre-push safety
 3. T4 create-only signed publication
 4. T5 candidate Draft PR
-5. Hosted exact-head `Hunter / Pre-PR Preflight`, followed by Hunter Merge Readiness
+5. hosted exact-head `Hunter / Pre-PR Preflight`, followed by Hunter Merge Readiness
 
 The validator and publisher domains, the exact `base_sha` binding, `collect_result`, the signing identity and the
-Validation Stage Contract are unchanged.
-
-The executor identity is recorded as evidence only. It never relaxes or adds a proof stage.
+Validation Stage Contract are unchanged. The executor identity is evidence only. It never relaxes a stage.
 
 ## Consequences
 
-**Configuration and compatibility**
-
-- The fallback is inert until all of the following hold:
+- **Inert until prerequisites hold.** The fallback does nothing until:
   - the owner accepts this ADR;
-  - provisioning is complete;
-  - `X_FB` and the Codex key exist;
-  - the fallback runner is online.
-- If any of these is missing, `bind` cannot write `FALLBACK_AUTHORIZED`, and the existing terminal mapping applies.
-  Behavior is then identical to today.
-- The state machine document, the defect registry and the static workflow guard (AT-41/42/47) must cover:
-  - the new job;
-  - the new environment;
-  - the self-hosted label, permitted only for `execute-fallback`.
+  - provisioning is done;
+  - `X_FB` exists;
+  - the runner is online.
 
-**Cost and timing**
-
-- At most one extra model run per authorization.
-- The lifecycle deadline accounts for the fallback job's timeout (20 minutes).
+  If any of these is missing, `bind` cannot write `FALLBACK_AUTHORIZED`, and behavior is identical to today.
+- **Recovery is attended.** Under F6, fallback recovers a run only while the owner is available to approve a device
+  code.
+- **Guards and documents to extend:**
+  - the state machine document;
+  - the defect registry;
+  - the static workflow guard (AT-41/42/47), which must cover the new job, the new environment and the
+    self-hosted label (permitted only on `execute-fallback`).
+- **Cost.** At most one extra model run per authorization, on the included plan quota. The lifecycle deadline
+  includes the fallback job's timeout and the session window.
 
 ## Alternatives Considered
 
-- **A1. Fall back inside the Ubuntu executor job.** Rejected: there is no attested Codex isolation on Ubuntu in
-  scope, and it would put a second provider key in the same job as `X_EXEC`.
-- **A2. Trust Kilo's stderr or the executor's advisory output alone.** Rejected: both are model-influenceable
-  (Context 1).
-- **A3. Reuse `X_EXEC` on the Mac.** Rejected: a compromise of the persistent host would expose the primary's
-  handoff key.
-- **A4. No sudoers rule at all.** The alternative is a root-installed LaunchDaemon running as `hunteragent` that
-  accepts only fixed, schema-validated launch requests over a socket that only `hunterrunner` can open. It is
-  viable, but it adds a trusted component and more code. It is held in reserve if the owner rejects F5's
-  run-as-`hunteragent` rule.
-- **A5. Run the self-hosted runner as `hunteragent`.** Rejected: the runner, the secrets and the model would share
+- **A1. Fall back inside the Ubuntu executor.** Rejected. There is no attested Codex isolation there, and it would
+  put a second credential beside `X_EXEC`.
+- **A2. Trust Kilo's stderr or the advisory alone.** Rejected, because both can be influenced by the model.
+- **A3. Reuse `X_EXEC` on the Mac.** Rejected. A compromise of the persistent host would expose the primary key.
+- **A4. Revision 1's `NOPASSWD` sudoers rules.** Withdrawn for the five weaknesses listed in F5.
+- **A5. Run the runner as `hunteragent`.** Rejected, because the runner, the secrets and the model would share
   one uid.
-- **A6. Keep ADR 0037 as is (owner relabel only).** Rejected by the owner (Issue #390, Option 1).
+- **A6. Keep ADR 0037 as is.** Rejected by the owner (Option 1).
+- **A7. A persisted ChatGPT `auth.json` on the self-hosted runner** (unattended, zero cost). Not selected. OpenAI's
+  CI/CD guide excludes public repositories. A long-lived, account-wide refresh token would also sit where the model
+  principal can read it. It would be viable only if the repository became private, and even then an amendment
+  would have to address the model's access to the token.
+- **A8. A dedicated API key, or a Business/Enterprise access token** (unattended, officially supported). Not
+  selected, because it costs money, which the owner excluded. It is the smallest change to F6 if that constraint
+  changes.
+- **A9. Copy the owner's personal credentials.** Prohibited by the owner.
 
-## Implementation Plan (proposed, gated on acceptance)
+## Implementation Plan (gated on acceptance unless marked done)
 
-There is one Issue #390 branch and no PR chain. Each step is tests-first with focused verification. After
-acceptance, nothing is pushed without owner approval.
+Everything stays on the single Issue #390 branch, tests first, with focused verification. Nothing is pushed
+without owner approval.
 
-| Step | Change | Focused regression tests |
-|---|---|---|
-| **P0** spike, owner-run, no repository change | On the Mac, with one interactive `sudo` session: confirm whether Codex's sandbox nests under the outer profile, the API-key environment variable Codex reads, and that the gateway `CONNECT` path works under the profile | Recorded as evidence in the Issue, not as a test |
-| **P1** policy | Revise `issue_agent_fallback_policy`: F2 closed cause set (drop `MODEL_NOT_FOUND`, add `PROVIDER_5XX`), require `stderr_category == probe_category`, require zero primary artifacts | Forged stderr without probe agreement is refused; every non-recoverable code is refused; a second fallback is refused |
-| **P2** provider probe | A trusted, model-free probe in the executor's trusted step, with a closed HTTP-status-to-category table, emitted as `probe_category` | No prompt or content in the probe request; unknown status maps to `UNCLASSIFIED`; key never logged |
-| **P3** ledger | Add `FALLBACK_AUTHORIZED`, an `execution_attempt` field, the evidence schema, `advance` rules, the reconcile rule and a schema bump | Legal and illegal transitions; attempt-1 artifact after admission → `TRANSPORT_INTEGRITY_FAILED`; duplicate fallback artifact; existing attempt-1 `execution_id` unchanged |
-| **P4** handoff | `authorize` dual-seals to `X_EXEC` and `X_FB`, and binds `fallback_handoff_artifact` | Wrong recipient or digest is refused; the binding carries `fallback_execution_id`; the primary path is byte-identical |
-| **P5** Mac isolation | A `MacSandboxIsolation` port: ACL prepare, sudo run-as through the fixed command, gateway env, kill-all stop, the attestation routine; replaces the current hard refusal with "refuse unless `MacSandboxIsolation` and a passing attestation" | Codex refused under `SudoIsolation` or a generic port; argv/flag injection refused; attestation hash mismatch, admin uid or setup error → `EXECUTION_NOT_STARTED`; secret never in argv |
-| **P6** workflow | Add the `execute-fallback` job (runner label, new environment, `needs: bind`, gated on the ledger state), a second bind pass, validate `needs` both; extend the static workflow guard | Guard admits the self-hosted label only on `execute-fallback`; no `id-token`; `run_attempt == 1` enforced |
-| **P7** registry and docs | `DEFECT_REGISTRY.json` entry for the "untrusted-signal provider downgrade" class; state machine §2/§4/§5/§6; ADR 0037 cross-reference | Registry guard |
-| **P8** end-to-end | After owner approval to push and merge to `main`: one owner-labelled Issue with the primary model configured to a deliberately rate-limited key, observed through `FALLBACK_AUTHORIZED` → `RESULT_BOUND` (attempt 2) → validated → published → Draft PR → hosted Pre-PR Preflight on the exact candidate head | Exact-head SHA equality checked against the run; the ledger chain is verified |
-
-**Prerequisites only the owner can supply:**
-
-- the P0 session;
-- one-time provisioning (the `hunterrunner` user, the pinned Codex install, the profile, the sudoers drop-in, and
-  runner registration);
-- a dedicated provider project and key;
-- the `X_FB` keypair and the new environment;
-- approval to push, open the PR and merge before P8.
+| Step | Change | Focused tests | State |
+|---|---|---|---|
+| **P0** spike, owner-run, no repo change | On the Mac, check whether Codex's sandbox nests under the outer profile; device-auth through the gateway allowlist; that `codex logout` revokes the session; whether the profile can hide `CODEX_HOME` from model tool commands; launchd socket ownership keys; the owner-only code channel | evidence recorded on Issue #390 | owner |
+| **P1** policy | F2 predicate: probe agreement, zero primary artifacts, `MODEL_NOT_FOUND` removed | forged stderr refused; disagreement refused; all non-recoverable codes refused; single attempt | **done (inert)** |
+| **P1b** refusal regression | Behavioral test: an authorized Codex handoff is refused before any workspace or model launch, replacing a source-text test | mutation-checked | **done** |
+| **P2** provider probe | Trusted, model-free probe with a closed status table | no content in the request; unknown status maps to `UNCLASSIFIED`; the key is never logged | gated |
+| **P3** ledger | `FALLBACK_AUTHORIZED`, `execution_attempt`, evidence schema, `advance` and reconcile rules, schema bump | legal and illegal transitions; a late attempt-1 artifact; a duplicate artifact; attempt-1 `execution_id` unchanged | gated |
+| **P4** handoff | Dual seal to `X_EXEC` and `X_FB` | wrong recipient or digest refused; primary path byte-identical | gated |
+| **P5** Mac isolation | Launcher with its closed request schema; profile; ACL workspace; attestation; `MacSandboxIsolation` port; refusal lifted only for that port with a passing attestation | caller argv or env refused; attestation hash mismatch or admin uid gives `EXECUTION_NOT_STARTED`; secret never in argv | gated |
+| **P6** session | Device-auth session lifecycle: owner-only code channel, window, logout and delete, token scan | timeout gives `EXECUTION_NOT_STARTED`; teardown on every path; result carrying a session token refused | gated |
+| **P7** workflow, registry, docs | `execute-fallback` job and the second bind pass; static guard; `DEFECT_REGISTRY.json` class "untrusted-signal provider downgrade"; SM document; ADR 0037 cross-reference | static guard admits the self-hosted label only on `execute-fallback` | gated |
+| **P8** end to end | After push and merge approval: an owner-labelled Issue with the primary deliberately rate-limited, observed through `FALLBACK_AUTHORIZED`, then `RESULT_BOUND` (attempt 2), validated, published, Draft PR, and hosted Pre-PR Preflight on the exact head | exact-head SHA equality; ledger chain verified | gated |

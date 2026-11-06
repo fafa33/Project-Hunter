@@ -333,6 +333,37 @@ def execute(
 CANARY = "mkdir -p docs && echo canary > docs/ISSUE_AGENT_CANARY.md"
 
 
+def test_codex_is_refused_before_any_workspace_or_model_launch(repos: dict[str, Any]) -> None:
+    # Issue #390 / ADR 0041 (Proposed): no isolation port is attested for Codex, so a
+    # genuinely authorized handoff must still never materialize a workspace or launch it.
+    ledger, envelope = authorize(repos)
+    config = executor_config(repos)
+    isolation = RecordingIsolation(CANARY)
+    workroot = repos["tmp"] / "run-codex"
+    with pytest.raises(roles.RoleRefused) as refused:
+        roles.run_executor(
+            issue=ISSUE,
+            authorization_id=AUTH,
+            context=roles.RoleContext(100, 1),
+            ledger=ledger.access,
+            handoff_envelope=envelope,
+            config=roles.ExecutorConfig(
+                remote=config.remote,
+                model_argv=("/opt/hunter/codex/codex", "exec", "--model", "gpt-5-codex"),
+                model_public_env=config.model_public_env,
+                model_secret_env=config.model_secret_env,
+                handoff_key=config.handoff_key,
+                result_recipient=config.result_recipient,
+                prompt_verifier=config.prompt_verifier,
+            ),
+            isolation=isolation,
+            workroot=workroot,
+        )
+    assert refused.value.code == "EXECUTION_NOT_STARTED"
+    assert isolation.calls == [] and isolation.stopped == 0
+    assert not workroot.exists()
+
+
 # --- executor (AT-19..22) ------------------------------------------------------------------------------
 
 
