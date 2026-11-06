@@ -1119,7 +1119,8 @@ def run_executor(
         base_sha=bound["base_sha"],
         remediation_branch=bound["execution_branch"] if bound.get("remediation") is not None else None,
     )
-    home.mkdir(mode=0o700)
+    # The fallback attestation already created this private home; the primary path has not.
+    home.mkdir(mode=0o700, exist_ok=True)
     model_argv = config.model_argv
     model_stdin = prompt
     # Issue #574: OpenCode runs through the single production contract (``opencode_invocation``), which binds it to

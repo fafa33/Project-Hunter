@@ -641,6 +641,12 @@ def _owning_run(view: state.AuthorizationView) -> int:
     pending = view.pending_resume
     if pending is not None and pending["bound_run_id"] is not None:
         return int(pending["bound_run_id"])
+    # A transition consumes pending_resume. The signed, append-only resume binding
+    # remains authoritative for downstream validation and publication; never fall
+    # back to the primary authorization run after a fallback result was bound.
+    for record in reversed(view.records):
+        if record["kind"] == "resume_bound":
+            return int(record["evidence"]["run_id"])
     return int(view.binding("authorize_run_id"))
 
 

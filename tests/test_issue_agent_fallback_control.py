@@ -148,6 +148,10 @@ def test_bind_fallback_binds_the_attempt_two_result_with_its_attestation(
         "deadline_published_at": "2026-10-04T19:00:00Z",  # restarted at this bind, not at authorization
     }
     assert evidence["result_artifact"]["run_id"] == fx.APPROVED_RUN  # the validator downloads from the approved run
+    # RESULT_BOUND consumes pending_resume, but validation and publication must
+    # still use the signed fallback dispatch run, never the primary run.
+    assert view.pending_resume is None
+    assert control._owning_run(view) == fx.APPROVED_RUN
     assert view.publish_deadline == "2026-10-04T19:00:00Z"
     assert view.execution_id == view.evidence[state.AUTHORIZED]["fallback"]["execution_id"]
 

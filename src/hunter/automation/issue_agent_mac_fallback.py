@@ -257,6 +257,12 @@ class MacCodexIsolation:
         facts = dict(self._principals(self.config))
         if not facts or not all(facts.values()):
             raise RoleRefused("EXECUTION_NOT_STARTED", "a fallback principal is not least-privileged or not idle")
+        # The launcher validates both directories before running any live probe. Create them
+        # privately, then grant only the attested agent and runner their required ACLs.
+        # The executor subsequently materializes into this same workspace (exist_ok=True).
+        for directory in (workroot / "workspace", workroot / "home"):
+            directory.mkdir(mode=0o700)
+            grant_agent_access(directory, self.config)
         # The canary is Unix-readable by hunteragent (search ACE + 0644), so only the sandbox can deny reading it.
         _chmod_acl(f"user:{self.config.agent_user} allow search", workroot)
         canary = workroot / "attest-canary"

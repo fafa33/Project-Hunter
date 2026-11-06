@@ -369,8 +369,8 @@ def attested_port(tmp_path: Path, monkeypatch: Any, response: dict[str, Any]) ->
 
     port, workroot, _ = make_port(tmp_path, monkeypatch, launcher=fake)
     port.attest(workroot)
-    (workroot / "workspace").mkdir()
-    (workroot / "home").mkdir()
+    assert (workroot / "workspace").is_dir()
+    assert (workroot / "home").is_dir()
     port.prepare(workroot / "workspace", workroot / "home")
     return port, workroot, sent
 
