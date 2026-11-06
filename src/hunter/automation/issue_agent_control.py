@@ -72,7 +72,8 @@ WRITERS: Final[Mapping[str, WriterWorkflow]] = {
         frozenset({"issues", "workflow_dispatch"}),
         {
             "authorize": frozenset({"authorize"}),
-            "bind": frozenset({"bind", "resume-bind"}),
+            # ADR 0041 F4: ``bind-fallback`` binds the admitted fallback's result in the same run.
+            "bind": frozenset({"bind", "resume-bind", "bind-fallback"}),
             "record-validation": frozenset({"record-validation"}),
             "finalize": frozenset({"finalize"}),
         },
@@ -97,6 +98,7 @@ WRITERS: Final[Mapping[str, WriterWorkflow]] = {
 MAX_REMEDIATION_FINDINGS: Final = 16
 STAGE_JOBS: Final[Mapping[str, str]] = {
     state.AUTHORIZED: "execute",
+    state.FALLBACK_AUTHORIZED: "execute-fallback",
     state.RESULT_BOUND: "validate",
     state.VALIDATED: "publish",
 }
@@ -155,6 +157,8 @@ class Configuration:
     authorization_verifying_key: str
     prompt_verifying_key: str
     source_handling: SourceHandlingRoot
+    #: ADR 0041 F3: the distinct fallback recipient (``X_FB``). Absent → no fallback is ever bound or admitted.
+    fallback_handoff_recipient: X25519PublicKey | None = None
 
     @property
     def trust(self) -> state.TrustRoots:
@@ -205,8 +209,14 @@ def load_configuration(checkout: Path) -> Configuration:
         "prompt_verifying_key",
         "source_handling",
     }
-    if set(document) != expected:
+    if set(document) - {"fallback_handoff_recipient"} != expected:
         raise _missing("the trust roots document carries unknown or missing fields")
+    fallback_recipient = None
+    if "fallback_handoff_recipient" in document:
+        raw = _raw_key(document["fallback_handoff_recipient"], "fallback_handoff_recipient")
+        if raw == _raw_key(document["handoff_recipient"], "handoff"):
+            raise _missing("the fallback recipient must be distinct from the primary handoff recipient")
+        fallback_recipient = X25519PublicKey.from_public_bytes(raw)
     repository = _field(document, "repository", str)
     if _REPOSITORY.fullmatch(repository) is None:
         raise _missing("trust roots repository is malformed")
@@ -249,6 +259,7 @@ def load_configuration(checkout: Path) -> Configuration:
         authorization_verifying_key=document["authorization_verifying_key"],
         prompt_verifying_key=document["prompt_verifying_key"],
         source_handling=SourceHandlingRoot(**operator),
+        fallback_handoff_recipient=fallback_recipient,
     )
 
 
@@ -692,7 +703,7 @@ def _receipt_matches(view: state.AuthorizationView, receipt: Mapping[str, Any]) 
     common = (
         receipt.get("schema_version") == RECEIPT_SCHEMA_VERSION
         and receipt.get("authorization_id") == view.authorization_id
-        and receipt.get("execution_id") == bound["execution_id"]
+        and receipt.get("execution_id") == view.execution_id
         and receipt.get("ciphertext_sha256") == result["result_artifact"]["ciphertext_sha256"]
     )
     if not common:
@@ -1153,6 +1164,8 @@ def observe(
     *,
     now: str,
     executor_advisory_code: str | None = None,
+    executor_stderr_category: str | None = None,
+    executor_probe_category: str | None = None,
 ) -> Observation:
     """Definitive GitHub facts for one active authorization. Any indefinite read raises ``FactsUnavailable``."""
 
@@ -1176,7 +1189,7 @@ def observe(
             stage_active = not run_completed
         else:
             stage_active = job.get("status") != "completed"
-            if current == state.AUTHORIZED:
+            if current in (state.AUTHORIZED, state.FALLBACK_AUTHORIZED):
                 executor_job_id = int(job["id"])
                 executor_conclusion = str(job.get("conclusion"))
     fields: dict[str, Any] = {
@@ -1189,6 +1202,20 @@ def observe(
     if current == state.AUTHORIZED:
         name = state.result_artifact_name(view.authorization_id)
         fields["result_artifacts"] = _named_artifacts(github, repository, int(view.binding("authorize_run_id")), name)
+        fields["executor_conclusion"] = executor_conclusion
+        if executor_advisory_code in state.ADVISORY_CODES:
+            fields["executor_advisory_code"] = executor_advisory_code
+        # Untrusted job outputs, admitted only from their closed vocabulary (ADR 0041 F2).
+        if executor_stderr_category in state.FALLBACK_SIGNAL_CATEGORIES:
+            fields["executor_stderr_category"] = executor_stderr_category
+        if executor_probe_category in state.FALLBACK_SIGNAL_CATEGORIES:
+            fields["executor_probe_category"] = executor_probe_category
+        observation["executor_job_id"] = executor_job_id
+    if current == state.FALLBACK_AUTHORIZED:
+        run_id = int(view.binding("authorize_run_id"))
+        fields["result_artifacts"] = _named_artifacts(
+            github, repository, run_id, state.result_artifact_name(view.authorization_id)
+        ) + _named_artifacts(github, repository, run_id, state.fallback_result_artifact_name(view.authorization_id))
         fields["executor_conclusion"] = executor_conclusion
         if executor_advisory_code in state.ADVISORY_CODES:
             fields["executor_advisory_code"] = executor_advisory_code
@@ -1319,7 +1346,7 @@ def _bound_result(
             authorization_id=view.authorization_id,
             base_sha=bound["base_sha"],
             task_scope_sha256=bound["task_scope_sha256"],
-            execution_id=bound["execution_id"],
+            execution_id=view.execution_id,
             handoff_sha256=bound["lineage"]["handoff_sha256"],
             plaintext_sha256=declared.plaintext_sha256,
             recipient_key_id=recipient_key_id(configuration.result_recipient),
@@ -1349,23 +1376,49 @@ def _evidence(
     github: GitHub,
     configuration: Configuration,
     now: datetime,
+    fallback_attestation_sha256: str | None = None,
 ) -> tuple[str, dict[str, Any]] | None:
     """``(target_state, evidence)`` for a transition, or ``None`` when its evidence is not (yet) conforming."""
 
     facts, target = observation.facts, decision.target_state
     bound = view.evidence[state.AUTHORIZED]
+    if target == state.FALLBACK_AUTHORIZED:
+        assert decision.evidence_hint is not None
+        cause = decision.evidence_hint["cause"]
+        if observation.executor_job_id is None or facts.executor_conclusion not in state.EXECUTOR_CONCLUSIONS:
+            return None
+        return target, {
+            "primary_executor_job_id": observation.executor_job_id,
+            "primary_executor_conclusion": facts.executor_conclusion,
+            "primary_cause": cause,
+            "stderr_category": facts.executor_stderr_category,
+            "probe_category": facts.executor_probe_category,
+            "primary_result_artifacts": 0,
+            "fallback_executor": "codex",
+            "fallback_execution_id": bound["fallback"]["execution_id"],
+        }
     if target == state.RESULT_BOUND:
         assert decision.evidence_hint is not None and not isinstance(facts.result_artifacts, type(state.UNKNOWN))
         artifact = next(a for a in facts.result_artifacts if a.artifact_id == decision.evidence_hint["artifact_id"])
         evidence, failure = _bound_result(github, configuration, view, artifact)
         if failure is not None or evidence is None or observation.executor_job_id is None:
             return state.FAILED, {"code": failure or "TRANSPORT_INTEGRITY_FAILED", "failed_from_state": view.state}
-        return target, {
+        bound_evidence = {
             **evidence,
             "executor_job_id": observation.executor_job_id,
             "executor_conclusion": facts.executor_conclusion,
             "executor_advisory_code": facts.executor_advisory_code,
         }
+        if view.state == state.FALLBACK_AUTHORIZED:
+            # The attestation digest is evidence only (ADR 0041 F5); a fallback result without it never binds.
+            if fallback_attestation_sha256 is None or _SHA64.fullmatch(fallback_attestation_sha256) is None:
+                return state.FAILED, {"code": "EXECUTOR_RESULT_REJECTED", "failed_from_state": view.state}
+            bound_evidence["fallback"] = {
+                "execution_attempt": 2,
+                "executor": "codex",
+                "attestation_sha256": fallback_attestation_sha256,
+            }
+        return target, bound_evidence
     if target == state.VALIDATED:
         receipt = facts.receipt
         assert isinstance(receipt, Mapping) and observation.receipt_run_id is not None
@@ -1394,7 +1447,7 @@ def _evidence(
                 authorization_id=view.authorization_id,
                 base_sha=bound["base_sha"],
                 task_scope_sha256=bound["task_scope_sha256"],
-                execution_id=bound["execution_id"],
+                execution_id=view.execution_id,
                 result_sha256=validated["result_sha256"],
                 tree_sha=validated["tree_sha"],
                 unsigned_commit_sha=validated["unsigned_commit_sha"],
@@ -1431,6 +1484,9 @@ def step(
     issue: int,
     clock: Callable[[], datetime],
     executor_advisory_code: str | None = None,
+    executor_stderr_category: str | None = None,
+    executor_probe_category: str | None = None,
+    fallback_attestation_sha256: str | None = None,
     new_nonce: Callable[[], str] = lambda: secrets.token_hex(32),
     chain: bool = True,
 ) -> state.Decision:
@@ -1447,7 +1503,15 @@ def step(
     view = ledger_view.authorizations[ledger_view.active]
     moment = clock()
     now = _timestamp(moment)
-    observation = observe(github, configuration, view, now=now, executor_advisory_code=executor_advisory_code)
+    observation = observe(
+        github,
+        configuration,
+        view,
+        now=now,
+        executor_advisory_code=executor_advisory_code,
+        executor_stderr_category=executor_stderr_category,
+        executor_probe_category=executor_probe_category,
+    )
     decision = state.advance(view, observation.facts)
     ledger = Ledger(store, configuration, provenance, signing_key, writer, issue)
     role = writer.role
@@ -1464,7 +1528,15 @@ def step(
         )
         return decision
     if decision.action == "transition":
-        built = _evidence(decision, view, observation, github=github, configuration=configuration, now=moment)
+        built = _evidence(
+            decision,
+            view,
+            observation,
+            github=github,
+            configuration=configuration,
+            now=moment,
+            fallback_attestation_sha256=fallback_attestation_sha256,
+        )
         if built is None:
             return state.Decision("noop", reason="transition evidence not conforming yet")
         target, evidence = built
@@ -1518,6 +1590,9 @@ def step(
                 issue=issue,
                 clock=clock,
                 executor_advisory_code=executor_advisory_code,
+                executor_stderr_category=executor_stderr_category,
+                executor_probe_category=executor_probe_category,
+                fallback_attestation_sha256=fallback_attestation_sha256,
                 new_nonce=new_nonce,
                 chain=False,
             )

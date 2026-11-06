@@ -1,0 +1,11 @@
+{
+  "schema_version": "hunter-issue-agent-codex-fallback-host-v1",
+  "provisioned": false,
+  "runner_user": "hunterrunner",
+  "agent_user": "hunteragent",
+  "runner_uid": 0,
+  "runner_gid": 0,
+  "agent_uid": 0,
+  "codex_version": "",
+  "codex_sha256": ""
+}

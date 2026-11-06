@@ -29,8 +29,8 @@ LIFECYCLE_WORKFLOWS = (
     "hunter-issue-agent-knowledge.yml",
     "hunter-issue-agent-source-handling-bootstrap.yml",
 )
-INTEGER_OPTIONS = {"--issue", "--artifact-id", "--pr"}
-VALID_CHOICE = {"--stage": "validation"}
+INTEGER_OPTIONS = {"--issue", "--artifact-id", "--fallback-artifact-id", "--pr"}
+VALID_CHOICE = {"--stage": "validation", "--job": "bind-fallback"}
 
 
 def _runs(workflow: str) -> list[tuple[str, str]]:

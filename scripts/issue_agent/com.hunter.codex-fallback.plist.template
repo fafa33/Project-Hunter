@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- ADR 0041 F5: rendered with the provisioned uids, installed root-owned at
+     /Library/LaunchDaemons/com.hunter.codex-fallback.plist, and attested against this template. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.hunter.codex-fallback</string>
+  <key>UserName</key>
+  <string>hunteragent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/python3</string>
+    <string>-I</string>
+    <string>/Library/Hunter/codex-fallback-launcher.py</string>
+  </array>
+  <key>AbandonProcessGroup</key>
+  <false/>
+  <key>Sockets</key>
+  <dict>
+    <key>Listener</key>
+    <dict>
+      <key>SockPathName</key>
+      <string>/private/var/hunter-fallback/run/launcher.sock</string>
+      <key>SockPathMode</key>
+      <integer>384</integer>
+      <key>SockPathOwner</key>
+      <integer>@RUNNER_UID@</integer>
+      <key>SockPathGroup</key>
+      <integer>@RUNNER_GID@</integer>
+    </dict>
+  </dict>
+</dict>
+</plist>

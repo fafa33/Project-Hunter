@@ -67,6 +67,8 @@ class KiloContainerIsolation:
         self.home: Path | None = None
         self.started = False
         self.trace: list[dict[str, object]] = []
+        #: ADR 0041 F2: the closed stderr category of the last isolated run (an untrusted hint, never content).
+        self.last_stderr_category: str | None = None
 
     @staticmethod
     def _docker(*args: str, timeout: float = 40, stdin: bytes = b"") -> subprocess.CompletedProcess[bytes]:
@@ -334,11 +336,12 @@ class KiloContainerIsolation:
             + ",".join(key for key, present in markers.items() if present),
             flush=True,
         )
+        self.last_stderr_category = stderr_category(result.stderr[:65536])
         print(
             "isolated Kilo container diagnostic: exit="
             + ("ZERO" if result.returncode == 0 else "NONZERO")
             + " stderr_category="
-            + stderr_category(result.stderr[:65536]),
+            + self.last_stderr_category,
             flush=True,
         )
         return result.returncode

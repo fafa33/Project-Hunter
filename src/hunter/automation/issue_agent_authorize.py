@@ -138,6 +138,8 @@ class AuthorizeDependencies:
     admission_cap: int = DEFAULT_ADMISSION_CAP
     #: Verified anchored-knowledge overlay (ADR 0039 L2): prevention knowledge reaches the task before its model.
     knowledge_overlay: Sequence[Mapping[str, Any]] = ()
+    #: ADR 0041 F3: the distinct fallback recipient ``X_FB``. ``None`` binds no fallback (behaviour unchanged).
+    fallback_handoff_recipient: X25519PublicKey | None = None
     clock: Clock = field(default_factory=SystemClock)
 
 
@@ -154,6 +156,9 @@ class Prepared:
     handoff_binding: dict[str, Any]
     handoff_ciphertext_sha256: str
     schema_version: str = PREPARED_SCHEMA_VERSION
+    #: ADR 0041 F3: the second seal of the identical handoff, to ``X_FB`` under the attempt-2 identity.
+    fallback_handoff_binding: dict[str, Any] | None = None
+    fallback_handoff_ciphertext_sha256: str | None = None
 
     def to_json(self) -> str:
         return state.canonical_json(asdict(self)).decode("utf-8")
@@ -221,8 +226,16 @@ def prepare(
     state_store: state.GitLedgerStore,
     source_handling_store: state.GitLedgerStore,
     workdir: Path,
+    fallback_sink: Callable[[bytes], None] | None = None,
 ) -> tuple[Prepared, bytes]:
-    """Run the canonical pre-model composition. Returns the prepared record and the sealed handoff."""
+    """Run the canonical pre-model composition. Returns the prepared record and the sealed handoff.
+
+    With a provisioned fallback recipient, the identical handoff plaintext is sealed a second time to it and handed
+    to ``fallback_sink``; a provisioned recipient without a sink refuses rather than silently binding no fallback.
+    """
+
+    if (dependencies.fallback_handoff_recipient is None) != (fallback_sink is None):
+        raise AuthorizeRefused("MISSING_CONFIGURATION", "a fallback recipient and its handoff sink go together")
 
     if context.run_attempt != 1:
         raise AuthorizeRefused("RERUN_REFUSED", "authorization never runs on a workflow re-run")
@@ -408,6 +421,26 @@ def prepare(
         recipient_key_id=recipient_key_id(dependencies.handoff_recipient),
     )
     envelope_bytes = seal(bundle, recipient=dependencies.handoff_recipient, binding=binding)
+    fallback_binding: TransportBinding | None = None
+    fallback_bytes: bytes | None = None
+    if dependencies.fallback_handoff_recipient is not None:
+        fallback_key_id = recipient_key_id(dependencies.fallback_handoff_recipient)
+        if fallback_key_id == binding.recipient_key_id:
+            raise AuthorizeRefused("MISSING_CONFIGURATION", "the fallback recipient must be distinct from X_EXEC")
+        fallback_binding = TransportBinding(
+            **{
+                **binding.as_dict(),
+                "execution_id": state.execution_identity(
+                    authorization_id=authorization.authorization_id,
+                    authorize_run_id=context.run_id,
+                    control_sha=context.control_sha,
+                    handoff_sha256=handoff_sha256,
+                    execution_attempt=2,
+                ),
+                "recipient_key_id": fallback_key_id,
+            }
+        )
+        fallback_bytes = seal(bundle, recipient=dependencies.fallback_handoff_recipient, binding=fallback_binding)
     unsigned_evidence = {
         "authorization_envelope_sha256": state.sha256_hex(signed.to_json().encode("utf-8")),
         "claims": claims,
@@ -459,7 +492,11 @@ def prepare(
         ],
         handoff_binding=binding.as_dict(),
         handoff_ciphertext_sha256=state.sha256_hex(envelope_bytes),
+        fallback_handoff_binding=None if fallback_binding is None else fallback_binding.as_dict(),
+        fallback_handoff_ciphertext_sha256=None if fallback_bytes is None else state.sha256_hex(fallback_bytes),
     )
+    if fallback_sink is not None and fallback_bytes is not None:
+        fallback_sink(fallback_bytes)
     return prepared, envelope_bytes
 
 
@@ -471,6 +508,7 @@ def commit(
     context: RunContext,
     state_store: state.GitLedgerStore,
     source_handling_store: state.GitLedgerStore,
+    fallback_uploaded: UploadedArtifact | None = None,
 ) -> str:
     """Bind the uploaded handoff, persist Source Handling, then CAS ``AUTHORIZED`` (claim + model release)."""
 
@@ -483,6 +521,18 @@ def commit(
         or state._ARTIFACT_DIGEST.fullmatch(uploaded.artifact_digest) is None
     ):
         raise AuthorizeRefused("TRANSPORT_INTEGRITY_FAILED", "uploaded handoff artifact does not bind this run")
+    if (prepared.fallback_handoff_binding is None) != (fallback_uploaded is None):
+        raise AuthorizeRefused(
+            "TRANSPORT_INTEGRITY_FAILED", "the fallback handoff upload does not match the prepared seal"
+        )
+    if fallback_uploaded is not None and (
+        fallback_uploaded.run_id != context.run_id
+        or fallback_uploaded.name != state.fallback_handoff_artifact_name(prepared.authorization_id)
+        or fallback_uploaded.artifact_id == uploaded.artifact_id
+        or fallback_uploaded.expired
+        or state._ARTIFACT_DIGEST.fullmatch(fallback_uploaded.artifact_digest) is None
+    ):
+        raise AuthorizeRefused("TRANSPORT_INTEGRITY_FAILED", "uploaded fallback handoff does not bind this run")
     position = sh.LedgerPosition(
         prepared.source_handling_position["head"],
         prepared.source_handling_position["next_seq"],
@@ -523,6 +573,19 @@ def commit(
             "recipient_key_id": prepared.handoff_binding["recipient_key_id"],
         },
     }
+    if fallback_uploaded is not None:
+        assert prepared.fallback_handoff_binding is not None and prepared.fallback_handoff_ciphertext_sha256
+        evidence["fallback"] = {
+            "execution_id": prepared.fallback_handoff_binding["execution_id"],
+            "handoff_artifact": {
+                "run_id": fallback_uploaded.run_id,
+                "artifact_id": fallback_uploaded.artifact_id,
+                "artifact_digest": fallback_uploaded.artifact_digest,
+                "ciphertext_sha256": prepared.fallback_handoff_ciphertext_sha256,
+                "aad_sha256": TransportBinding(**prepared.fallback_handoff_binding).digest(),
+                "recipient_key_id": prepared.fallback_handoff_binding["recipient_key_id"],
+            },
+        }
     record = state.sign_record(
         {
             "schema_version": state.RECORD_SCHEMA_VERSION,

@@ -2,15 +2,22 @@
 
 ## Status
 
-**Proposed, revision 2** (2026-11-06, Issue #390).
+**Proposed, revision 3: owner-approved interim implementation direction** (2026-11-06, Issue #390).
 
 Revision 2 rests on verified evidence about the Codex CLI's authentication methods and on the owner's cost
-constraint: an existing ChatGPT Pro plan, with no API key, new subscription or other spend.
+constraint: an existing ChatGPT Pro plan, with no API key, new subscription or other spend. On 2026-11-06 the owner
+approved revision 2 as the interim implementation direction, subject to security verification. Revision 3 records
+that verification (P0 evidence, below) and the implementation on the Issue #390 branch.
 
-- This ADR is **not binding** and authorizes **no production change** until the owner accepts it.
-- The Issue #390 branch keeps the fail-closed refusal in `run_executor`: Codex is never launched.
-- The only implemented portion is the inert admission policy (F2), which nothing in the lifecycle calls.
-- **The fallback is not operational.** It may be described as operational only after a real end-to-end run (P8).
+- **Implemented, not operational.** P1–P7 are implemented on the branch. Every path stays inert until the owner:
+  - pins `fallback_handoff_recipient` in the trust roots;
+  - provisions `config/issue_agent_codex_fallback.json`;
+  - installs the fallback host.
+
+  Until then, `bind` can never admit a fallback, and `MacCodexIsolation` refuses to attest.
+- **Codex still never runs** through any port but the attested `MacCodexIsolation`, and never as a primary.
+- **Not operational until P8.** The fallback may be described as operational only after a real end-to-end run.
+- **Not binding until merged.** This ADR becomes binding only when merged with owner approval.
 - **Scope.** A proposed amendment of [ADR 0037](0037-github-native-issue-agent-execution.md) **D1** (topology) and
   **D8** (no re-dispatch) only. It extends the state machine
   ([`ISSUE_AGENT_GITHUB_NATIVE_STATE_MACHINE.md`](../ISSUE_AGENT_GITHUB_NATIVE_STATE_MACHINE.md) §2, §4, §5, §6) by
@@ -75,6 +82,61 @@ The only supported zero-cost path is a ChatGPT session that the owner approves i
 the same outer sandbox, so the model can reach the session tokens the CLI holds. A ChatGPT refresh token speaks for
 the whole account, which is a broader grant than a scoped API key. Revision 2 therefore never persists such a
 token, and bounds its lifetime to one run.
+
+### P0 evidence (2026-11-06, this Mac, macOS 26.6.2, Codex CLI 0.167.0, no sudo)
+
+**Nested sandboxing.** Under a deny-default outer profile, applying a second Seatbelt profile fails:
+`sandbox-exec: sandbox_apply: Operation not permitted`, exit 71. It succeeds only under an allow-all outer profile.
+
+- Codex's inner sandbox therefore cannot be relied on.
+- The launcher runs Codex with `--sandbox danger-full-access`, always inside the outer profile, which is the sole
+  enforced boundary (F5).
+
+**The production profile** (`scripts/issue_agent/codex-fallback.sb`), applied with `sandbox-exec -f … -D …`:
+
+| Case | Result |
+|---|---|
+| Identity | PASS |
+| Workspace write | allowed |
+| Read of a file outside the workroot | denied |
+| Listing of an outside directory | denied |
+| Write outside the workspace | denied |
+| Read of the owner's `~/.codex/auth.json` | denied |
+| Direct TCP 443 | denied |
+
+**Codex startup under the profile.**
+
+- Codex 0.167.0 starts under the profile and reports `Not logged in` with a fresh per-run `CODEX_HOME`. It cannot
+  see the owner's session.
+- Path canonicalization needs `file-read-metadata` on ancestor directories, so the profile allows stat()
+  metadata only. File contents and directory listings stay denied.
+
+**Device-code sign-in.** `codex login --device-auth` reached `auth.openai.com` through the loopback Codex gateway
+profile, under the production profile, with zero gateway denials, and a verification URL was issued.
+
+- The code text was never logged.
+- The unused code was left to expire.
+
+**Workspace ACLs.** An owner-set inherited ACL for `hunteragent` (`chmod +a`) works without root, and children
+inherit it.
+
+**launchd.** `launchd.plist(5)` on this host documents `SockPathOwner`, `SockPathGroup` and `SockPathMode`, and
+`AbandonProcessGroup`.
+
+**Not yet verified.** These need the provisioned host or the owner's approval:
+
+- whether `codex logout` revokes the session server-side;
+- the launcher running under launchd as `hunteragent`;
+- the attestation as `hunterrunner`;
+- a real Codex `exec` turn.
+
+**Accepted residual risk.** Model tool commands run as the same uid, inside the same sandbox, as Codex, so they can
+read the per-run session tokens. The F6 mitigations bound that exposure:
+
+- one session per run;
+- logout and deletion on every path;
+- token-value result scan;
+- gateway allowlist.
 
 ## Decision
 
@@ -183,9 +245,10 @@ No new channel is introduced.
 
 **Compatibility.**
 
-- The schema version is bumped.
-- Readers that do not know the new state fail closed (`STATE_CORRUPT`).
-- No migration is needed.
+- The record schema version is **not** bumped: a bump would orphan every existing v1 ledger.
+- Readers at an older `control_sha` reject the unknown state through the closed state enum (`STATE_CORRUPT`), so
+  they fail closed without one.
+- Old ledgers never contain the new state, so no migration is needed.
 
 ### F5. macOS fallback executor: least privilege with no sudoers grant (amends ADR 0037 D1)
 
@@ -363,13 +426,13 @@ without owner approval.
 
 | Step | Change | Focused tests | State |
 |---|---|---|---|
-| **P0** spike, owner-run, no repo change | On the Mac, check whether Codex's sandbox nests under the outer profile; device-auth through the gateway allowlist; that `codex logout` revokes the session; whether the profile can hide `CODEX_HOME` from model tool commands; launchd socket ownership keys; the owner-only code channel | evidence recorded on Issue #390 | owner |
-| **P1** policy | F2 predicate: probe agreement, zero primary artifacts, `MODEL_NOT_FOUND` removed | forged stderr refused; disagreement refused; all non-recoverable codes refused; single attempt | **done (inert)** |
-| **P1b** refusal regression | Behavioral test: an authorized Codex handoff is refused before any workspace or model launch, replacing a source-text test | mutation-checked | **done** |
-| **P2** provider probe | Trusted, model-free probe with a closed status table | no content in the request; unknown status maps to `UNCLASSIFIED`; the key is never logged | gated |
-| **P3** ledger | `FALLBACK_AUTHORIZED`, `execution_attempt`, evidence schema, `advance` and reconcile rules, schema bump | legal and illegal transitions; a late attempt-1 artifact; a duplicate artifact; attempt-1 `execution_id` unchanged | gated |
-| **P4** handoff | Dual seal to `X_EXEC` and `X_FB` | wrong recipient or digest refused; primary path byte-identical | gated |
-| **P5** Mac isolation | Launcher with its closed request schema; profile; ACL workspace; attestation; `MacSandboxIsolation` port; refusal lifted only for that port with a passing attestation | caller argv or env refused; attestation hash mismatch or admin uid gives `EXECUTION_NOT_STARTED`; secret never in argv | gated |
-| **P6** session | Device-auth session lifecycle: owner-only code channel, window, logout and delete, token scan | timeout gives `EXECUTION_NOT_STARTED`; teardown on every path; result carrying a session token refused | gated |
-| **P7** workflow, registry, docs | `execute-fallback` job and the second bind pass; static guard; `DEFECT_REGISTRY.json` class "untrusted-signal provider downgrade"; SM document; ADR 0037 cross-reference | static guard admits the self-hosted label only on `execute-fallback` | gated |
+| **P0** host checks | Nested sandbox, production profile denials, Codex startup, device-code sign-in through the gateway, ACLs, launchd keys | see "P0 evidence" | **done** (logout revocation and launchd run pending provisioning) |
+| **P1** policy | F2 predicate | `test_issue_agent_fallback_policy.py` | **done** |
+| **P1b** refusal regression | Behavioral Codex refusal before workspace or launch | mutation-checked | **done** |
+| **P2** provider probe | `issue_agent_provider_probe.py`: one bodiless, no-redirect, authenticated `GET`; closed status table; healthy → `UNCLASSIFIED` | `test_issue_agent_mac_fallback.py` (probe cases) | **done** |
+| **P3** ledger | `FALLBACK_AUTHORIZED`, attempt-2 identity, cross-binding checks, `advance` rules, `AuthorizationView.execution_id` for every later reader | `test_issue_agent_fallback_ledger.py`, `test_issue_agent_fallback_control.py` | **done** |
+| **P4** handoff | Dual seal in `authorize`; `fallback_handoff_recipient` trust root; `bound` exposes the second artifact id from the ledger | `test_issue_agent_authorize_fallback.py`, `test_issue_agent_fallback_executor.py` | **done** |
+| **P5** Mac isolation | `codex_fallback_launcher.py` (closed schema, peer-uid check, launcher-built argv); `codex-fallback.sb`; plist template; `MacCodexIsolation` (installation hashes, principals, live cases, ACL workroot); loopback gateway profile | `test_issue_agent_mac_fallback.py`, `test_issue_agent_fallback_executor.py` | **done** |
+| **P6** session | Device-code session with owner-only inbox, window, logout and delete on every path, token scan | launcher and port tests | **done** |
+| **P7** workflow, docs | `execute-fallback` (self-hosted, `X_FB` only), `bind-fallback`, validate gating; static guard extended; state machine document | `test_issue_agent_workflows.py` | **done** (defect registry entry deferred to independent review) |
 | **P8** end to end | After push and merge approval: an owner-labelled Issue with the primary deliberately rate-limited, observed through `FALLBACK_AUTHORIZED`, then `RESULT_BOUND` (attempt 2), validated, published, Draft PR, and hosted Pre-PR Preflight on the exact head | exact-head SHA equality; ledger chain verified | gated |

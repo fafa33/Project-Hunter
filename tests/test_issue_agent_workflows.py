@@ -35,14 +35,17 @@ GOVERNED = (
 
 CONTROL, EXECUTOR = "hunter-issue-agent-control", "hunter-issue-agent-executor"
 VALIDATOR, PUBLISHER = "hunter-issue-agent-validator", "hunter-issue-agent-publisher"
+FALLBACK_EXECUTOR = "hunter-issue-agent-fallback-executor"  # ADR 0041 F5
 LIFECYCLE_DOMAINS = {
     "scope-admission": None,
     "authorize": CONTROL,
     "bind": CONTROL,
+    "bind-fallback": CONTROL,
     "resume-bind": CONTROL,
     "record-validation": CONTROL,
     "finalize": CONTROL,
     "execute": EXECUTOR,
+    "execute-fallback": FALLBACK_EXECUTOR,
     "validate": VALIDATOR,
     "publish": PUBLISHER,
 }
@@ -55,6 +58,8 @@ DOMAIN_SECRETS = {
         "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY",
     },
     EXECUTOR: {"HUNTER_ISSUE_AGENT_HANDOFF_KEY", "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY"},
+    # ADR 0041 F3/F6: X_FB only. The plan session is owner-approved per run, so no provider key exists here.
+    FALLBACK_EXECUTOR: {"HUNTER_ISSUE_AGENT_FALLBACK_HANDOFF_KEY"},
     VALIDATOR: {"HUNTER_ISSUE_AGENT_RESULT_KEY"},
     PUBLISHER: {
         "HUNTER_HGCC_READ_TOKEN",
@@ -64,7 +69,7 @@ DOMAIN_SECRETS = {
     },
     None: {"HUNTER_ISSUE_AGENT_PR_TOKEN", "HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY"},
 }
-CONTENT_JOBS = ("authorize", "execute", "validate", "publish")
+CONTENT_JOBS = ("authorize", "execute", "execute-fallback", "validate", "publish")
 CONTROL_SHA_REFS = {"${{ github.sha }}", "${{ needs.resume-bind.outputs.control_sha || github.sha }}"}
 _PINNED = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[0-9a-f]{40}")
 _SECRET = re.compile(r"\$\{\{\s*secrets\.([A-Za-z0-9_]+)\s*\}\}")
@@ -246,6 +251,10 @@ def test_secrets_never_cross_a_trust_domain() -> None:
         job_id for job_id, job in jobs.items() if "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN" in job_secrets(job)
     }
     assert model_holders == {"execute"} and push_holders == {"publish"}
+    fallback_key_holders = {
+        job_id for job_id, job in jobs.items() if "HUNTER_ISSUE_AGENT_FALLBACK_HANDOFF_KEY" in job_secrets(job)
+    }
+    assert fallback_key_holders == {"execute-fallback"}
     # The read-only ruleset-observation credential is held by the publisher job alone, never by any other domain.
     hgcc_holders = {job_id for job_id, job in jobs.items() if "HUNTER_HGCC_READ_TOKEN" in job_secrets(job)}
     assert hgcc_holders == {"publish"}
@@ -255,6 +264,46 @@ def test_secrets_never_cross_a_trust_domain() -> None:
 def test_other_workflows_hold_no_role_secret(name: str) -> None:
     for job in load(name)["jobs"].values():
         assert job_secrets(job) <= DOMAIN_SECRETS[job.get("environment")]
+
+
+def self_hosted_jobs(workflow: Mapping[str, Any]) -> set[str]:
+    found = set()
+    for job_id, job in workflow["jobs"].items():
+        runs_on = job.get("runs-on")
+        labels = runs_on if isinstance(runs_on, list) else [runs_on]
+        if any(str(label) != "ubuntu-latest" for label in labels):
+            found.add(job_id)
+    return found
+
+
+def test_only_the_admitted_fallback_runs_on_the_self_hosted_host() -> None:
+    """ADR 0041 F5: the persistent Mac runs one job, gated on the signed ledger, holding no ledger or model key."""
+
+    workflow = load(LIFECYCLE)
+    assert self_hosted_jobs(workflow) == {"execute-fallback"}
+    job = workflow["jobs"]["execute-fallback"]
+    assert job["runs-on"] == ["self-hosted", "macOS", "hunter-codex-fallback"]
+    assert job["permissions"] == {}
+    assert "needs.bind.outputs.fallback_authorized == 'true'" in str(job["if"])
+    assert job["concurrency"] == {"group": "hunter-codex-fallback", "cancel-in-progress": False}
+    assert job_secrets(job) == {"HUNTER_ISSUE_AGENT_FALLBACK_HANDOFF_KEY"}
+    commands = " ".join(str(step.get("run", "")) for step in steps(job))
+    assert "execute-fallback" in commands and "device" not in commands.lower()
+    assert any(step.get("if") == "always()" and "hunter-fallback/work" in str(step.get("run")) for step in steps(job))
+
+
+@pytest.mark.parametrize(
+    "runs_on,expected",
+    [
+        ("ubuntu-latest", set()),
+        (["ubuntu-latest"], set()),
+        (["self-hosted", "macOS"], {"j"}),
+        ("macos-latest", {"j"}),
+        ("${{ inputs.runner }}", {"j"}),  # an expression is never a hosted runner by construction
+    ],
+)
+def test_the_self_hosted_guard_classifies_every_runner_spelling(runs_on: object, expected: set[str]) -> None:
+    assert self_hosted_jobs({"jobs": {"j": {"runs-on": runs_on}}}) == expected
 
 
 def test_role_tokens_are_minimal() -> None:
