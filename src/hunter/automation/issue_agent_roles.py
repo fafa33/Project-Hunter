@@ -284,97 +284,157 @@ class SudoIsolation:
 
 # --- trusted git over a workspace the model controls -----------------------------------------------------
 
-
-_DANGEROUS_GIT_FLAGS: Final = frozenset(
+#: Closed set of option tokens the trusted git builder accepts before a ``--`` separator (Issue #574).
+#:
+#: A git argument that starts with ``-`` but is not listed here would be read by git itself as an option. That is a
+#: command primitive, not a formatting detail: ``--upload-pack=<program>`` makes ``git fetch`` execute that program.
+#: Callers therefore separate positional values with ``--`` and the builder refuses anything else it does not know.
+_GIT_OPTIONS: Final = frozenset(
     {
-        "--upload-pack",
-        "--receive-pack",
-        "--exec-path",
-        "--output",
-        "--paginate",
-        "--no-pager",
-        "--literal-pathspecs",
+        "--quiet",
+        "--no-tags",
+        "--all",
+        "--cached",
+        "--no-renames",
+        "--name-status",
+        "-z",
+        "--detach",
+        "--stage",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--verify",
+        "--end-of-options",
+        "--is-ancestor",
+        "-m",
+        "--no-gpg-sign",
+        "--porcelain",
+        "--untracked-files=normal",
     }
 )
+#: An https URL or an absolute local path, and nothing a git transport could read as an option or a helper program.
+_REMOTE: Final = re.compile(r"(?:https://[A-Za-z0-9._-]+(?::\d{1,5})?/[A-Za-z0-9._~%+@/-]*|/[A-Za-z0-9._~%+@/-]+)")
+_GIT_CONTROL: Final = re.compile(r"[\x00-\x1f\x7f]")
 
 
-def _validate_trusted_git_path(path: Path | str, label: str = "path") -> Path:
-    """Validate a git path, rejecting traversal sequences, symlinks, and option syntax."""
-    candidate = Path(path) if isinstance(path, str) else path
-    raw = str(candidate)
-    if not raw or any(part.startswith("-") for part in candidate.parts):
-        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} cannot be empty or contain components starting with '-'")
-    if "\0" in raw:
-        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} cannot contain null bytes")
-    if ".." in candidate.parts:
-        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} cannot contain '..' traversal sequences")
-    if candidate.is_symlink():
-        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} cannot be a symlink")
+def _git_scalar(value: str, what: str) -> str:
+    """One argv scalar: non-empty and free of every character a line-oriented parser could split on."""
 
-    resolved = candidate.resolve()
-    if any(part.startswith("-") for part in resolved.parts):
-        raise RoleRefused(
-            "EXECUTION_NOT_COMPLETED", f"{label} resolved path cannot contain components starting with '-'"
-        )
-    if ".." in resolved.parts:
-        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} resolved path cannot contain '..' traversal sequences")
-    if resolved.is_symlink():
-        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} resolved path cannot be a symlink")
-
-    curr = candidate
-    while curr.exists() and curr != curr.parent:
-        if curr.is_symlink():
-            raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{label} ancestor cannot be a symlink")
-        curr = curr.parent
-
-    return resolved
+    if not value or _GIT_CONTROL.search(value):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{what} is not a single safe value")
+    return value
 
 
-def _reject_unsafe_git_args(args: Sequence[str]) -> None:
-    """Reject arguments that could inject dangerous git options or commands."""
-    for arg in args:
-        if not isinstance(arg, str):
-            raise RoleRefused("EXECUTION_NOT_COMPLETED", "git argument must be str")
-        if "\0" in arg or "\n" in arg or "\r" in arg:
-            raise RoleRefused("EXECUTION_NOT_COMPLETED", "git argument contains forbidden control characters")
-        for dangerous in _DANGEROUS_GIT_FLAGS:
-            if arg == dangerous or arg.startswith(f"{dangerous}="):
-                raise RoleRefused("EXECUTION_NOT_COMPLETED", f"unsafe git argument rejected: {dangerous}")
+def trusted_git_path(value: Path, what: str) -> Path:
+    """A canonical absolute directory path with no symlinked component: where trusted git may read or write.
+
+    ``resolve`` is compared with the text itself, so ``..``, ``.``, a linked ancestor or a linked leaf is refused
+    rather than silently followed. A non-existent leaf is allowed because ``git init`` creates the metadata
+    directory; every ancestor must still be canonical.
+    """
+
+    path = Path(_git_scalar(str(value), what))
+    if any(part.startswith("-") for part in path.parts):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{what} has a component that would be read as an option")
+    if not path.is_absolute():
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{what} is not absolute")
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError):
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{what} cannot be resolved") from None
+    if resolved != path:
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{what} traverses a symlink or a non-canonical component")
+    if path.exists() and not path.is_dir():
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", f"{what} is not a directory")
+    return path
+
+
+def trusted_remote(remote: str) -> str:
+    """An https URL or absolute local repository path, never a value git could execute or reinterpret."""
+
+    _git_scalar(remote, "git remote")
+    if remote.startswith("-") or _REMOTE.fullmatch(remote) is None:
+        raise RoleRefused("CONFIGURATION_INVALID", "git remote is not an https URL or an absolute local path")
+    return remote
+
+
+def trusted_branch(branch: str) -> str:
+    """A plain branch name usable inside a refspec without changing its meaning."""
+
+    _git_scalar(branch, "branch")
+    if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,200}", branch) is None or ".." in branch or "//" in branch:
+        raise RoleRefused("CONFIGURATION_INVALID", "branch is not a plain ref name")
+    return branch
+
+
+def trusted_result_path(path: str) -> str:
+    """A relative workspace path from the collector's own diff, never an absolute or traversing one."""
+
+    _git_scalar(path, "result path")
+    if path.startswith("/") or any(part in ("", ".", "..") for part in path.split("/")):
+        raise RoleRefused("EXECUTOR_RESULT_REJECTED", "result path escapes the workspace")
+    return path
+
+
+def trusted_git_command(git_dir: Path, work_tree: Path, args: Sequence[str]) -> tuple[str, ...]:
+    """The single argv builder for trusted git: canonical external metadata, closed options, escaped positionals.
+
+    Both the executor and the hosted diagnostic compose their git invocations here, so neither can hand git an
+    option it did not declare. Positional values must follow ``--``; before it, only :data:`_GIT_OPTIONS` is
+    accepted. ``git_dir`` must stay outside ``work_tree`` because the workspace is model-controlled: a work tree
+    that contains its own metadata could configure the collector.
+    """
+
+    git_dir = trusted_git_path(git_dir, "git metadata directory")
+    work_tree = trusted_git_path(work_tree, "work tree")
+    if git_dir == work_tree or git_dir in work_tree.parents or work_tree in git_dir.parents:
+        raise RoleRefused("EXECUTION_NOT_COMPLETED", "git metadata must stay outside the work tree")
+    positionals = False
+    for argument in args:
+        _git_scalar(argument, "git argument")
+        if positionals:
+            continue
+        if argument == "--":
+            positionals = True
+            continue
+        if argument.startswith("-") and argument not in _GIT_OPTIONS:
+            raise RoleRefused("EXECUTION_NOT_COMPLETED", "git argument would be read as an option")
+    return (
+        "git", f"--git-dir={git_dir}", f"--work-tree={work_tree}",
+        "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", *args,
+    )  # fmt: skip
+
+
+def _git_environment(git_dir: Path) -> dict[str, str]:
+    return {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "HOME": str(git_dir),
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    }
 
 
 def _git(git_dir: Path, work_tree: Path, *args: str) -> bytes:
     """Git against the trusted metadata directory only; nothing in the work tree configures it."""
 
-    valid_git_dir = _validate_trusted_git_path(git_dir, label="git_dir")
-    valid_work_tree = _validate_trusted_git_path(work_tree, label="work_tree")
-    _reject_unsafe_git_args(args)
-
-    environment = {
-        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
-        "HOME": str(valid_git_dir),
-        "GIT_CONFIG_GLOBAL": os.devnull,
-        "GIT_CONFIG_NOSYSTEM": "1",
-        "GIT_TERMINAL_PROMPT": "0",
-    }
-    command = [
-        "git",
-        "--git-dir",
-        str(valid_git_dir),
-        "--work-tree",
-        str(valid_work_tree),
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "core.fsmonitor=false",
-        *args,
-    ]
+    command = trusted_git_command(git_dir, work_tree, args)
     completed = subprocess.run(
-        command, cwd=valid_work_tree, env=environment, capture_output=True, check=False, timeout=300
+        command, cwd=work_tree, env=_git_environment(git_dir), capture_output=True, check=False, timeout=300
     )
     if completed.returncode != 0:
         action = args[0] if args else "command"
         raise RoleRefused("EXECUTION_NOT_COMPLETED", f"workspace git {action} failed")
     return completed.stdout
+
+
+def _git_status(git_dir: Path, work_tree: Path, *args: str) -> int:
+    """The same trusted invocation, for a caller that judges the exit status instead of the bytes."""
+
+    command = trusted_git_command(git_dir, work_tree, args)
+    return subprocess.run(
+        command, cwd=work_tree, env=_git_environment(git_dir), capture_output=True, check=False, timeout=300
+    ).returncode
 
 
 #: A zero-change run is explained from counts only. The walk is telemetry, never authority, and is bounded.
@@ -525,74 +585,34 @@ def materialize_base(
 
     if _SHA40.fullmatch(base_sha) is None:
         raise RoleRefused("BASE_NOT_ON_MAIN", "base is not an exact commit")
-    if not remote or remote.startswith("-") or "\0" in remote or "\n" in remote:
-        raise RoleRefused("CONFIGURATION_INVALID", "invalid git remote")
+    # Everything below writes as the trusted user: the paths and the remote are canonical, option-free values.
+    workspace = trusted_git_path(workspace, "workspace")
+    git_dir = trusted_git_path(git_dir, "git metadata directory")
+    remote = trusted_remote(remote)
     if remediation_branch is not None:
-        if (
-            not remediation_branch
-            or remediation_branch.startswith("-")
-            or ".." in remediation_branch
-            or "\0" in remediation_branch
-        ):
-            raise RoleRefused("CONFIGURATION_INVALID", "invalid remediation branch")
-
-    valid_workspace = _validate_trusted_git_path(workspace, label="workspace")
-    valid_git_dir = _validate_trusted_git_path(git_dir, label="git_dir")
-
-    valid_workspace.mkdir(parents=True, exist_ok=True)
-    _git(valid_git_dir, valid_workspace, "init", "--quiet")
-    valid_git_dir.chmod(0o700)
-    _git(
-        valid_git_dir,
-        valid_workspace,
-        "fetch",
-        "--quiet",
-        "--no-tags",
-        "--",
-        remote,
-        "+refs/heads/main:refs/remotes/origin/main",
-    )
+        trusted_branch(remediation_branch)  # refused before anything is created or fetched
+    workspace.mkdir(parents=True, exist_ok=True)
+    _git(git_dir, workspace, "init", "--quiet")
+    git_dir.chmod(0o700)
+    _git(git_dir, workspace, "fetch", "--quiet", "--no-tags", "--", remote, "+refs/heads/main:refs/remotes/origin/main")
     if remediation_branch is None:
-        environment = {
-            "GIT_CONFIG_GLOBAL": os.devnull,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "PATH": os.environ.get("PATH", ""),
-        }
-        ancestry = subprocess.run(
-            (
-                "git",
-                "--git-dir",
-                str(valid_git_dir),
-                "merge-base",
-                "--is-ancestor",
-                base_sha,
-                "refs/remotes/origin/main",
-            ),
-            env=environment,
-            capture_output=True,
-            check=False,
-        ).returncode
+        ancestry = _git_status(git_dir, workspace, "merge-base", "--is-ancestor", base_sha, "refs/remotes/origin/main")
         if ancestry != 0:
             raise RoleRefused("BASE_NOT_ON_MAIN", "the signed base is not reachable from main")
     else:
+        branch = trusted_branch(remediation_branch)
         _git(
-            valid_git_dir,
-            valid_workspace,
-            "fetch",
-            "--quiet",
-            "--no-tags",
-            "--",
-            remote,
-            f"+refs/heads/{remediation_branch}:refs/remotes/origin/{remediation_branch}",
-        )
+            git_dir, workspace, "fetch", "--quiet", "--no-tags", "--", remote,
+            f"+refs/heads/{branch}:refs/remotes/origin/{branch}",
+        )  # fmt: skip
         head = (
-            _git(valid_git_dir, valid_workspace, "rev-parse", f"refs/remotes/origin/{remediation_branch}")
+            _git(git_dir, workspace, "rev-parse", "--verify", "--end-of-options", f"refs/remotes/origin/{branch}")
             .decode()
             .strip()
         )
         if head != base_sha:
             raise RoleRefused("PR_HEAD_MOVED", "the remediated pull request head is no longer the bound head")
-    _git(valid_git_dir, valid_workspace, "checkout", "--quiet", "--detach", base_sha)
+    _git(git_dir, workspace, "checkout", "--quiet", "--detach", base_sha, "--")
 
 
 def collect_result(workspace: Path, git_dir: Path, *, authorization_id: str, branch: str, base_sha: str) -> bytes:
@@ -600,21 +620,10 @@ def collect_result(workspace: Path, git_dir: Path, *, authorization_id: str, bra
 
     if _SHA40.fullmatch(base_sha) is None:
         raise RoleRefused("BASE_NOT_ON_MAIN", "base is not an exact commit")
-    valid_workspace = _validate_trusted_git_path(workspace, label="workspace")
-    valid_git_dir = _validate_trusted_git_path(git_dir, label="git_dir")
-
-    _git(valid_git_dir, valid_workspace, "add", "--all")
-    listing = _git(
-        valid_git_dir,
-        valid_workspace,
-        "diff",
-        "--cached",
-        "--no-renames",
-        "--name-status",
-        "-z",
-        base_sha,
-        "--",
-    ).split(b"\0")
+    _git(git_dir, workspace, "add", "--all")
+    listing = _git(git_dir, workspace, "diff", "--cached", "--no-renames", "--name-status", "-z", base_sha, "--").split(
+        b"\0"
+    )
     entries = [item for item in listing if item]
     if not entries:
         raise RoleRefused("NO_CHANGES", "the model produced no candidate change")
@@ -623,15 +632,15 @@ def collect_result(workspace: Path, git_dir: Path, *, authorization_id: str, bra
         if status not in (b"A", b"M"):
             raise RoleRefused("EXECUTOR_RESULT_REJECTED", "unsupported change kind")
         try:
-            path = raw_path.decode("utf-8")
+            path = trusted_result_path(raw_path.decode("utf-8"))
         except UnicodeDecodeError:
             raise RoleRefused("EXECUTOR_RESULT_REJECTED", "non-UTF-8 path") from None
         if not path or path.startswith("-") or path.startswith("/") or ".." in Path(path).parts or "\0" in path:
             raise RoleRefused("EXECUTOR_RESULT_REJECTED", "unsafe path in candidate change")
-        mode = _git(valid_git_dir, valid_workspace, "ls-files", "--stage", "--", path).decode().split(" ", 1)[0]
+        mode = _git(git_dir, workspace, "ls-files", "--stage", "--", path).decode().split(" ", 1)[0]
         if mode not in ("100644", "100755"):
             raise RoleRefused("EXECUTOR_RESULT_REJECTED", "unsupported file mode")
-        content = _git(valid_git_dir, valid_workspace, "cat-file", "blob", "--", f":{path}")
+        content = _git(git_dir, workspace, "cat-file", "blob", "--", f":{path}")
         files.append(
             {
                 "path": path,

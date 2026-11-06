@@ -470,6 +470,8 @@ def test_failed_model_reports_safe_workspace_counts_without_collecting(
     assert outcome.advisory_code == "PROVIDER_UNAVAILABLE"
     output = capsys.readouterr().out
     assert "executor failed-workspace diagnostic: changed_entries=" in output
+    # -1 is the fallback for a refused/failed git call: a healthy workspace must report a real count.
+    assert "changed_entries=-1" not in output
     assert "ignored_files=" in output
     assert "PRIVATE_SIGNED_TASK" not in output
 
@@ -1330,6 +1332,117 @@ def test_a_classified_provider_failure_reaches_the_hosted_diagnostic_line(
     assert private not in diagnostic
 
 
+# --- the trusted git boundary: no option smuggling, no traversing path, external metadata (Issue #574) -----------
+#
+# ``git`` reads an argument that starts with ``-`` as an option, and some options execute a program: with a remote of
+# ``--upload-pack=<program>`` a plain ``git fetch`` ran that program as the trusted runner (verified by execution
+# before this guard existed). The collector also interpolates a base commit and a diff-listed path into argv, so the
+# boundary is closed at the argv builder rather than at each call site.
+
+
+def test_a_remote_that_looks_like_a_git_option_is_refused_before_any_git_runs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace, git_dir = tmp_path / "workspace", tmp_path / "trusted.git"
+
+    def unreachable(*_args: Any, **_kwargs: Any) -> bytes:
+        raise AssertionError("git must not run for a refused remote")
+
+    monkeypatch.setattr(roles, "_git", unreachable)
+    monkeypatch.setattr(roles, "_git_status", unreachable)
+    with pytest.raises(roles.RoleRefused) as refusal:
+        roles.materialize_base(workspace, git_dir, remote="--upload-pack=/tmp/injected", base_sha="a" * 40)
+    assert refusal.value.code == "CONFIGURATION_INVALID"
+    assert not workspace.exists() and not git_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "remote",
+    [
+        "--upload-pack=/tmp/injected",
+        "--config=core.pager=/tmp/injected",
+        "/tmp/../etc",
+        "https://x/y z",
+        "relative.git",
+    ],
+)
+def test_only_an_https_or_absolute_local_remote_is_accepted(tmp_path: Path, remote: str) -> None:
+    with pytest.raises(roles.RoleRefused):
+        roles.materialize_base(tmp_path / "workspace", tmp_path / "trusted.git", remote=remote, base_sha="a" * 40)
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        ("diff", "--output=/tmp/injected"),
+        ("fetch", "--upload-pack=/tmp/injected", "origin"),
+        ("rev-parse", "HEAD\n--output=/tmp/injected"),
+        ("cat-file", "blob", ""),
+    ],
+)
+def test_the_git_argv_builder_refuses_option_shaped_and_unsplittable_arguments(
+    tmp_path: Path, args: tuple[str, ...]
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    with pytest.raises(roles.RoleRefused):
+        roles._git(tmp_path / "trusted.git", workspace, *args)
+
+
+def test_git_metadata_must_stay_outside_the_model_workspace(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    with pytest.raises(roles.RoleRefused):
+        roles._git(workspace / "trusted.git", workspace, "init", "--quiet")
+
+
+def test_a_work_tree_reached_through_a_symlink_is_refused(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(real, target_is_directory=True)
+    with pytest.raises(roles.RoleRefused):
+        roles._git(tmp_path / "trusted.git", linked, "init", "--quiet")
+
+
+def test_collect_result_refuses_a_base_that_is_not_a_commit(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    with pytest.raises(roles.RoleRefused) as refusal:
+        roles.collect_result(
+            workspace,
+            tmp_path / "trusted.git",
+            authorization_id="authorization",
+            branch="branch",
+            base_sha="--output=/tmp/injected",
+        )
+    assert refusal.value.code == "BASE_NOT_ON_MAIN"
+
+
+@pytest.mark.parametrize("path", [b"../escaped.txt", b"/etc/passwd", b"./dot.txt"])
+def test_a_diff_listed_path_that_escapes_the_workspace_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: bytes
+) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    def fake_git(_git_dir: Path, _workspace: Path, *args: str) -> bytes:
+        if args[0] == "diff":
+            return b"M\0" + path + b"\0"
+        return b"100644 " + b"0" * 40 + b"\tfile\0"
+
+    monkeypatch.setattr(roles, "_git", fake_git)
+    with pytest.raises(roles.RoleRefused) as refusal:
+        roles.collect_result(
+            workspace,
+            tmp_path / "trusted.git",
+            authorization_id="authorization",
+            branch="branch",
+            base_sha="b" * 40,
+        )
+    assert refusal.value.code == "EXECUTOR_RESULT_REJECTED"
+
+
 def test_roles_git_rejects_command_argument_injection(tmp_path: Path) -> None:
     git_dir = tmp_path / "trusted.git"
     workspace = tmp_path / "workspace"
@@ -1382,3 +1495,12 @@ def test_roles_materialize_base_rejects_unsafe_remote_and_branch(tmp_path: Path)
             workspace, git_dir, remote="https://github.com/o/r.git", base_sha="0" * 40, remediation_branch="../main"
         )
     assert exc_info.value.code == "CONFIGURATION_INVALID"
+
+
+def test_the_failed_run_status_invocation_is_accepted_by_the_trusted_git_builder(tmp_path: Path) -> None:
+    git_dir, workspace = tmp_path / "trusted.git", tmp_path / "workspace"
+    workspace.mkdir()
+    roles._git(git_dir, workspace, "init", "--quiet")
+    (workspace / "edited.txt").write_text("x")
+    status = roles._git(git_dir, workspace, "status", "--porcelain", "-z", "--untracked-files=normal")
+    assert [item for item in status.split(b"\0") if item] == [b"?? edited.txt"]

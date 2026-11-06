@@ -384,6 +384,28 @@ def test_probe_git_rejects_command_argument_injection(tmp_path: Path) -> None:
         probe._git(tmp_path / "-git", workspace, "status")
 
 
+def test_probe_git_refuses_option_shaped_tokens_outside_the_old_denylist(tmp_path: Path) -> None:
+    """PRH-128: the probe composes git only through the shared closed-allowlist builder, not a flag denylist."""
+    git_dir = tmp_path / "trusted.git"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    for option_shaped in ("--config=core.pager=/tmp/x", "-c", "--git-dir=/tmp/elsewhere", "--template=/tmp/t"):
+        with pytest.raises(probe.StagedProbeFailed) as caught:
+            probe._git(git_dir, workspace, "status", option_shaped)
+        assert caught.value.code == "PROBE_GIT_PREPARE_FAILED"
+
+
+def test_prepare_refuses_a_source_that_is_not_an_absolute_local_repository_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: Path
+) -> None:
+    monkeypatch.setattr(roles, "trusted_remote", lambda _remote: (_ for _ in ()).throw(roles.RoleRefused("X", "no")))
+    with pytest.raises(probe.StagedProbeFailed) as caught:
+        probe.prepare(source, tmp_path / "run" / "workspace", tmp_path / "run" / "trusted.git")
+    assert caught.value.code == "PROBE_GIT_PREPARE_FAILED"
+    assert not (tmp_path / "run" / "workspace").exists()
+
+
 def test_probe_cli_rejects_traversal_and_unsafe_flags(capsys: pytest.CaptureFixture[str]) -> None:
     rc = probe.main(
         [

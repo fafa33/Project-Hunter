@@ -46,6 +46,11 @@ GIT_ENVIRONMENT: Final[Mapping[str, str]] = {
     "GIT_CONFIG_GLOBAL": os.devnull,
     "GIT_CONFIG_NOSYSTEM": "1",
     "GIT_TERMINAL_PROMPT": "0",
+    # The commit identity is environment-supplied: the closed git builder accepts no ``-c`` configuration option.
+    "GIT_AUTHOR_NAME": PROBE_COMMIT_NAME,
+    "GIT_AUTHOR_EMAIL": PROBE_COMMIT_EMAIL,
+    "GIT_COMMITTER_NAME": PROBE_COMMIT_NAME,
+    "GIT_COMMITTER_EMAIL": PROBE_COMMIT_EMAIL,
 }
 
 
@@ -136,18 +141,12 @@ def _git(git_dir: Path, workspace: Path, *args: str) -> bytes:
     valid_workspace = _validate_probe_path(workspace, must_exist=False, label="workspace")
     _reject_unsafe_git_args(args)
 
-    command = [
-        "git",
-        "--git-dir",
-        str(valid_git_dir),
-        "--work-tree",
-        str(valid_workspace),
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "core.fsmonitor=false",
-        *args,
-    ]
+    # The argv comes from the shared production builder, so an option-shaped argument, an unseparated positional
+    # or git metadata inside the model workspace is refused here exactly as it is in the executor (PRH-122).
+    try:
+        command = roles.trusted_git_command(valid_git_dir, valid_workspace, args)
+    except roles.RoleRefused:
+        raise StagedProbeFailed("PROBE_GIT_PREPARE_FAILED") from None
     completed = subprocess.run(
         command,
         cwd=valid_workspace,
@@ -185,6 +184,10 @@ def prepare(source: Path, workspace: Path, git_dir: Path) -> str:
     except ValueError:
         pass
 
+    try:
+        remote = roles.trusted_remote(str(valid_source))
+    except roles.RoleRefused:
+        raise StagedProbeFailed("PROBE_GIT_PREPARE_FAILED") from None
     valid_workspace.mkdir(parents=True, exist_ok=True)
     _git(valid_git_dir, valid_workspace, "init", "--quiet")
     _git(
@@ -194,23 +197,18 @@ def prepare(source: Path, workspace: Path, git_dir: Path) -> str:
         "--quiet",
         "--no-tags",
         "--",
-        str(valid_source),
+        remote,
         "+refs/heads/main:refs/probe/base",
     )
-    _git(valid_git_dir, valid_workspace, "checkout", "--quiet", "--detach", "refs/probe/base")
+    _git(valid_git_dir, valid_workspace, "checkout", "--quiet", "--detach", "refs/probe/base", "--")
     (valid_workspace / PROBE_FILE).write_bytes(PROBE_BEFORE)
     _git(valid_git_dir, valid_workspace, "add", "--", PROBE_FILE)
     _git(
         valid_git_dir,
         valid_workspace,
-        "-c",
-        f"user.name={PROBE_COMMIT_NAME}",
-        "-c",
-        f"user.email={PROBE_COMMIT_EMAIL}",
-        "-c",
-        "commit.gpgsign=false",
         "commit",
         "--quiet",
+        "--no-gpg-sign",
         "-m",
         "diagnostic probe base",
     )
