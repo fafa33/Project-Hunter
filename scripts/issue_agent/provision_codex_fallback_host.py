@@ -148,6 +148,37 @@ def group_ids(user: str) -> set[int]:
     return {int(value) for value in run(["/usr/bin/id", "-G", user]).split()}
 
 
+def read_pinned_tarball(path: Path) -> bytes:
+    """Read only a regular, non-symlink file through a no-follow descriptor.
+
+    CLI input is untrusted even during privileged provisioning. The descriptor is
+    validated before reading, and the complete archive is checked against its
+    pinned digest by codex_from_tarball before installation.
+    """
+    if not path.is_absolute() or any(part == ".." for part in path.parts):
+        raise ProvisionError("Codex archive requires an absolute, traversal-free path")
+    # Refuse symlinked parent components too; O_NOFOLLOW only covers the leaf.
+    for parent in path.parents:
+        if parent.is_symlink():
+            raise ProvisionError("Codex archive path contains a symlink")
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError as error:
+        raise ProvisionError("Codex archive cannot be opened safely") from error
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or info.st_size > 150 * 1024 * 1024:
+            raise ProvisionError("Codex archive must be a bounded regular file")
+        if info.st_mode & 0o022:
+            raise ProvisionError("Codex archive cannot be group- or world-writable")
+        if info.st_uid not in (0, os.getuid(), int(os.environ.get("SUDO_UID", os.getuid()))):
+            raise ProvisionError("Codex archive has an unexpected owner")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            return handle.read(150 * 1024 * 1024 + 1)
+    finally:
+        os.close(descriptor)
+
+
 def checkout_head(checkout: Path) -> str:
     git = ["/usr/bin/git", "-c", f"safe.directory={checkout}", "-C", str(checkout)]
     if run([*git, "status", "--porcelain", "--untracked-files=no"]).strip():
@@ -238,7 +269,7 @@ def apply(checkout: Path, tarball: Path, owner: str) -> dict[str, object]:
     if os.geteuid() != 0:
         raise ProvisionError("--apply must run as root through sudo")
     head = checkout_head(checkout)
-    binary = codex_from_tarball(tarball.read_bytes())  # verified in memory before anything is written
+    binary = codex_from_tarball(read_pinned_tarball(tarball))  # verified in memory before anything is written
     agent_gid = ensure_group(AGENT_USER, set())
     runner_gid = ensure_group(RUNNER_USER, {agent_gid})
     if runner_gid == agent_gid or STAFF_GID in (runner_gid, agent_gid):
@@ -441,7 +472,7 @@ def plan(checkout: Path, tarball: Path | None) -> dict[str, object]:
         raise ProvisionError(f"repository sources missing: {missing}")
     preflight = {"sources": "present", "codex_tarball": "not given"}
     if tarball is not None:
-        codex_from_tarball(tarball.read_bytes())
+        codex_from_tarball(read_pinned_tarball(tarball))
         preflight["codex_tarball"] = "verified against the pinned registry integrity and binary hash"
     return {
         "status": "DRY_RUN",

@@ -200,6 +200,26 @@ def test_apply_without_root_refuses_before_touching_anything(capsys: Any, tmp_pa
     assert json.loads(capsys.readouterr().out)["status"] == "REFUSED"
 
 
+def test_pinned_archive_reader_rejects_symlinks_and_nonregular_files(tmp_path: Path) -> None:
+    archive = tmp_path / "archive.tgz"
+    archive.write_bytes(b"pinned-archive-placeholder")
+    assert provision.read_pinned_tarball(archive) == b"pinned-archive-placeholder"
+    link = tmp_path / "archive-link.tgz"
+    link.symlink_to(archive)
+    with pytest.raises(provision.ProvisionError):
+        provision.read_pinned_tarball(link)
+    with pytest.raises(provision.ProvisionError):
+        provision.read_pinned_tarball(tmp_path)
+
+
+def test_pinned_archive_reader_refuses_untrusted_permissions(tmp_path: Path) -> None:
+    archive = tmp_path / "archive.tgz"
+    archive.write_bytes(b"archive")
+    archive.chmod(0o666)
+    with pytest.raises(provision.ProvisionError, match="writable"):
+        provision.read_pinned_tarball(archive)
+
+
 def test_a_tampered_tarball_refuses_in_the_dry_run(capsys: Any, tmp_path: Path) -> None:
     bad = tmp_path / "codex.tgz"
     bad.write_bytes(tarball(b"not codex"))
