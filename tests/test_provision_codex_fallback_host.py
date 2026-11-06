@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -207,6 +208,11 @@ def test_apply_without_root_refuses_before_touching_anything(capsys: Any, tmp_pa
     assert json.loads(capsys.readouterr().out)["status"] == "REFUSED"
 
 
+@pytest.fixture(autouse=True)
+def staging_root(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(provision, "_archive_staging_roots", lambda: (os.path.realpath(tmp_path),))
+
+
 def test_pinned_archive_reader_rejects_symlinks_and_nonregular_files(tmp_path: Path) -> None:
     archive = tmp_path / "archive.tgz"
     archive.write_bytes(b"pinned-archive-placeholder")
@@ -241,6 +247,10 @@ def test_the_script_runs_under_the_system_python_sudo_will_use() -> None:
     assert completed.returncode == 0
 
 
-def test_pinned_archive_reader_refuses_paths_outside_staging_roots() -> None:
-    with pytest.raises(provision.ProvisionError, match="staged"):
-        provision.read_pinned_tarball(Path("/etc/hosts"))
+def test_pinned_archive_reader_refuses_paths_outside_staging_roots(tmp_path: Path) -> None:
+    nested = tmp_path / "nested"
+    nested.mkdir()
+    (nested / "a.tgz").write_bytes(b"x")
+    for outside in (Path("/etc/hosts"), nested / "a.tgz"):
+        with pytest.raises(provision.ProvisionError, match="staged"):
+            provision.read_pinned_tarball(outside)
