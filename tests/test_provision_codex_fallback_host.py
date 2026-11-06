@@ -96,7 +96,12 @@ def test_an_archive_with_a_different_binary_refuses_even_if_its_digest_were_pinn
         provision.codex_from_tarball(evil)
 
 
-@pytest.mark.parametrize("data", [tarball(b"codex-binary", name="package/bin/codex"), tarball(b"", link=True)])
+# Stable ids: the gzip header embeds the build time, so byte-derived ids differ across xdist workers.
+@pytest.mark.parametrize(
+    "data",
+    [tarball(b"codex-binary", name="package/bin/codex"), tarball(b"", link=True)],
+    ids=["missing-member", "symlinked-member"],
+)
 def test_a_missing_or_symlinked_binary_member_refuses(monkeypatch: Any, data: bytes) -> None:
     pin(monkeypatch, data, b"codex-binary")
     with pytest.raises(provision.ProvisionError):
