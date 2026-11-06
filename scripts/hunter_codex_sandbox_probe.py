@@ -7,9 +7,12 @@ reported as failure, never counted as proof that a forbidden action was denied.
 from __future__ import annotations
 
 import os
+import secrets
+import shutil
 import stat
 import subprocess
-import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -24,6 +27,27 @@ def verified_shared_temp_root() -> Path:
     return parent
 
 
+@contextmanager
+def isolated_probe_directory(parent: Path) -> Iterator[Path]:
+    """Atomically create an unpredictable, private child under a verified sticky parent."""
+    for _ in range(5):
+        root = parent / ("hunter-codex-probe-" + secrets.token_hex(16))
+        try:
+            root.mkdir(mode=0o700)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise RuntimeError("unable to allocate an isolated probe directory")
+    try:
+        info = root.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            raise RuntimeError("unsafe probe directory creation")
+        yield root
+    finally:
+        shutil.rmtree(root)
+
+
 def main() -> int:
     if os.uname().sysname != "Darwin":
         print("BLOCKED: macOS required")
@@ -33,14 +57,9 @@ def main() -> int:
     except (OSError, RuntimeError) as exc:
         print(f"BLOCKED: unsafe shared probe parent: {exc}")
         return 1
-    # Cross-user probe requires a shared parent; the child is unpredictable and
-    # created atomically with 0700, then exposed only for the disposable test.
-    with tempfile.TemporaryDirectory(prefix="hunter-codex-probe-", dir=parent) as tmp:
-        root = Path(tmp)
-        info = root.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
-            print("BLOCKED: unsafe probe directory creation")
-            return 1
+    # A random 128-bit name and atomic 0700 mkdir prevent shared-parent races.
+    # Permissions are opened only after ownership and mode verification.
+    with isolated_probe_directory(parent) as root:
         root.chmod(0o755)
         workspace = root / "workspace"
         workspace.mkdir(mode=0o755)

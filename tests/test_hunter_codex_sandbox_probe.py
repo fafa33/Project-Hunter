@@ -25,3 +25,19 @@ def test_probe_requires_root_owned_sticky_parent():
             probe.verified_shared_temp_root()
         fake.return_value.st_uid = 0
         assert probe.verified_shared_temp_root() == Path("/private/tmp")
+
+
+def test_isolated_probe_directory_is_private_and_cleaned(tmp_path):
+    with probe.isolated_probe_directory(tmp_path) as root:
+        assert root.parent == tmp_path
+        assert root.name.startswith("hunter-codex-probe-")
+        assert root.stat().st_mode & 0o777 == 0o700
+        assert root.is_dir()
+    assert not root.exists()
+
+
+def test_isolated_probe_directory_cleans_on_exception(tmp_path):
+    with pytest.raises(RuntimeError, match="test failure"):
+        with probe.isolated_probe_directory(tmp_path) as root:
+            raise RuntimeError("test failure")
+    assert not root.exists()
