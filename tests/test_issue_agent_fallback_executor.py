@@ -273,7 +273,13 @@ def test_an_admitted_but_unapproved_fallback_never_runs(
     for run_id in (100, APPROVED_RUN):
         with pytest.raises(roles.RoleRefused, match="owner-approved"):
             run(ledger, second, fallback_config(repos), port, mac.WORK_ROOT / WORKROOT_ID, run_id=run_id)
-    assert not (mac.WORK_ROOT / WORKROOT_ID / "workspace").exists()
+    # Attestation now creates private empty directories before the launcher probes.
+    # Refusal must still happen before git materialization or any model output.
+    workroot = mac.WORK_ROOT / WORKROOT_ID
+    assert (workroot / "workspace").is_dir()
+    assert (workroot / "home").is_dir()
+    assert not list((workroot / "workspace").iterdir())
+    assert not (workroot / "trusted.git").exists()
 
 
 def test_a_fallback_key_cannot_open_the_offer_without_the_admission(repos: dict[str, Any]) -> None:
@@ -310,7 +316,13 @@ def test_an_unattested_mac_port_is_refused_before_the_workspace(
     port.attested = False
     with pytest.raises(roles.RoleRefused, match="attested"):
         run(ledger, second, fallback_config(repos), port, mac.WORK_ROOT / WORKROOT_ID)
-    assert not (mac.WORK_ROOT / WORKROOT_ID / "workspace").exists()
+    # Attestation now creates private empty directories before the launcher probes.
+    # Refusal must still happen before git materialization or any model output.
+    workroot = mac.WORK_ROOT / WORKROOT_ID
+    assert (workroot / "workspace").is_dir()
+    assert (workroot / "home").is_dir()
+    assert not list((workroot / "workspace").iterdir())
+    assert not (workroot / "trusted.git").exists()
 
 
 def test_a_result_carrying_the_session_token_is_never_sealed(
