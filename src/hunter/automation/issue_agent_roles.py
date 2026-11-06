@@ -1070,6 +1070,11 @@ def run_executor(
         raise RoleRefused("TRANSPORT_INTEGRITY_FAILED", "prompt differs from the bound prompt digest")
 
     require_governed_kilo_isolation(config.model_argv, isolation)
+    # Issue #390: the Codex argv adapter is not an isolation boundary. Never
+    # run it through the legacy host sudo path, even with a distinct UID.
+    # Activation requires a separately reviewed sandboxed executor port.
+    if _is_codex_exec(config.model_argv):
+        raise RoleRefused("EXECUTION_NOT_STARTED", "Codex fallback isolation has not been attested")
 
     workspace, git_dir, home = workroot / "workspace", workroot / "trusted.git", workroot / "home"
     # ADR 0039 L4: a remediation executes on its parent PR branch at the exact bound head, not on main.

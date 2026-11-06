@@ -48,3 +48,12 @@ def test_codex_rejects_override_and_task_injection(tmp_path: Path, tail: tuple[s
 def test_codex_requires_explicit_model(tmp_path: Path) -> None:
     with pytest.raises(roles.RoleRefused):
         roles.codex_invocation(("codex", "exec"), prompt=b"task", home=tmp_path, workspace=tmp_path)
+
+
+def test_production_executor_refuses_unattested_codex_before_workspace_materialization() -> None:
+    import inspect
+
+    source = inspect.getsource(roles.run_executor)
+    assert "if _is_codex_exec(config.model_argv):" in source
+    assert "Codex fallback isolation has not been attested" in source
+    assert source.index("Codex fallback isolation has not been attested") < source.index("materialize_base(")
