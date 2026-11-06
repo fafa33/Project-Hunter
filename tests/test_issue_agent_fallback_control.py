@@ -37,6 +37,7 @@ def test_the_fallback_recipient_is_optional_and_distinct(tmp_path: Path) -> None
 @pytest.mark.parametrize(
     "value",
     [rt.HANDOFF_KEY.public_key().public_bytes_raw().hex(), "zz" * 32, "", 7, None],
+    ids=["primary-recipient-reused", "nonhex", "empty", "wrong-type-integer", "null"],
 )
 def test_a_reused_or_malformed_fallback_recipient_is_missing_configuration(tmp_path: Path, value: object) -> None:
     with pytest.raises(control.ControlRefused) as refused:
