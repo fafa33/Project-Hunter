@@ -7,19 +7,40 @@ reported as failure, never counted as proof that a forbidden action was denied.
 from __future__ import annotations
 
 import os
+import stat
 import subprocess
 import tempfile
 from pathlib import Path
+
+
+def verified_shared_temp_root() -> Path:
+    """Permit cross-user probes only under a root-owned sticky directory."""
+    parent = Path("/private/tmp")
+    info = parent.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != 0:
+        raise RuntimeError("probe parent must be a root-owned directory")
+    if info.st_mode & 0o002 and not info.st_mode & stat.S_ISVTX:
+        raise RuntimeError("probe parent must have the sticky bit")
+    return parent
 
 
 def main() -> int:
     if os.uname().sysname != "Darwin":
         print("BLOCKED: macOS required")
         return 1
-    with tempfile.TemporaryDirectory(
-        prefix="hunter-codex-probe-", dir="/private/tmp"
-    ) as tmp:  # NOSONAR: disposable macOS probe root
+    try:
+        parent = verified_shared_temp_root()
+    except (OSError, RuntimeError) as exc:
+        print(f"BLOCKED: unsafe shared probe parent: {exc}")
+        return 1
+    # Cross-user probe requires a shared parent; the child is unpredictable and
+    # created atomically with 0700, then exposed only for the disposable test.
+    with tempfile.TemporaryDirectory(prefix="hunter-codex-probe-", dir=parent) as tmp:
         root = Path(tmp)
+        info = root.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+            print("BLOCKED: unsafe probe directory creation")
+            return 1
         root.chmod(0o755)
         workspace = root / "workspace"
         workspace.mkdir(mode=0o755)
