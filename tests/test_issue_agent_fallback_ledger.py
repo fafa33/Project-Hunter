@@ -419,7 +419,8 @@ def test_the_owner_may_withdraw_a_pending_fallback() -> None:
 @pytest.mark.parametrize("target", [state.RESULT_BOUND, state.FALLBACK_AUTHORIZED, state.VALIDATED])
 def test_the_owner_decision_role_writes_nothing_but_the_withdrawal(target: str) -> None:
     chain = admitted()
-    reject(chain, chain.make("transition", target, fallback_bound_evidence(), _by("owner-decision")), "")
+    record = chain.make("transition", target, fallback_bound_evidence(), _by("owner-decision"))
+    reject(chain, record, "may not write|illegal transition")
 
 
 def test_a_fallback_result_is_published_against_its_own_restarted_deadline() -> None:
