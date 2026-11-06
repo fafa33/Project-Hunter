@@ -31,7 +31,7 @@ def main() -> int:
             "(deny default)\n"
             "(allow process*)\n"
             "(allow sysctl-read)\n"
-            '(allow file-read* (subpath "/usr") (subpath "/System") '
+            '(allow file-read* (literal "/") (subpath "/usr") (subpath "/System") '
             '(subpath "/Library") (subpath "/bin") (subpath "/sbin") '
             f'(subpath "{workspace}"))\n'
             f'(allow file-write* (subpath "{workspace}"))\n'
