@@ -239,3 +239,8 @@ def test_a_tampered_tarball_refuses_in_the_dry_run(capsys: Any, tmp_path: Path) 
 def test_the_script_runs_under_the_system_python_sudo_will_use() -> None:
     completed = subprocess.run(["/usr/bin/python3", "-I", "-m", "py_compile", str(SCRIPT)], check=False)
     assert completed.returncode == 0
+
+
+def test_pinned_archive_reader_refuses_paths_outside_staging_roots() -> None:
+    with pytest.raises(provision.ProvisionError, match="staged"):
+        provision.read_pinned_tarball(Path("/etc/hosts"))

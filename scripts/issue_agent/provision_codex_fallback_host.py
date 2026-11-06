@@ -148,6 +148,16 @@ def group_ids(user: str) -> set[int]:
     return {int(value) for value in run(["/usr/bin/id", "-G", user]).split()}
 
 
+def _archive_staging_roots() -> tuple[str, ...]:
+    operator = os.environ.get("SUDO_USER") or pwd.getpwuid(os.getuid()).pw_name
+    roots = [tempfile.gettempdir(), "/private/tmp", pwd.getpwnam(operator).pw_dir]
+    return tuple(os.path.realpath(root) for root in roots)
+
+
+def _within(candidate: str, root: str) -> bool:
+    return os.path.commonpath([candidate, root]) == root
+
+
 def read_pinned_tarball(path: Path) -> bytes:
     """Read only a regular, non-symlink file through a no-follow descriptor.
 
@@ -157,16 +167,16 @@ def read_pinned_tarball(path: Path) -> bytes:
     """
     if not path.is_absolute() or any(part == ".." for part in path.parts):
         raise ProvisionError("Codex archive requires an absolute, traversal-free path")
+    # Resolve only the directory: the leaf stays unresolved so O_NOFOLLOW refuses a symlinked archive.
+    resolved = os.path.join(os.path.realpath(path.parent), path.name)
+    if not any(_within(resolved, root) for root in _archive_staging_roots()):
+        raise ProvisionError("Codex archive must be staged in the operator home or a temporary directory")
     # Refuse symlinked parent components too; O_NOFOLLOW only covers the leaf.
     for parent in path.parents:
         if parent.is_symlink():
             raise ProvisionError("Codex archive path contains a symlink")
     try:
-        descriptor = (
-            os.open(  # NOSONAR: absolute, traversal-free, symlink-free path; O_NOFOLLOW, fstat and pinned digest follow
-                path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
-            )
-        )
+        descriptor = os.open(resolved, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError as error:
         raise ProvisionError("Codex archive cannot be opened safely") from error
     try:
