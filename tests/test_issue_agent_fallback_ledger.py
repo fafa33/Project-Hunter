@@ -18,6 +18,7 @@ from test_issue_agent_state import (
     reject,
     result_bound_evidence,
     trusted,
+    validated_evidence,
 )
 
 from hunter.automation import issue_agent_state as state
@@ -416,11 +417,22 @@ def test_the_owner_may_withdraw_a_pending_fallback() -> None:
     assert chain.view.active is None
 
 
-@pytest.mark.parametrize("target", [state.RESULT_BOUND, state.FALLBACK_AUTHORIZED, state.VALIDATED])
-def test_the_owner_decision_role_writes_nothing_but_the_withdrawal(target: str) -> None:
-    chain = admitted()
-    record = chain.make("transition", target, fallback_bound_evidence(), _by("owner-decision"))
-    reject(chain, record, "may not write|illegal transition")
+@pytest.mark.parametrize(
+    "build,target,evidence",
+    [
+        (lambda: offered(), state.FALLBACK_AUTHORIZED, admitted_evidence),
+        (lambda: approved(), state.RESULT_BOUND, fallback_bound_evidence),
+        (
+            lambda: approved().transition(state.RESULT_BOUND, fallback_bound_evidence(), "bind"),
+            state.VALIDATED,
+            validated_evidence,
+        ),
+    ],
+)
+def test_the_owner_decision_role_writes_nothing_but_the_withdrawal(build: Any, target: str, evidence: Any) -> None:
+    # Schema-valid evidence on a chain where the transition itself is legal: only the writer role is wrong.
+    chain = build()
+    reject(chain, chain.make("transition", target, evidence(), _by("owner-decision")), "may not write")
 
 
 def test_a_fallback_result_is_published_against_its_own_restarted_deadline() -> None:
