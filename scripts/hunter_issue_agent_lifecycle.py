@@ -23,7 +23,7 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
@@ -37,6 +37,8 @@ from hunter.automation import issue_agent_state as state
 
 STATE_SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY"
 HANDOFF_KEY_ENV = "HUNTER_ISSUE_AGENT_HANDOFF_KEY"
+#: ADR 0041 F3: X_FB, held only by the fallback executor environment on the attested Mac.
+FALLBACK_HANDOFF_KEY_ENV = "HUNTER_ISSUE_AGENT_FALLBACK_HANDOFF_KEY"
 RESULT_KEY_ENV = "HUNTER_ISSUE_AGENT_RESULT_KEY"
 MODEL_KEY_ENV = "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY"
 PUSH_TOKEN_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN"
@@ -199,6 +201,10 @@ def cmd_step(configuration: control.Configuration, arguments: argparse.Namespace
         "candidate-pr-record": control.CANDIDATE_PR_WORKFLOW,
     }.get(arguments.role, control.LIFECYCLE_WORKFLOW)
     job = {"candidate-pr-record": "record"}.get(arguments.role, arguments.role)
+    if getattr(arguments, "job", None) == "bind-fallback":
+        if arguments.role != "bind":
+            raise LifecycleRefused("MISSING_CONFIGURATION", "bind-fallback writes only as the bind role")
+        job = "bind-fallback"
     writer = _writer(arguments.role, job, workflow)
     github = _github(configuration)
     issues = [arguments.issue] if arguments.issue else _active_issues(configuration)
@@ -213,12 +219,19 @@ def cmd_step(configuration: control.Configuration, arguments: argparse.Namespace
                 issue=issue,
                 clock=_now,
                 executor_advisory_code=arguments.advisory or None,
+                executor_stderr_category=getattr(arguments, "stderr_category", "") or None,
+                executor_probe_category=getattr(arguments, "probe_category", "") or None,
+                fallback_attestation_sha256=getattr(arguments, "attestation_sha256", "") or None,
             )
             print(f"issue {issue}: {decision.action} {decision.target_state or decision.code or ''}".rstrip())
             if arguments.role == "bind":
                 # Job success does not imply a bound result. Only the signed
-                # transition permits the downstream validator to start.
-                _output(result_bound="true" if decision.target_state == state.RESULT_BOUND else "false")
+                # transition permits the downstream validator to start, and only
+                # the signed FALLBACK_AUTHORIZED record releases the fallback job.
+                _output(
+                    result_bound="true" if decision.target_state == state.RESULT_BOUND else "false",
+                    fallback_authorized="true" if decision.target_state == state.FALLBACK_AUTHORIZED else "false",
+                )
             if decision.target_state == state.VALIDATED and job == "record-validation":
                 _record_proven_classification(configuration, github, writer, issue)
         except control.FactsUnavailable as error:
@@ -915,6 +928,7 @@ def _authorize_dependencies(
         ledger_provenance=control.run_provenance(github, configuration),
         state_signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
         handoff_recipient=configuration.handoff_recipient,
+        fallback_handoff_recipient=getattr(configuration, "fallback_handoff_recipient", None),
         open_issue_agent_pull_request=open_pull_request,
         active_lifecycles=active_lifecycles,
         compiler_identity_sha256=authorize.compiler_identity(
@@ -1152,6 +1166,8 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
     out = Path(arguments.out_dir)
     out.mkdir(parents=True, exist_ok=True)
     context = _authorize_context()
+    fallback_path = out / "fallback.sealed"
+    fallback_path.unlink(missing_ok=True)
     prepared, sealed = authorize.prepare(
         document,
         dependencies=_authorize_dependencies(
@@ -1163,6 +1179,9 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
         state_store=_store(configuration, authenticated=True),
         source_handling_store=_store(configuration, authenticated=True),
         workdir=out / "work",
+        fallback_sink=(
+            None if getattr(configuration, "fallback_handoff_recipient", None) is None else fallback_path.write_bytes
+        ),
     )
     (out / "handoff.sealed").write_bytes(sealed)
     (out / "prepared.json").write_text(prepared.to_json(), encoding="utf-8")
@@ -1171,8 +1190,24 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
         authorization_id=prepared.authorization_id,
         issue=prepared.issue_number,
         handoff_artifact=state.handoff_artifact_name(prepared.authorization_id),
+        fallback_handoff_artifact=(
+            state.fallback_handoff_artifact_name(prepared.authorization_id) if fallback_path.exists() else ""
+        ),
     )
     return 0
+
+
+def _uploaded(configuration: control.Configuration, github: Any, artifact_id: int) -> authorize.UploadedArtifact:
+    item = control.definitive(github.get(f"/repos/{configuration.repository}/actions/artifacts/{artifact_id}"))
+    if not isinstance(item, Mapping):
+        raise LifecycleRefused("TRANSPORT_INTEGRITY_FAILED", "the uploaded handoff artifact is not readable back")
+    return authorize.UploadedArtifact(
+        run_id=int((item.get("workflow_run") or {}).get("id", 0)),
+        artifact_id=int(item["id"]),
+        name=str(item.get("name")),
+        artifact_digest=str(item.get("digest") or ""),
+        expired=bool(item.get("expired")),
+    )
 
 
 def cmd_authorize_commit(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
@@ -1183,21 +1218,12 @@ def cmd_authorize_commit(configuration: control.Configuration, arguments: argpar
     prepared = authorize.Prepared.from_json((out / "prepared.json").read_bytes())
     github = _github(configuration)
     _require_anchors(configuration, github, prepared.issue_number)
-    item = control.definitive(
-        github.get(f"/repos/{configuration.repository}/actions/artifacts/{arguments.artifact_id}")
-    )
-    if not isinstance(item, Mapping):
-        raise LifecycleRefused("TRANSPORT_INTEGRITY_FAILED", "the uploaded handoff artifact is not readable back")
-    uploaded = authorize.UploadedArtifact(
-        run_id=int((item.get("workflow_run") or {}).get("id", 0)),
-        artifact_id=int(item["id"]),
-        name=str(item.get("name")),
-        artifact_digest=str(item.get("digest") or ""),
-        expired=bool(item.get("expired")),
-    )
+    uploaded = _uploaded(configuration, github, arguments.artifact_id)
+    fallback_id = getattr(arguments, "fallback_artifact_id", None)
     head = authorize.commit(
         prepared,
         uploaded=uploaded,
+        fallback_uploaded=None if fallback_id is None else _uploaded(configuration, github, fallback_id),
         dependencies=_authorize_dependencies(configuration, github),
         context=_authorize_context(),
         state_store=_store(configuration, authenticated=True),
@@ -1235,6 +1261,10 @@ def cmd_bound(configuration: control.Configuration, arguments: argparse.Namespac
         "handoff_run_id": view.binding("handoff_artifact")["run_id"],
         "control_sha": view.binding("control_sha"),
     }
+    fallback = view.evidence[state.AUTHORIZED].get("fallback")
+    if fallback is not None:
+        values["fallback_handoff_artifact_id"] = fallback["handoff_artifact"]["artifact_id"]
+        values["fallback_handoff_run_id"] = fallback["handoff_artifact"]["run_id"]
     if state.RESULT_BOUND in view.evidence:
         artifact = view.evidence[state.RESULT_BOUND]["result_artifact"]
         values.update(result_artifact_id=artifact["artifact_id"], result_run_id=artifact["run_id"])
@@ -1313,6 +1343,12 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
     run_id, attempt, _ = _run_context()
     os.environ["HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"] = configuration.prompt_verifying_key
     model_secrets = _executor_model_secrets(tuple(arguments.model_argv), arguments.model_key_name)
+    probe = None
+    if getattr(configuration, "fallback_handoff_recipient", None) is not None and model_secrets:
+        from hunter.automation.issue_agent_provider_probe import KILO_PROBE_URL, probe_provider
+
+        key = next(iter(model_secrets.values()))
+        probe = lambda: probe_provider(KILO_PROBE_URL, api_key=key)  # noqa: E731 - trusted step, no model input
     outcome = roles.run_executor(
         issue=arguments.issue,
         authorization_id=arguments.authorization_id,
@@ -1327,6 +1363,7 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
             handoff_key=_x25519(HANDOFF_KEY_ENV),
             result_recipient=configuration.result_recipient,
             prompt_verifier=PromptAutomationVerifier.from_environment(),
+            provider_probe=probe,
         ),
         isolation=(
             KiloContainerIsolation(Path(__file__).resolve().parent / "issue_agent")
@@ -1344,6 +1381,109 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
         advisory_code=outcome.advisory_code or "",
         sealed="true" if outcome.sealed_result else "false",
         result_artifact=state.result_artifact_name(arguments.authorization_id),
+        stderr_category=outcome.stderr_category or "",
+        probe_category=outcome.probe_category or "",
+    )
+    return 0
+
+
+FALLBACK_DECISION_LABELS: Final = {
+    "hunter-codex-fallback-approve": "approve",
+    "hunter-codex-fallback-reject": "reject",
+}
+
+
+def cmd_fallback_decision(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    """ADR 0041 F1: the owner's explicit approval or rejection of a pending fallback, from the label event itself."""
+
+    event = json.loads(Path(arguments.event).read_bytes())
+    issue = event.get("issue") or {}
+    label = (event.get("label") or {}).get("name")
+    sender = (event.get("sender") or {}).get("login")
+    if (
+        event.get("action") != "labeled"
+        or label not in FALLBACK_DECISION_LABELS
+        or sender != configuration.owner_login
+        or issue.get("pull_request") is not None
+        or issue.get("state") != "open"
+        or type(issue.get("number")) is not int
+    ):
+        raise LifecycleRefused("NOT_ELIGIBLE", "only the owner's label on an open Issue decides a fallback")
+    decision = control.owner_decision(
+        github=_github(configuration),
+        configuration=configuration,
+        store=_store(configuration, authenticated=True),
+        signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+        writer=_writer("owner-decision", "fallback-decision"),
+        issue=int(issue["number"]),
+        decision=FALLBACK_DECISION_LABELS[str(label)],
+        clock=_now,
+    )
+    print(f"issue {issue['number']}: fallback {decision.action} {decision.code or decision.reason}".rstrip())
+    return 0
+
+
+def cmd_execute_fallback(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    """ADR 0041: the single admitted Codex fallback, on the attested Mac, through the unchanged executor role."""
+
+    import secrets as _secrets
+
+    from hunter.automation.issue_agent_mac_fallback import WORK_ROOT, MacCodexIsolation
+    from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
+
+    run_id, attempt, _ = _run_context()
+    if getattr(configuration, "fallback_handoff_recipient", None) is None:
+        raise LifecycleRefused("MISSING_CONFIGURATION", "no fallback recipient is provisioned")
+    view = _view(configuration, arguments.issue, arguments.authorization_id)
+    if view.state != state.FALLBACK_AUTHORIZED:
+        raise roles.RoleRefused("EXECUTION_NOT_STARTED", "no signed FALLBACK_AUTHORIZED record on the ledger")
+    os.environ["HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"] = configuration.prompt_verifying_key
+    # ADR 0041 F1: anything refused before Codex is launched (no attestation, no owner sign-in, an expired device
+    # code) ran no model. It is reported as such, so the request returns to pending for the owner's next approval.
+    try:
+        isolation = MacCodexIsolation(Path(arguments.checkout))
+        workroot = WORK_ROOT / _secrets.token_hex(16)
+        workroot.mkdir(mode=0o700)
+        # Attest before the fallback key is even read: pinned bytes, principals, live denials.
+        attestation = isolation.attest(workroot)
+        outcome = roles.run_executor(
+            issue=arguments.issue,
+            authorization_id=arguments.authorization_id,
+            context=roles.RoleContext(run_id, attempt),
+            ledger=_ledger_access(configuration),
+            handoff_envelope=Path(arguments.handoff).read_bytes(),
+            config=roles.ExecutorConfig(
+                remote=_remote(configuration),
+                model_argv=("codex", "exec", "--model", arguments.model),
+                model_public_env=roles.MODEL_PUBLIC_ENVIRONMENT,
+                model_secret_env={},
+                handoff_key=_x25519(FALLBACK_HANDOFF_KEY_ENV),
+                result_recipient=configuration.result_recipient,
+                prompt_verifier=PromptAutomationVerifier.from_environment(),
+            ),
+            isolation=isolation,
+            workroot=workroot,
+        )
+    except roles.RoleRefused as refusal:
+        if refusal.code != "EXECUTION_NOT_STARTED":
+            raise
+        print("fallback executor advisory: FALLBACK_SESSION_NOT_STARTED", flush=True)
+        _output(
+            advisory_code="FALLBACK_SESSION_NOT_STARTED",
+            sealed="false",
+            result_artifact=state.fallback_result_artifact_name(arguments.authorization_id),
+            attestation_sha256="",
+        )
+        return 0
+    if outcome.sealed_result is not None:
+        Path(arguments.out).write_bytes(outcome.sealed_result)
+    elif outcome.advisory_code:
+        print(f"fallback executor advisory: {outcome.advisory_code}")
+    _output(
+        advisory_code=outcome.advisory_code or "",
+        sealed="true" if outcome.sealed_result else "false",
+        result_artifact=state.fallback_result_artifact_name(arguments.authorization_id),
+        attestation_sha256=attestation,
     )
     return 0
 
@@ -1382,11 +1522,10 @@ def cmd_validate(configuration: control.Configuration, arguments: argparse.Names
     except roles.RoleRefused as error:
         if error.code not in state.VALIDATION_REFUSAL_CODES:
             raise
-        bound = view.evidence[state.AUTHORIZED]
         receipt = {
             "schema_version": roles.RECEIPT_SCHEMA_VERSION,
             "authorization_id": arguments.authorization_id,
-            "execution_id": bound["execution_id"],
+            "execution_id": view.execution_id,
             "ciphertext_sha256": view.evidence[state.RESULT_BOUND]["result_artifact"]["ciphertext_sha256"],
             "verdict": "REFUSED",
             "code": error.code,
@@ -1589,12 +1728,18 @@ def _parser() -> argparse.ArgumentParser:
     commit = add("authorize-commit", cmd_authorize_commit)
     commit.add_argument("--out-dir", required=True)
     commit.add_argument("--artifact-id", type=int, required=True)
+    commit.add_argument("--fallback-artifact-id", type=int)
     step = add("step", cmd_step)
     step.add_argument(
         "--role", choices=["bind", "record-validation", "finalize", "reconcile", "candidate-pr-record"], required=True
     )
     step.add_argument("--issue", type=int)
     step.add_argument("--advisory", default="")
+    # ADR 0041 F2: the primary executor job's closed fallback signals, and the fallback job's attestation digest.
+    step.add_argument("--stderr-category", default="")
+    step.add_argument("--probe-category", default="")
+    step.add_argument("--attestation-sha256", default="")
+    step.add_argument("--job", choices=["bind-fallback"])
     resume = add("resume-bind", cmd_resume_bind)
     for child in (resume,):
         child.add_argument("--issue", type=int, required=True)
@@ -1603,15 +1748,21 @@ def _parser() -> argparse.ArgumentParser:
     resume.add_argument("--nonce", required=True)
     bound = add("bound", cmd_bound)
     execute = add("execute", cmd_execute)
+    execute_fallback = add("execute-fallback", cmd_execute_fallback)
+    fallback_decision = add("fallback-decision", cmd_fallback_decision)
+    fallback_decision.add_argument("--event", required=True)
     validate = add("validate", cmd_validate)
     publish = add("publish", cmd_publish)
-    for child in (bound, execute, validate, publish):
+    for child in (bound, execute, execute_fallback, validate, publish):
         child.add_argument("--issue", type=int, required=True)
         child.add_argument("--authorization-id", required=True)
     execute.add_argument("--handoff", required=True)
     execute.add_argument("--out", required=True)
     execute.add_argument("--workroot", required=True)
     execute.add_argument("--model-key-name", required=True)
+    execute_fallback.add_argument("--handoff", required=True)
+    execute_fallback.add_argument("--out", required=True)
+    execute_fallback.add_argument("--model", required=True)
     # `--model-argv <command> [args...]` is not an argparse option: it is the tail boundary handled by
     # `parse_arguments`, so the model command's own options never reach the lifecycle parser.
     execute.epilog = "The model command follows --model-argv and must be the last words: --model-argv COMMAND [ARGS...]"

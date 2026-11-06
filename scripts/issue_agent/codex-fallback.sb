@@ -1,0 +1,40 @@
+(version 1)
+; ADR 0041 F5: the sole enforced boundary for the macOS Codex fallback. Installed root-owned at
+; /Library/Hunter/codex-fallback.sb and attested byte-for-byte against this file before every use.
+; Parameters (validated by the launcher): WORKSPACE, HOME (one per-run workroot), CODEX_DIR (pinned install).
+(deny default)
+(allow process-fork)
+(allow process-exec)
+(allow signal (target same-sandbox))
+(allow sysctl-read)
+; stat() only: path canonicalization needs ancestor metadata. Contents and directory listings stay denied.
+(allow file-read-metadata)
+(allow mach-lookup
+  (global-name "com.apple.trustd.agent")
+  (global-name "com.apple.SecurityServer")
+  (global-name "com.apple.system.opendirectoryd.libinfo")
+  (global-name "com.apple.system.notification_center")
+  (global-name "com.apple.logd"))
+(allow file-read*
+  (literal "/")
+  (subpath "/usr")
+  (subpath "/bin")
+  (subpath "/sbin")
+  (subpath "/System")
+  (subpath "/Library/Apple")
+  (subpath "/Library/Developer/CommandLineTools")
+  (subpath "/private/etc")
+  (subpath "/private/var/db/dyld")
+  (subpath "/private/var/db/timezone")
+  (literal "/dev/null")
+  (literal "/dev/urandom")
+  (literal "/dev/random")
+  (subpath (param "CODEX_DIR"))
+  (subpath (param "WORKSPACE"))
+  (subpath (param "HOME")))
+(allow file-write*
+  (literal "/dev/null")
+  (subpath (param "WORKSPACE"))
+  (subpath (param "HOME")))
+; Egress only to the trusted loopback CONNECT gateway (auth.openai.com and chatgpt.com only).
+(allow network-outbound (remote ip "localhost:18443"))

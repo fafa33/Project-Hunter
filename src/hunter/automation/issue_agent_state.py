@@ -41,6 +41,8 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
+from hunter.automation.issue_agent_fallback_policy import FallbackEvidence, permit_codex_fallback
+
 RECORD_SCHEMA_VERSION: Final = "hunter-issue-agent-execution-record-v1"
 INDEX_SCHEMA_VERSION: Final = "hunter-issue-agent-index-v1"
 STATE_SIGNATURE_DOMAIN: Final = "hunter-issue-agent-state-v1"
@@ -54,11 +56,14 @@ VALIDATED: Final = "VALIDATED"
 PUBLISHED: Final = "PUBLISHED"
 COMPLETED: Final = "COMPLETED"
 FAILED: Final = "FAILED"
-STATES: Final = (AUTHORIZED, RESULT_BOUND, VALIDATED, PUBLISHED, COMPLETED, FAILED)
+#: ADR 0041 F4: the single governed Codex fallback admitted after a probe-verified recoverable Kilo failure.
+FALLBACK_AUTHORIZED: Final = "FALLBACK_AUTHORIZED"
+STATES: Final = (AUTHORIZED, FALLBACK_AUTHORIZED, RESULT_BOUND, VALIDATED, PUBLISHED, COMPLETED, FAILED)
 TERMINAL_STATES: Final = frozenset({COMPLETED, FAILED})
 LEGAL_TRANSITIONS: Final[Mapping[str | None, frozenset[str]]] = {
     None: frozenset({AUTHORIZED}),
-    AUTHORIZED: frozenset({RESULT_BOUND, FAILED}),
+    AUTHORIZED: frozenset({RESULT_BOUND, FALLBACK_AUTHORIZED, FAILED}),
+    FALLBACK_AUTHORIZED: frozenset({RESULT_BOUND, FAILED}),
     RESULT_BOUND: frozenset({VALIDATED, FAILED}),
     VALIDATED: frozenset({PUBLISHED, FAILED}),
     PUBLISHED: frozenset({COMPLETED, FAILED}),
@@ -66,15 +71,26 @@ LEGAL_TRANSITIONS: Final[Mapping[str | None, frozenset[str]]] = {
 #: Which control role may write which target state (state machine spec section 3).
 WRITER_ROLES: Final[Mapping[str, frozenset[str]]] = {
     AUTHORIZED: frozenset({"authorize"}),
+    FALLBACK_AUTHORIZED: frozenset({"bind"}),
     RESULT_BOUND: frozenset({"bind", "reconcile"}),
     VALIDATED: frozenset({"record-validation", "reconcile"}),
     PUBLISHED: frozenset({"finalize", "reconcile"}),
     COMPLETED: frozenset({"candidate-pr-record", "reconcile"}),
-    FAILED: frozenset({"authorize", "bind", "record-validation", "finalize", "reconcile", "candidate-pr-record"}),
+    FAILED: frozenset(
+        {"authorize", "bind", "record-validation", "finalize", "reconcile", "candidate-pr-record", "owner-decision"}
+    ),
 }
-RESUME_ROLES: Final = frozenset({"bind", "record-validation", "finalize", "reconcile"})
+#: ``owner-decision`` (ADR 0041 F1): only the owner's explicit approval requests a fallback run, and only the owner's
+#: explicit rejection withdraws a pending fallback.
+RESUME_ROLES: Final = frozenset({"bind", "record-validation", "finalize", "reconcile", "owner-decision"})
 #: Model-free stages that may resume, with their attempt caps. The model never resumes.
-RESUME_STAGES: Final[Mapping[str, tuple[str, int]]] = {"validation": (RESULT_BOUND, 2), "publication": (VALIDATED, 3)}
+RESUME_STAGES: Final[Mapping[str, tuple[str, int | None]]] = {
+    "validation": (RESULT_BOUND, 2),
+    "publication": (VALIDATED, 3),
+    # ADR 0041 F1: the admitted fallback starts only in an owner-approved resume run. It has no cap and no deadline:
+    # every attempt is the owner's explicit approval, and an attempt whose sign-in never completed ran no model.
+    "fallback": (FALLBACK_AUTHORIZED, None),
+}
 #: An unbound resume whose dispatch produced no run within this grace is re-dispatched with the same nonce.
 RESUME_DISPATCH_GRACE_SECONDS: Final = 600
 
@@ -113,9 +129,29 @@ ADVISORY_CODES: Final = frozenset(
         "MISSING_CONFIGURATION",
         "SECRET_IN_RESULT",
         "EXECUTOR_RESULT_REJECTED",
+        # ADR 0041 F1/F6: the fallback run ended before Codex was launched (no owner sign-in, or no attestation).
+        "FALLBACK_SESSION_NOT_STARTED",
     }
 )
 EXECUTOR_CONCLUSIONS: Final = frozenset({"success", "failure", "cancelled", "timed_out", "skipped"})
+#: Closed vocabularies the primary executor job reports for a fallback decision (ADR 0041 F2). Untrusted job outputs:
+#: they can only *withhold* a fallback, because admission also requires the policy's agreement and every ledger fact.
+FALLBACK_CAUSES: Final = frozenset({"RATE_LIMIT", "QUOTA_EXCEEDED", "NETWORK"})
+FALLBACK_SIGNAL_CATEGORIES: Final = frozenset(
+    FALLBACK_CAUSES
+    | {
+        "MODEL_NOT_FOUND",
+        "AUTHENTICATION",
+        "PERMISSION",
+        "PROVIDER_UNAVAILABLE",
+        "PROVIDER_OVERLOADED",
+        "PROVIDER_CALL_FAILED",
+        "PROVIDER_ERROR",
+        "NOT_FOUND",
+        "UNCLASSIFIED",
+    }
+)
+FALLBACK_EXECUTORS: Final = frozenset({"codex"})
 #: Terminal refusals the trusted validator step may report (SM T3 outcomes).
 VALIDATION_REFUSAL_CODES: Final = frozenset(
     {"TRANSPORT_INTEGRITY_FAILED", "EXECUTOR_RESULT_REJECTED", "SECRET_IN_RESULT", "PRE_PUSH_SAFETY_FAILED"}
@@ -178,20 +214,32 @@ def public_key_id(public_key: Ed25519PublicKey) -> str:
     return sha256_hex(public_key.public_bytes(Encoding.Raw, PublicFormat.Raw))
 
 
-def execution_identity(*, authorization_id: str, authorize_run_id: int, control_sha: str, handoff_sha256: str) -> str:
-    """``execution_id`` (state machine spec section 2): run attempt is always 1 for a fresh lifecycle."""
+def execution_identity(
+    *,
+    authorization_id: str,
+    authorize_run_id: int,
+    control_sha: str,
+    handoff_sha256: str,
+    execution_attempt: int = 1,
+) -> str:
+    """``execution_id`` (state machine spec section 2): run attempt is always 1 for a fresh lifecycle.
 
-    return sha256_hex(
-        canonical_json(
-            {
-                "authorization_id": authorization_id,
-                "authorize_run_id": authorize_run_id,
-                "run_attempt": 1,
-                "control_sha": control_sha,
-                "handoff_sha256": handoff_sha256,
-            }
-        )
-    )
+    ``execution_attempt`` is the ledger's model-execution attempt (ADR 0041 F4), not GitHub's ``run_attempt``. The
+    attempt-1 derivation is byte-identical to the original one, so every existing ``execution_id`` stays valid.
+    """
+
+    if execution_attempt not in (1, 2):
+        raise LedgerSchemaError("an authorization has at most one primary and one fallback execution")
+    material: dict[str, object] = {
+        "authorization_id": authorization_id,
+        "authorize_run_id": authorize_run_id,
+        "run_attempt": 1,
+        "control_sha": control_sha,
+        "handoff_sha256": handoff_sha256,
+    }
+    if execution_attempt == 2:
+        material["execution_attempt"] = 2
+    return sha256_hex(canonical_json(material))
 
 
 def publication_identity(
@@ -354,6 +402,16 @@ def handoff_artifact_name(authorization_id: str) -> str:
     return f"hunter-ia-handoff-{authorization_digest(authorization_id)}"
 
 
+def fallback_result_artifact_name(authorization_id: str) -> str:
+    """ADR 0041 F4: attempt 2 has its own result name, so neither attempt's artifact can stand in for the other."""
+
+    return f"hunter-ia-result-fb-{authorization_digest(authorization_id)}"
+
+
+def fallback_handoff_artifact_name(authorization_id: str) -> str:
+    return f"hunter-ia-handoff-fb-{authorization_digest(authorization_id)}"
+
+
 TIMESTAMP = _pattern(_TIMESTAMP)
 POSITIVE = _int(1)
 
@@ -403,6 +461,7 @@ _RECORDED_BY = _object(
                 "candidate-pr-record",
                 "source-handling-bootstrap",
                 "knowledge-ingest",
+                "owner-decision",  # ADR 0041 F1: the owner's explicit fallback approval or rejection
             }
         ),
         "run_id": POSITIVE,
@@ -470,6 +529,9 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
             "handoff_artifact": _ARTIFACT,
         },
         optional={
+            # ADR 0041 F3: present only when a fallback recipient is provisioned. The second seal of the identical
+            # handoff plaintext, bound to the attempt-2 execution identity and the distinct fallback key.
+            "fallback": _object({"execution_id": SHA64, "handoff_artifact": _ARTIFACT}),
             # ADR 0039 L4: present only on a finding-driven remediation of the parent's open PR.
             "remediation": _object(
                 {
@@ -479,8 +541,20 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
                     "finding_ids": _list(SHA64, maximum=16),
                     "attempt": POSITIVE,
                 }
-            )
+            ),
         },
+    ),
+    FALLBACK_AUTHORIZED: _object(
+        {
+            "primary_executor_job_id": POSITIVE,
+            "primary_executor_conclusion": _enum(EXECUTOR_CONCLUSIONS),
+            "primary_cause": _enum(FALLBACK_CAUSES),
+            "stderr_category": _enum(FALLBACK_CAUSES),
+            "probe_category": _enum(FALLBACK_CAUSES),
+            "primary_result_artifacts": _exact(0),
+            "fallback_executor": _enum(FALLBACK_EXECUTORS),
+            "fallback_execution_id": SHA64,
+        }
     ),
     RESULT_BOUND: _object(
         {
@@ -489,7 +563,19 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
             "executor_job_id": POSITIVE,
             "executor_conclusion": _enum(EXECUTOR_CONCLUSIONS),
             "executor_advisory_code": _optional(_enum(ADVISORY_CODES)),
-        }
+        },
+        optional={
+            # ADR 0041 F4: present exactly when the bound result came from the admitted fallback execution.
+            "fallback": _object(
+                {
+                    "execution_attempt": _exact(2),
+                    "executor": _enum(FALLBACK_EXECUTORS),
+                    "attestation_sha256": SHA64,
+                    # The publish deadline restarts at the fallback's bind: an owner may approve days later.
+                    "deadline_published_at": TIMESTAMP,
+                }
+            )
+        },
     ),
     VALIDATED: _object(
         {
@@ -541,7 +627,7 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
     FAILED: _object(
         {
             "code": _enum(FAILURE_CODES),
-            "failed_from_state": _enum({AUTHORIZED, RESULT_BOUND, VALIDATED, PUBLISHED}),
+            "failed_from_state": _enum({AUTHORIZED, FALLBACK_AUTHORIZED, RESULT_BOUND, VALIDATED, PUBLISHED}),
         }
     ),
 }
@@ -765,6 +851,26 @@ class AuthorizationView:
     def binding(self, field: str) -> Any:
         return self.evidence[AUTHORIZED][field]
 
+    @property
+    def execution_id(self) -> str:
+        """The identity of the execution whose result this authorization carries (ADR 0041 F4).
+
+        Once ``FALLBACK_AUTHORIZED`` is on the ledger the primary attempt can never be bound again, so every later
+        reader (bind, validator, publisher, publication identity) binds the attempt-2 identity instead.
+        """
+
+        admitted = self.evidence.get(FALLBACK_AUTHORIZED)
+        if admitted is not None:
+            return str(admitted["fallback_execution_id"])
+        return str(self.evidence[AUTHORIZED]["execution_id"])
+
+    @property
+    def publish_deadline(self) -> str:
+        """The bound result's publish deadline: the fallback's own when the result came from the fallback."""
+
+        fallback = self.evidence.get(RESULT_BOUND, {}).get("fallback")
+        return str(fallback["deadline_published_at"] if fallback else self.binding("deadline_published_at"))
+
 
 @dataclass(slots=True)
 class LedgerView:
@@ -828,10 +934,35 @@ def _check_authorized_bindings(record: Mapping[str, Any], view: LedgerView | Non
     )
     if evidence["execution_id"] != expected:
         raise LedgerCorruptError("execution identity does not derive from the bound run and handoff")
+    fallback = evidence.get("fallback")
+    if fallback is not None:
+        if fallback["execution_id"] != execution_identity(
+            authorization_id=authorization_id,
+            authorize_run_id=evidence["authorize_run_id"],
+            control_sha=evidence["control_sha"],
+            handoff_sha256=evidence["lineage"]["handoff_sha256"],
+            execution_attempt=2,
+        ):
+            raise LedgerCorruptError("fallback execution identity does not derive from the bound run and handoff")
+        primary, second = evidence["handoff_artifact"], fallback["handoff_artifact"]
+        if second["recipient_key_id"] == primary["recipient_key_id"]:
+            raise LedgerCorruptError("the fallback handoff is not sealed to a distinct recipient")
+        if second["run_id"] != primary["run_id"] or second["artifact_id"] == primary["artifact_id"]:
+            raise LedgerCorruptError("the fallback handoff is not a distinct artifact of the authorize run")
 
 
 def _check_cross_bindings(view: AuthorizationView, record: Mapping[str, Any]) -> None:
     state, evidence = record["state"], record["evidence"]
+    if state == FALLBACK_AUTHORIZED:
+        offered = view.evidence[AUTHORIZED].get("fallback")
+        if offered is None:
+            raise LedgerCorruptError("a fallback was admitted for an authorization that bound none")
+        if evidence["fallback_execution_id"] != offered["execution_id"]:
+            raise LedgerCorruptError("admitted fallback identity is not the bound fallback identity")
+        if not evidence["primary_cause"] == evidence["stderr_category"] == evidence["probe_category"]:
+            raise LedgerCorruptError("a fallback cause is not agreed by the untrusted hint and the trusted probe")
+    if state == RESULT_BOUND and (view.state == FALLBACK_AUTHORIZED) != ("fallback" in evidence):
+        raise LedgerCorruptError("a bound result does not match the execution attempt it left")
     if state == PUBLISHED:
         bound, validated = view.evidence[AUTHORIZED], view.evidence[VALIDATED]
         expected = publication_identity(
@@ -840,7 +971,7 @@ def _check_cross_bindings(view: AuthorizationView, record: Mapping[str, Any]) ->
             authorization_id=view.authorization_id,
             base_sha=bound["base_sha"],
             task_scope_sha256=bound["task_scope_sha256"],
-            execution_id=bound["execution_id"],
+            execution_id=view.execution_id,
             result_sha256=validated["result_sha256"],
             tree_sha=validated["tree_sha"],
             unsigned_commit_sha=validated["unsigned_commit_sha"],
@@ -923,7 +1054,7 @@ def apply_record(
             attempts = (current.resume_attempts or {}).get(stage, 0) + 1
             if current.state != stage_state or current.pending_resume is not None:
                 raise LedgerCorruptError("resume requested outside its stage or while one is pending")
-            if evidence["attempt"] != attempts or attempts > cap - 1:
+            if evidence["attempt"] != attempts or (cap is not None and attempts > cap - 1):
                 raise LedgerCorruptError("resume attempt is not the next attempt within the cap")
             current.resume_attempts = {**(current.resume_attempts or {}), stage: attempts}
             current.pending_resume = {
@@ -1179,6 +1310,10 @@ class Facts:
     executor_conclusion: str | None | _Unknown = UNKNOWN
     #: The executor job's own advisory output. Untrusted: it only selects among terminal failure codes.
     executor_advisory_code: str | None = None
+    #: ADR 0041 F2: the primary executor's stderr hint and its trusted model-free provider probe, as job outputs.
+    #: Only the agreement of both, inside the closed cause set, together with every ledger fact, admits a fallback.
+    executor_stderr_category: str | None = None
+    executor_probe_category: str | None = None
     result_artifacts: tuple[ArtifactFact, ...] | _Unknown = UNKNOWN
     receipt: Mapping[str, Any] | None | _Unknown = UNKNOWN
     remote_branch_head: str | None | _Unknown = UNKNOWN
@@ -1227,9 +1362,12 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
         return Decision("noop", reason="owning run still active")
     state = view.state
     branch = view.binding("execution_branch")
-    if state in {AUTHORIZED, RESULT_BOUND} and facts.remote_branch_head not in (None, UNKNOWN):
+    if state in {AUTHORIZED, FALLBACK_AUTHORIZED, RESULT_BOUND} and facts.remote_branch_head not in (None, UNKNOWN):
         return Decision("freeze", code="STATE_ROLLBACK_SUSPECTED", reason=f"{branch} exists before VALIDATED")
-    if state in {AUTHORIZED, RESULT_BOUND, VALIDATED} and facts.open_draft_pr not in (None, UNKNOWN):
+    if state in {AUTHORIZED, FALLBACK_AUTHORIZED, RESULT_BOUND, VALIDATED} and facts.open_draft_pr not in (
+        None,
+        UNKNOWN,
+    ):
         return Decision("freeze", code="STATE_ROLLBACK_SUSPECTED", reason="a Draft PR exists before PUBLISHED")
 
     if state == AUTHORIZED:
@@ -1246,8 +1384,16 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
             )
         if facts.executor_conclusion in (None, "skipped"):
             return Decision("fail", code="EXECUTION_NOT_STARTED")
-        advisory = {"SECRET_IN_RESULT": "SECRET_IN_RESULT", "MODEL_TIMEOUT": "EXECUTOR_RESULT_TIMEOUT"}
-        return Decision("fail", code=advisory.get(str(facts.executor_advisory_code), "EXECUTION_NOT_COMPLETED"))
+        if _fallback_admissible(view, facts, primary_result_artifacts=len(artifacts)):
+            return Decision(
+                "transition",
+                target_state=FALLBACK_AUTHORIZED,
+                evidence_hint={"cause": facts.executor_probe_category},
+            )
+        return _executor_failure(facts)
+
+    if state == FALLBACK_AUTHORIZED:
+        return _fallback_decision(view, facts)
 
     if state == RESULT_BOUND:
         if facts.receipt is UNKNOWN:
@@ -1269,7 +1415,7 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
             return Decision("fail", code="REMOTE_BRANCH_CONFLICT")
         if facts.publication_refusal_code is not None:
             return Decision("fail", code=_terminal_refusal(facts.publication_refusal_code, PUBLICATION_REFUSAL_CODES))
-        if _deadline_passed(view.binding("deadline_published_at"), facts.now):
+        if _deadline_passed(view.publish_deadline, facts.now):
             return Decision("fail", code="LIFECYCLE_DEADLINE_EXCEEDED")
         return _resume_or_fail(view, "publication", facts, "PUBLICATION_UNAVAILABLE")
 
@@ -1283,6 +1429,76 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
     if _deadline_passed(view.evidence[PUBLISHED]["deadline_completed_at"], facts.now):
         return Decision("fail", code="CANDIDATE_PREFLIGHT_TIMEOUT")
     return Decision("noop", reason="awaiting exact-head Pre-PR Preflight and Draft PR")
+
+
+def _fallback_decision(view: AuthorizationView, facts: Facts) -> Decision:
+    """ADR 0041 F1: pending until the owner decides; one owner-approved run at a time; no deadline.
+
+    A run whose sign-in never completed launched no model, so it returns the request to pending and the next owner
+    approval renews the device code. Once Codex has been launched, its outcome is final: the fallback never repeats.
+    """
+
+    pending = view.pending_resume
+    if pending is None:
+        return Decision("noop", reason="fallback awaits the owner's explicit approval or rejection")
+    status = facts.resume_run_status
+    if status is UNKNOWN or status == "active":
+        return Decision("noop", reason="owner-approved fallback run unknown or still active")
+    if pending["bound_run_id"] is None:
+        if status == "concluded":
+            return Decision("abandon_resume", stage="fallback", reason="run_concluded_without_output")
+        elapsed = (_instant(facts.now) - _instant(pending["dispatched_at"])).total_seconds()
+        if elapsed < RESUME_DISPATCH_GRACE_SECONDS:
+            return Decision("noop", reason="fallback dispatch within its grace period")
+        return Decision("redispatch", stage="fallback", reason="dispatch produced no run; same nonce")
+    if facts.result_artifacts is UNKNOWN or facts.executor_conclusion is UNKNOWN:
+        return Decision("noop", reason="fallback executor facts unknown")
+    primary = [a for a in facts.result_artifacts if a.name == result_artifact_name(view.authorization_id)]
+    second = [a for a in facts.result_artifacts if a.name == fallback_result_artifact_name(view.authorization_id)]
+    if primary or len(second) > 1:
+        return Decision("fail", code="TRANSPORT_INTEGRITY_FAILED", reason="a result other than one fallback result")
+    if len(second) == 1:
+        if second[0].expired:
+            return Decision("fail", code="RESULT_TRANSPORT_EXPIRED")
+        return Decision("transition", target_state=RESULT_BOUND, evidence_hint={"artifact_id": second[0].artifact_id})
+    if facts.executor_advisory_code == "FALLBACK_SESSION_NOT_STARTED" or facts.executor_conclusion in (None, "skipped"):
+        return Decision("abandon_resume", stage="fallback", reason="run_concluded_without_output")
+    return _executor_failure(facts)
+
+
+def _executor_failure(facts: Facts) -> Decision:
+    advisory = {"SECRET_IN_RESULT": "SECRET_IN_RESULT", "MODEL_TIMEOUT": "EXECUTOR_RESULT_TIMEOUT"}
+    return Decision("fail", code=advisory.get(str(facts.executor_advisory_code), "EXECUTION_NOT_COMPLETED"))
+
+
+def _fallback_admissible(view: AuthorizationView, facts: Facts, *, primary_result_artifacts: int) -> bool:
+    """ADR 0041 F1/F2: one fallback, only when it was bound at authorization and the policy admits the cause.
+
+    The order is fixed here, in trusted code: Kilo is the primary and Codex the only fallback. A probe category is
+    only ever reported after a launched, isolated primary run, so its presence is what proves the primary started.
+    """
+
+    if view.evidence[AUTHORIZED].get("fallback") is None or FALLBACK_AUTHORIZED in view.evidence:
+        return False
+    if _deadline_passed(view.binding("deadline_published_at"), facts.now):
+        return False
+    stderr, probe = facts.executor_stderr_category, facts.executor_probe_category
+    if stderr not in FALLBACK_SIGNAL_CATEGORIES or probe not in FALLBACK_SIGNAL_CATEGORIES:
+        return False
+    return permit_codex_fallback(
+        FallbackEvidence(
+            primary="kilo",
+            secondary="codex",
+            stderr_category=str(stderr),
+            probe_category=str(probe),
+            primary_result_artifacts=primary_result_artifacts,
+            authorization_valid=view.state == AUTHORIZED and not view.terminal,
+            proof_published=False,
+            isolation_verified=probe is not None,
+            workspace_exclusive=True,
+            attempts_started=1,
+        )
+    )
 
 
 def _terminal_refusal(code: object, allowed: frozenset[str]) -> str:

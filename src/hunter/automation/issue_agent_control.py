@@ -72,7 +72,10 @@ WRITERS: Final[Mapping[str, WriterWorkflow]] = {
         frozenset({"issues", "workflow_dispatch"}),
         {
             "authorize": frozenset({"authorize"}),
-            "bind": frozenset({"bind", "resume-bind"}),
+            # ADR 0041 F4: ``bind-fallback`` binds the admitted fallback's result in the same run.
+            "bind": frozenset({"bind", "resume-bind", "bind-fallback"}),
+            # ADR 0041 F1: the owner's explicit approve/reject label run.
+            "owner-decision": frozenset({"fallback-decision"}),
             "record-validation": frozenset({"record-validation"}),
             "finalize": frozenset({"finalize"}),
         },
@@ -97,11 +100,15 @@ WRITERS: Final[Mapping[str, WriterWorkflow]] = {
 MAX_REMEDIATION_FINDINGS: Final = 16
 STAGE_JOBS: Final[Mapping[str, str]] = {
     state.AUTHORIZED: "execute",
+    state.FALLBACK_AUTHORIZED: "execute-fallback",
     state.RESULT_BOUND: "validate",
     state.VALIDATED: "publish",
 }
 OUTCOME_SCHEMA_VERSION: Final = "hunter-issue-agent-stage-outcome-v1"
 COMPLETION_DEADLINE: Final = timedelta(hours=24)
+#: ADR 0041 F1: a fallback result gets the same publish window the primary gets at authorization, from its own bind.
+FALLBACK_PUBLISH_DEADLINE: Final = timedelta(hours=6)
+FALLBACK_DECISIONS: Final = frozenset({"approve", "reject"})
 MAX_ARTIFACT_BYTES: Final = MAX_PLAINTEXT_BYTES * 2 + 64 * 1024
 _ACTIVE_RUN_STATUSES: Final = frozenset({"queued", "in_progress", "waiting", "pending", "requested"})
 _SHA40 = re.compile(r"[0-9a-f]{40}")
@@ -155,6 +162,8 @@ class Configuration:
     authorization_verifying_key: str
     prompt_verifying_key: str
     source_handling: SourceHandlingRoot
+    #: ADR 0041 F3: the distinct fallback recipient (``X_FB``). Absent → no fallback is ever bound or admitted.
+    fallback_handoff_recipient: X25519PublicKey | None = None
 
     @property
     def trust(self) -> state.TrustRoots:
@@ -205,8 +214,14 @@ def load_configuration(checkout: Path) -> Configuration:
         "prompt_verifying_key",
         "source_handling",
     }
-    if set(document) != expected:
+    if set(document) - {"fallback_handoff_recipient"} != expected:
         raise _missing("the trust roots document carries unknown or missing fields")
+    fallback_recipient = None
+    if "fallback_handoff_recipient" in document:
+        raw = _raw_key(document["fallback_handoff_recipient"], "fallback_handoff_recipient")
+        if raw == _raw_key(document["handoff_recipient"], "handoff"):
+            raise _missing("the fallback recipient must be distinct from the primary handoff recipient")
+        fallback_recipient = X25519PublicKey.from_public_bytes(raw)
     repository = _field(document, "repository", str)
     if _REPOSITORY.fullmatch(repository) is None:
         raise _missing("trust roots repository is malformed")
@@ -249,6 +264,7 @@ def load_configuration(checkout: Path) -> Configuration:
         authorization_verifying_key=document["authorization_verifying_key"],
         prompt_verifying_key=document["prompt_verifying_key"],
         source_handling=SourceHandlingRoot(**operator),
+        fallback_handoff_recipient=fallback_recipient,
     )
 
 
@@ -625,6 +641,12 @@ def _owning_run(view: state.AuthorizationView) -> int:
     pending = view.pending_resume
     if pending is not None and pending["bound_run_id"] is not None:
         return int(pending["bound_run_id"])
+    # A transition consumes pending_resume. The signed, append-only resume binding
+    # remains authoritative for downstream validation and publication; never fall
+    # back to the primary authorization run after a fallback result was bound.
+    for record in reversed(view.records):
+        if record["kind"] == "resume_bound":
+            return int(record["evidence"]["run_id"])
     return int(view.binding("authorize_run_id"))
 
 
@@ -692,7 +714,7 @@ def _receipt_matches(view: state.AuthorizationView, receipt: Mapping[str, Any]) 
     common = (
         receipt.get("schema_version") == RECEIPT_SCHEMA_VERSION
         and receipt.get("authorization_id") == view.authorization_id
-        and receipt.get("execution_id") == bound["execution_id"]
+        and receipt.get("execution_id") == view.execution_id
         and receipt.get("ciphertext_sha256") == result["result_artifact"]["ciphertext_sha256"]
     )
     if not common:
@@ -1153,6 +1175,8 @@ def observe(
     *,
     now: str,
     executor_advisory_code: str | None = None,
+    executor_stderr_category: str | None = None,
+    executor_probe_category: str | None = None,
 ) -> Observation:
     """Definitive GitHub facts for one active authorization. Any indefinite read raises ``FactsUnavailable``."""
 
@@ -1176,7 +1200,7 @@ def observe(
             stage_active = not run_completed
         else:
             stage_active = job.get("status") != "completed"
-            if current == state.AUTHORIZED:
+            if current in (state.AUTHORIZED, state.FALLBACK_AUTHORIZED):
                 executor_job_id = int(job["id"])
                 executor_conclusion = str(job.get("conclusion"))
     fields: dict[str, Any] = {
@@ -1192,7 +1216,23 @@ def observe(
         fields["executor_conclusion"] = executor_conclusion
         if executor_advisory_code in state.ADVISORY_CODES:
             fields["executor_advisory_code"] = executor_advisory_code
+        # Untrusted job outputs, admitted only from their closed vocabulary (ADR 0041 F2).
+        if executor_stderr_category in state.FALLBACK_SIGNAL_CATEGORIES:
+            fields["executor_stderr_category"] = executor_stderr_category
+        if executor_probe_category in state.FALLBACK_SIGNAL_CATEGORIES:
+            fields["executor_probe_category"] = executor_probe_category
         observation["executor_job_id"] = executor_job_id
+    if current == state.FALLBACK_AUTHORIZED:
+        run_id = _owning_run(view)  # the owner-approved resume run, once one has claimed its nonce
+        fields["result_artifacts"] = _named_artifacts(
+            github, repository, run_id, state.result_artifact_name(view.authorization_id)
+        ) + _named_artifacts(github, repository, run_id, state.fallback_result_artifact_name(view.authorization_id))
+        fields["executor_conclusion"] = executor_conclusion
+        if executor_advisory_code in state.ADVISORY_CODES:
+            fields["executor_advisory_code"] = executor_advisory_code
+        observation["executor_job_id"] = executor_job_id
+        if view.pending_resume is not None:
+            fields["resume_run_status"] = _resume_run_status(github, configuration, view)
     if current in (state.RESULT_BOUND, state.VALIDATED):
         bound_id = view.evidence[state.RESULT_BOUND]["result_artifact"]["artifact_id"]
         item = definitive(github.get(f"/repos/{repository}/actions/artifacts/{bound_id}"))
@@ -1319,7 +1359,7 @@ def _bound_result(
             authorization_id=view.authorization_id,
             base_sha=bound["base_sha"],
             task_scope_sha256=bound["task_scope_sha256"],
-            execution_id=bound["execution_id"],
+            execution_id=view.execution_id,
             handoff_sha256=bound["lineage"]["handoff_sha256"],
             plaintext_sha256=declared.plaintext_sha256,
             recipient_key_id=recipient_key_id(configuration.result_recipient),
@@ -1330,7 +1370,7 @@ def _bound_result(
         return None, "TRANSPORT_INTEGRITY_FAILED"
     return {
         "result_artifact": {
-            "run_id": int(bound["authorize_run_id"]),
+            "run_id": _owning_run(view),
             "artifact_id": artifact.artifact_id,
             "artifact_digest": artifact.digest,
             "ciphertext_sha256": state.sha256_hex(ciphertext),
@@ -1349,23 +1389,50 @@ def _evidence(
     github: GitHub,
     configuration: Configuration,
     now: datetime,
+    fallback_attestation_sha256: str | None = None,
 ) -> tuple[str, dict[str, Any]] | None:
     """``(target_state, evidence)`` for a transition, or ``None`` when its evidence is not (yet) conforming."""
 
     facts, target = observation.facts, decision.target_state
     bound = view.evidence[state.AUTHORIZED]
+    if target == state.FALLBACK_AUTHORIZED:
+        assert decision.evidence_hint is not None
+        cause = decision.evidence_hint["cause"]
+        if observation.executor_job_id is None or facts.executor_conclusion not in state.EXECUTOR_CONCLUSIONS:
+            return None
+        return target, {
+            "primary_executor_job_id": observation.executor_job_id,
+            "primary_executor_conclusion": facts.executor_conclusion,
+            "primary_cause": cause,
+            "stderr_category": facts.executor_stderr_category,
+            "probe_category": facts.executor_probe_category,
+            "primary_result_artifacts": 0,
+            "fallback_executor": "codex",
+            "fallback_execution_id": bound["fallback"]["execution_id"],
+        }
     if target == state.RESULT_BOUND:
         assert decision.evidence_hint is not None and not isinstance(facts.result_artifacts, type(state.UNKNOWN))
         artifact = next(a for a in facts.result_artifacts if a.artifact_id == decision.evidence_hint["artifact_id"])
         evidence, failure = _bound_result(github, configuration, view, artifact)
         if failure is not None or evidence is None or observation.executor_job_id is None:
             return state.FAILED, {"code": failure or "TRANSPORT_INTEGRITY_FAILED", "failed_from_state": view.state}
-        return target, {
+        bound_evidence = {
             **evidence,
             "executor_job_id": observation.executor_job_id,
             "executor_conclusion": facts.executor_conclusion,
             "executor_advisory_code": facts.executor_advisory_code,
         }
+        if view.state == state.FALLBACK_AUTHORIZED:
+            # The attestation digest is evidence only (ADR 0041 F5); a fallback result without it never binds.
+            if fallback_attestation_sha256 is None or _SHA64.fullmatch(fallback_attestation_sha256) is None:
+                return state.FAILED, {"code": "EXECUTOR_RESULT_REJECTED", "failed_from_state": view.state}
+            bound_evidence["fallback"] = {
+                "execution_attempt": 2,
+                "executor": "codex",
+                "attestation_sha256": fallback_attestation_sha256,
+                "deadline_published_at": _timestamp(now + FALLBACK_PUBLISH_DEADLINE),
+            }
+        return target, bound_evidence
     if target == state.VALIDATED:
         receipt = facts.receipt
         assert isinstance(receipt, Mapping) and observation.receipt_run_id is not None
@@ -1394,7 +1461,7 @@ def _evidence(
                 authorization_id=view.authorization_id,
                 base_sha=bound["base_sha"],
                 task_scope_sha256=bound["task_scope_sha256"],
-                execution_id=bound["execution_id"],
+                execution_id=view.execution_id,
                 result_sha256=validated["result_sha256"],
                 tree_sha=validated["tree_sha"],
                 unsigned_commit_sha=validated["unsigned_commit_sha"],
@@ -1431,6 +1498,9 @@ def step(
     issue: int,
     clock: Callable[[], datetime],
     executor_advisory_code: str | None = None,
+    executor_stderr_category: str | None = None,
+    executor_probe_category: str | None = None,
+    fallback_attestation_sha256: str | None = None,
     new_nonce: Callable[[], str] = lambda: secrets.token_hex(32),
     chain: bool = True,
 ) -> state.Decision:
@@ -1447,7 +1517,15 @@ def step(
     view = ledger_view.authorizations[ledger_view.active]
     moment = clock()
     now = _timestamp(moment)
-    observation = observe(github, configuration, view, now=now, executor_advisory_code=executor_advisory_code)
+    observation = observe(
+        github,
+        configuration,
+        view,
+        now=now,
+        executor_advisory_code=executor_advisory_code,
+        executor_stderr_category=executor_stderr_category,
+        executor_probe_category=executor_probe_category,
+    )
     decision = state.advance(view, observation.facts)
     ledger = Ledger(store, configuration, provenance, signing_key, writer, issue)
     role = writer.role
@@ -1464,7 +1542,15 @@ def step(
         )
         return decision
     if decision.action == "transition":
-        built = _evidence(decision, view, observation, github=github, configuration=configuration, now=moment)
+        built = _evidence(
+            decision,
+            view,
+            observation,
+            github=github,
+            configuration=configuration,
+            now=moment,
+            fallback_attestation_sha256=fallback_attestation_sha256,
+        )
         if built is None:
             return state.Decision("noop", reason="transition evidence not conforming yet")
         target, evidence = built
@@ -1518,11 +1604,68 @@ def step(
                 issue=issue,
                 clock=clock,
                 executor_advisory_code=executor_advisory_code,
+                executor_stderr_category=executor_stderr_category,
+                executor_probe_category=executor_probe_category,
+                fallback_attestation_sha256=fallback_attestation_sha256,
                 new_nonce=new_nonce,
                 chain=False,
             )
         return decision
     return decision
+
+
+def owner_decision(
+    *,
+    github: GitHub,
+    configuration: Configuration,
+    store: state.GitLedgerStore,
+    signing_key: Ed25519PrivateKey,
+    writer: Writer,
+    issue: int,
+    decision: str,
+    clock: Callable[[], datetime],
+    new_nonce: Callable[[], str] = lambda: secrets.token_hex(32),
+) -> state.Decision:
+    """ADR 0041 F1: the owner's explicit approval requests one fallback run; the owner's rejection withdraws it.
+
+    The request has no deadline and holds no runner while it waits. Approval records a nonce-bound resume before
+    dispatching it, exactly like every other resume. Rejection is refused while an approved run is in flight, because
+    Codex may already be running there; that run's own outcome then decides.
+    """
+
+    if decision not in FALLBACK_DECISIONS or writer.role != "owner-decision":
+        raise ControlRefused("MISSING_CONFIGURATION", "unknown fallback decision or writer")
+    require_anchor(github, configuration, state.ledger_ref(issue))
+    provenance = run_provenance(github, configuration)
+    _, ledger_view = load_ledger(store, configuration, provenance, issue)
+    if ledger_view.active is None:
+        return state.Decision("noop", reason="no active authorization")
+    view = ledger_view.authorizations[ledger_view.active]
+    if view.state != state.FALLBACK_AUTHORIZED:
+        return state.Decision("noop", reason="no fallback awaits an owner decision")
+    ledger = Ledger(store, configuration, provenance, signing_key, writer, issue)
+    now = _timestamp(clock())
+    if view.pending_resume is not None:
+        return state.Decision("noop", reason="an owner-approved fallback run is already pending or in flight")
+    if decision == "reject":
+        ledger.append(
+            view.authorization_id,
+            kind="transition",
+            target=state.FAILED,
+            evidence={"code": "OWNER_WITHDREW", "failed_from_state": view.state},
+            now=now,
+        )
+        return state.Decision("fail", code="OWNER_WITHDREW")
+    nonce = new_nonce()
+    ledger.append(
+        view.authorization_id,
+        kind="resume_requested",
+        target=view.state,
+        evidence={"stage": "fallback", "nonce": nonce, "attempt": _attempt(view, "fallback"), "dispatched_at": now},
+        now=now,
+    )
+    _dispatch_resume(github, issue, view.authorization_id, "fallback", nonce)
+    return state.Decision("resume", stage="fallback")
 
 
 def _dispatch_resume(github: GitHub, issue: int, authorization_id: str, stage: str, nonce: str) -> None:
@@ -1604,6 +1747,7 @@ __all__ = [
     "ReviewThread",
     "ResolutionProof",
     "bind_resume",
+    "owner_decision",
     "dispatch_remediation",
     "eligible_remediation",
     "exact_head_proof",

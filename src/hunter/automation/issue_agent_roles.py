@@ -113,7 +113,7 @@ def result_binding(view: state.AuthorizationView, recipient: X25519PrivateKey) -
         authorization_id=view.authorization_id,
         base_sha=bound["base_sha"],
         task_scope_sha256=bound["task_scope_sha256"],
-        execution_id=bound["execution_id"],
+        execution_id=view.execution_id,
         handoff_sha256=bound["lineage"]["handoff_sha256"],
         plaintext_sha256=result["result_plaintext_sha256"],
         recipient_key_id=recipient_key_id(recipient.public_key()),
@@ -1007,12 +1007,17 @@ class ExecutorConfig:
     result_recipient: Any  # X25519PublicKey
     prompt_verifier: PromptAutomationVerifier
     model_timeout_seconds: float = MODEL_TIMEOUT_SECONDS
+    #: ADR 0041 F2: trusted, model-free provider probe run after a failed primary launch (``None``: no fallback).
+    provider_probe: Callable[[], str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class ExecutorOutcome:
     sealed_result: bytes | None
     advisory_code: str | None
+    #: ADR 0041 F2: reported only for a primary run that launched and exited non-zero. Closed categories only.
+    stderr_category: str | None = None
+    probe_category: str | None = None
 
 
 def require_governed_kilo_isolation(model_argv: Sequence[str], isolation: Isolation) -> None:
@@ -1022,6 +1027,26 @@ def require_governed_kilo_isolation(model_argv: Sequence[str], isolation: Isolat
         and type(isolation).__name__ == "KiloContainerIsolation"
     ):
         raise RoleRefused("EXECUTION_NOT_STARTED", "Kilo requires governed container isolation")
+
+
+def require_attempt_executor(model_argv: Sequence[str], isolation: Isolation, *, fallback: bool) -> None:
+    """ADR 0041 F1/F5: Kilo only as the primary; Codex only as the admitted fallback, through the attested Mac port.
+
+    The Codex argv adapter is not an isolation boundary, so Codex never runs through the legacy host sudo path or any
+    other port, even with a distinct uid, and never as a primary.
+    """
+
+    codex = _is_codex_exec(model_argv)
+    if not fallback:
+        if codex:
+            raise RoleRefused("EXECUTION_NOT_STARTED", "Codex runs only as the ledger-admitted fallback")
+        return
+    if not codex:
+        raise RoleRefused("EXECUTION_NOT_STARTED", "the admitted fallback runs only Codex")
+    from hunter.automation.issue_agent_mac_fallback import MacCodexIsolation
+
+    if type(isolation) is not MacCodexIsolation or not isolation.attested:
+        raise RoleRefused("EXECUTION_NOT_STARTED", "Codex fallback isolation has not been attested")
 
 
 def run_executor(
@@ -1035,14 +1060,26 @@ def run_executor(
     isolation: Isolation,
     workroot: Path,
 ) -> ExecutorOutcome:
-    """Run the model exactly once for an ``AUTHORIZED`` authorization of this run. Never writes the ledger."""
+    """Run the model exactly once for this authorization's current execution attempt. Never writes the ledger.
+
+    ``AUTHORIZED`` runs the primary; ``FALLBACK_AUTHORIZED`` runs the single admitted fallback (ADR 0041) against its
+    own sealed handoff and attempt-2 identity, so neither attempt's transport can stand in for the other's.
+    """
 
     view = _authorization(ledger, issue, authorization_id)
     bound = view.evidence.get(state.AUTHORIZED)
-    if view.state != state.AUTHORIZED or bound is None:
+    fallback = view.state == state.FALLBACK_AUTHORIZED
+    if view.state not in (state.AUTHORIZED, state.FALLBACK_AUTHORIZED) or bound is None:
         raise RoleRefused("EXECUTION_NOT_STARTED", "the authorization is not awaiting execution")
-    if context.run_attempt != 1 or bound["authorize_run_id"] != context.run_id:
-        raise RoleRefused("EXECUTION_NOT_STARTED", "the model runs only in attempt 1 of its own authorize run")
+    owning_run = bound["authorize_run_id"]
+    if fallback:
+        # ADR 0041 F1: the fallback runs only in the owner-approved resume run that claimed the pending nonce.
+        pending = view.pending_resume
+        if pending is None or pending["stage"] != "fallback" or pending["bound_run_id"] is None:
+            raise RoleRefused("EXECUTION_NOT_STARTED", "no owner-approved fallback run has claimed the request")
+        owning_run = pending["bound_run_id"]
+    if context.run_attempt != 1 or owning_run != context.run_id:
+        raise RoleRefused("EXECUTION_NOT_STARTED", "the model runs only in attempt 1 of its own bound run")
     expected = TransportBinding(
         payload_kind="handoff",
         repository_id=view.records[0]["repository_id"],
@@ -1050,12 +1087,13 @@ def run_executor(
         authorization_id=authorization_id,
         base_sha=bound["base_sha"],
         task_scope_sha256=bound["task_scope_sha256"],
-        execution_id=bound["execution_id"],
+        execution_id=view.execution_id,
         handoff_sha256=bound["lineage"]["handoff_sha256"],
         plaintext_sha256=bound["lineage"]["handoff_sha256"],
         recipient_key_id=recipient_key_id(config.handoff_key.public_key()),
     )
-    if state.sha256_hex(handoff_envelope) != bound["handoff_artifact"]["ciphertext_sha256"]:
+    handoff_artifact = bound["fallback"]["handoff_artifact"] if fallback else bound["handoff_artifact"]
+    if state.sha256_hex(handoff_envelope) != handoff_artifact["ciphertext_sha256"]:
         raise RoleRefused("TRANSPORT_INTEGRITY_FAILED", "handoff ciphertext is not the bound artifact")
     try:
         bundle = json.loads(open_sealed(handoff_envelope, recipient=config.handoff_key, expected=expected))
@@ -1070,6 +1108,7 @@ def run_executor(
         raise RoleRefused("TRANSPORT_INTEGRITY_FAILED", "prompt differs from the bound prompt digest")
 
     require_governed_kilo_isolation(config.model_argv, isolation)
+    require_attempt_executor(config.model_argv, isolation, fallback=fallback)
 
     workspace, git_dir, home = workroot / "workspace", workroot / "trusted.git", workroot / "home"
     # ADR 0039 L4: a remediation executes on its parent PR branch at the exact bound head, not on main.
@@ -1080,7 +1119,8 @@ def run_executor(
         base_sha=bound["base_sha"],
         remediation_branch=bound["execution_branch"] if bound.get("remediation") is not None else None,
     )
-    home.mkdir(mode=0o700)
+    # The fallback attestation already created this private home; the primary path has not.
+    home.mkdir(mode=0o700, exist_ok=True)
     model_argv = config.model_argv
     model_stdin = prompt
     # Issue #574: OpenCode runs through the single production contract (``opencode_invocation``), which binds it to
@@ -1153,7 +1193,14 @@ def run_executor(
             + " ".join(f"{name}={value}" for name, value in counts.items()),
             flush=True,
         )
-        return ExecutorOutcome(None, advisory)
+        if fallback or advisory != "PROVIDER_UNAVAILABLE" or config.provider_probe is None:
+            return ExecutorOutcome(None, advisory)
+        # ADR 0041 F2: the primary launched and exited non-zero. Every isolated process has stopped, so the trusted
+        # step probes the provider itself; the stderr hint alone never earns a fallback.
+        hint = getattr(isolation, "last_stderr_category", None)
+        probe = config.provider_probe()
+        print(f"executor fallback signal: stderr_category={hint} probe_category={probe}", flush=True)
+        return ExecutorOutcome(None, advisory, hint if isinstance(hint, str) else None, probe)
     try:
         document = collect_result(
             workspace,
@@ -1171,7 +1218,8 @@ def run_executor(
             counts = workspace_diagnostics(workspace, git_dir, home)
             print("executor workspace diagnostic: " + " ".join(f"{name}={value}" for name, value in counts.items()))
         return ExecutorOutcome(None, code)
-    if result_carries_secret(document, list(config.model_secret_env.values())):
+    session_secrets = tuple(getattr(isolation, "session_secrets", ()))  # ADR 0041 F6: the per-run Codex session
+    if result_carries_secret(document, [*config.model_secret_env.values(), *session_secrets]):
         return ExecutorOutcome(None, "SECRET_IN_RESULT")  # never sealed, never uploaded
     binding = TransportBinding(
         payload_kind="result",
@@ -1180,7 +1228,7 @@ def run_executor(
         authorization_id=authorization_id,
         base_sha=bound["base_sha"],
         task_scope_sha256=bound["task_scope_sha256"],
-        execution_id=bound["execution_id"],
+        execution_id=view.execution_id,
         handoff_sha256=bound["lineage"]["handoff_sha256"],
         plaintext_sha256=state.sha256_hex(document),
         recipient_key_id=recipient_key_id(config.result_recipient),
@@ -1225,13 +1273,12 @@ def _remediation_group(view: state.AuthorizationView) -> dict[str, Any] | None:
 def commit_identity(view: state.AuthorizationView, writer: WriterIdentity, result_sha256: str) -> core.CommitIdentity:
     """The deterministic commit identity both the validator and the publisher derive from the ledger."""
 
-    bound = view.evidence[state.AUTHORIZED]
     return core.CommitIdentity(
         name=writer.name,
         email=writer.email,
         timestamp=view.records[0]["recorded_at"],
         message=core.candidate_commit_message(
-            authorization_id=view.authorization_id, execution_id=bound["execution_id"], result_sha256=result_sha256
+            authorization_id=view.authorization_id, execution_id=view.execution_id, result_sha256=result_sha256
         ),
     )
 
@@ -1342,7 +1389,7 @@ def run_validator(
     receipt: dict[str, Any] = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "authorization_id": authorization_id,
-        "execution_id": bound["execution_id"],
+        "execution_id": view.execution_id,
         "ciphertext_sha256": view.evidence[state.RESULT_BOUND]["result_artifact"]["ciphertext_sha256"],
         "result_sha256": validated.result_sha256,
         "tree_sha": proof_safety.tree_sha,

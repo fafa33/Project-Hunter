@@ -210,6 +210,34 @@ Its job outputs are advisory and hostile.
 outcome, or uploads nothing. Either way the authorization ends in `FAILED`, and the model is **never**
 re-dispatched.
 
+### TFB: AUTHORIZED → FALLBACK_AUTHORIZED → RESULT_BOUND (ADR 0041, proposed; inert until provisioned)
+
+`authorize` may bind a fallback offer: a second seal of the identical handoff, to the distinct key `X_FB`, under the
+attempt-2 `execution_id`. `bind` writes `FALLBACK_AUTHORIZED` only when all of the following hold:
+
+- the offer is bound;
+- no primary result exists;
+- the primary job ran;
+- the untrusted stderr hint and the trusted provider probe agree inside `{RATE_LIMIT, QUOTA_EXCEEDED, NETWORK}`;
+- the lifecycle deadline has not passed.
+
+From `FALLBACK_AUTHORIZED`:
+
+- **Waiting.** The request waits for the owner with no deadline and no held runner.
+- **Approval.** The owner's `hunter-codex-fallback-approve` label records `resume_requested(stage="fallback")`.
+  `resume-bind` claims it in the dispatched run.
+- **Rejection.** The `hunter-codex-fallback-reject` label writes `FAILED / OWNER_WITHDREW`.
+- **Back to pending.** A run that never launched Codex (`FALLBACK_SESSION_NOT_STARTED`) abandons its resume, and
+  the next approval renews the device code.
+- **Execution.** Only the self-hosted `execute-fallback` job of that approved run runs, as Codex, through the
+  attested Mac port.
+- **Binding.** `bind-fallback` binds exactly one `hunter-ia-result-fb-*` artifact sealed under the attempt-2
+  identity, together with its attestation digest.
+- **Integrity failures.** Any primary artifact, or a second fallback artifact, is `TRANSPORT_INTEGRITY_FAILED`.
+- **No chaining.** There is never a second fallback.
+- **Later readers.** Every later reader (validator, publisher, publication identity) binds
+  `AuthorizationView.execution_id`, which is the admitted attempt.
+
 ### T2: AUTHORIZED → RESULT_BOUND
 
 | Aspect | Specification |
