@@ -18,6 +18,10 @@ from hunter.automation.issue_agent_governed_shell import ShellDenied, parse_comm
         "python -m pytest /etc/passwd",
         "python -m pytest --override-ini=x",
         "git push",
+        "rg --pre evil pattern",
+        "cat /etc/passwd",
+        "ls ../private",
+        "rg -n pattern ../../secret",
         "git status --ignored",
         "git diff --no-index /etc/passwd file",
         "python -m pytest $(id)",
@@ -38,6 +42,10 @@ def test_rejects_unsafe_command(command):
         "python -m black --check .",
         "git diff --stat",
         "git status --short",
+        "ls -la",
+        "cat tests/test_sample.py",
+        "rg -n error src",
+        "rg --files src",
     ],
 )
 def test_accepts_narrow_commands(command):

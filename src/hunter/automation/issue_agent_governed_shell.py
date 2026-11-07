@@ -20,6 +20,9 @@ ALLOWED = {
     ("python3", "-m", "black", "--check"),
     ("git", "diff"),
     ("git", "status"),
+    ("ls",),
+    ("cat",),
+    ("rg",),
 }
 FORBIDDEN = {";", "&&", "||", "|", ">", "<", "`", "$(", "\n", "\r"}
 
@@ -37,6 +40,21 @@ def parse_command(command: str) -> list[str]:
         raise ShellDenied("invalid command") from exc
     if not args or not any(tuple(args[: len(prefix)]) == prefix for prefix in ALLOWED):
         raise ShellDenied("command not allowlisted")
+    # Read-only discovery is essential for a coding agent. Keep commands argv-only,
+    # workspace-relative, bounded, and free of executable search options.
+    if args[0] == "ls":
+        if any(arg.startswith("-") and arg not in {"-a", "-l", "-la"} for arg in args[1:]):
+            raise ShellDenied("unapproved ls flag")
+    elif args[0] == "cat":
+        if len(args) < 2 or any(arg.startswith("-") for arg in args[1:]):
+            raise ShellDenied("cat requires workspace-relative files")
+    elif args[0] == "rg":
+        if len(args) < 2 or any(
+            arg.startswith("-") and arg not in {"-n", "-l", "--files", "-i", "-F"} for arg in args[1:]
+        ):
+            raise ShellDenied("unapproved rg flag")
+        if "--files" not in args and not any(not arg.startswith("-") for arg in args[1:]):
+            raise ShellDenied("rg requires a pattern")
     if len(args) > 24 or sum(map(len, args)) > 2048:
         raise ShellDenied("command budget exceeded")
     for arg in args:
@@ -49,6 +67,13 @@ def parse_command(command: str) -> list[str]:
             "--short",
             "--porcelain",
             "--no-color",
+            "-a",
+            "-l",
+            "-la",
+            "-n",
+            "-i",
+            "-F",
+            "--files",
         }:
             raise ShellDenied("unapproved flag")
         if arg.startswith("/") or arg.startswith("~") or ".." in Path(arg).parts or "\\" in arg:

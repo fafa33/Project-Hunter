@@ -28,7 +28,7 @@ from hunter.automation.issue_agent_roles import RoleRefused, stderr_category
 KILO_IMAGE = "hunter-682-kilo-canary:local"
 BROKER_IMAGE = "hunter-682-broker-canary:local"
 # Explicit repair-loop budgets enforced by the broker (fail closed on exhaustion).
-BROKER_MAX_COMMANDS = 16
+BROKER_MAX_COMMANDS = 32
 BROKER_DEADLINE_SECONDS = 660  # strictly below the 12 minute model timeout
 PYTHON_IMAGE = "python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea"
 
