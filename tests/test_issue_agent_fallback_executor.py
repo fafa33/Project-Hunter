@@ -187,7 +187,13 @@ def codex_edits(workspace: Path, prompt: bytes, *, extra: str = "") -> dict[str,
     assert b"canary" in prompt  # the sealed task reached Codex, and only through the launcher
     (workspace / "docs").mkdir(exist_ok=True)
     (workspace / "docs" / "ISSUE_AGENT_CANARY.md").write_text("canary\n" + extra)
-    return {"status": "COMPLETED", "exit": "ZERO", "stderr_category": "UNCLASSIFIED", "session_secrets": ["s" * 40]}
+    return {
+        "status": "COMPLETED",
+        "exit": "ZERO",
+        "stderr_category": "UNCLASSIFIED",
+        "model_identity": "VERIFIED",
+        "session_secrets": ["s" * 40],
+    }
 
 
 def fallback_config(repos: dict[str, Any], key: X25519PrivateKey = FALLBACK_KEY, argv: tuple[str, ...] = ()) -> Any:

@@ -230,6 +230,7 @@ def provisioned_checkout(tmp_path: Path, **changes: Any) -> Path:
         "agent_uid": 502,
         "codex_version": "0.167.0",
         "codex_sha256": CODEX_SHA,
+        "codex_model": "gpt-5.1-codex",
         **changes,
     }
     (checkout / mac.HOST_CONFIG_PATH).parent.mkdir(parents=True, exist_ok=True)
@@ -387,7 +388,13 @@ def test_only_the_validated_model_and_the_sealed_prompt_cross_to_the_launcher(tm
     port, workroot, sent = attested_port(
         tmp_path,
         monkeypatch,
-        {"status": "COMPLETED", "exit": "ZERO", "stderr_category": "UNCLASSIFIED", "session_secrets": ["t" * 40]},
+        {
+            "status": "COMPLETED",
+            "exit": "ZERO",
+            "stderr_category": "UNCLASSIFIED",
+            "model_identity": "VERIFIED",
+            "session_secrets": ["t" * 40],
+        },
     )
     status = port.run(
         ("codex", "exec", "--model", "gpt-5.1-codex", "--sandbox", "workspace-write", "-c", "x=1"),
@@ -414,7 +421,9 @@ def test_only_the_validated_model_and_the_sealed_prompt_cross_to_the_launcher(tm
 def test_the_port_refuses_keys_foreign_directories_and_injected_argv(
     tmp_path: Path, monkeypatch: Any, argv: tuple[str, ...], secret_env: dict[str, str], cwd: str
 ) -> None:
-    port, workroot, sent = attested_port(tmp_path, monkeypatch, {"status": "COMPLETED", "exit": "ZERO"})
+    port, workroot, sent = attested_port(
+        tmp_path, monkeypatch, {"status": "COMPLETED", "exit": "ZERO", "model_identity": "VERIFIED"}
+    )
     with pytest.raises(RoleRefused):
         port.run(argv, cwd=workroot / cwd, public_env={}, secret_env=secret_env, stdin=b"x", timeout=1)
     assert all(header["kind"] == "attest" for header, _ in sent)
@@ -429,7 +438,7 @@ def test_a_session_that_never_started_is_not_started_and_still_reports_its_secre
     port, workroot, _ = attested_port(tmp_path, monkeypatch, {"status": status, "session_secrets": ["s" * 40]})
     with pytest.raises(RoleRefused) as refused:
         port.run(
-            ("codex", "exec", "--model", "m"),
+            ("codex", "exec", "--model", "gpt-5.1-codex"),
             cwd=workroot / "workspace",
             public_env={},
             secret_env={},
@@ -443,7 +452,7 @@ def test_a_launcher_timeout_is_a_model_timeout(tmp_path: Path, monkeypatch: Any)
     port, workroot, _ = attested_port(tmp_path, monkeypatch, {"status": "COMPLETED", "exit": "TIMEOUT"})
     with pytest.raises(subprocess.TimeoutExpired):
         port.run(
-            ("codex", "exec", "--model", "m"),
+            ("codex", "exec", "--model", "gpt-5.1-codex"),
             cwd=workroot / "workspace",
             public_env={},
             secret_env={},
@@ -453,7 +462,9 @@ def test_a_launcher_timeout_is_a_model_timeout(tmp_path: Path, monkeypatch: Any)
 
 
 def test_the_port_prepares_only_its_own_attested_workroot(tmp_path: Path, monkeypatch: Any) -> None:
-    port, workroot, _ = attested_port(tmp_path, monkeypatch, {"status": "COMPLETED", "exit": "ZERO"})
+    port, workroot, _ = attested_port(
+        tmp_path, monkeypatch, {"status": "COMPLETED", "exit": "ZERO", "model_identity": "VERIFIED"}
+    )
     other = tmp_path / "work" / ("b" * 32)
     (other / "workspace").mkdir(parents=True)
     with pytest.raises(RoleRefused):

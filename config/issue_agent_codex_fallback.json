@@ -7,5 +7,6 @@
   "runner_gid": 504,
   "agent_uid": 502,
   "codex_version": "0.167.0",
-  "codex_sha256": "a3b4df639ed5808100fe9d3dacdb324c9fb50b2804d72d5ab59def67bb2d6ab6"
+  "codex_sha256": "a3b4df639ed5808100fe9d3dacdb324c9fb50b2804d72d5ab59def67bb2d6ab6",
+  "codex_model": "gpt-5.6"
 }

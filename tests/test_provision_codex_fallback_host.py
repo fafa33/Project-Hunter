@@ -50,7 +50,7 @@ def test_the_script_provisions_exactly_what_the_runner_attests() -> None:
 
 
 def test_rendered_daemon_and_config_are_byte_identical_to_the_attested_rendering() -> None:
-    config = mac.HostConfig("hunterrunner", "hunteragent", 503, 601, 502, "0.167.0", "c" * 64)
+    config = mac.HostConfig("hunterrunner", "hunteragent", 503, 601, 502, "0.167.0", "c" * 64, "gpt-5.6")
     template = (ROOT / mac.PLIST_TEMPLATE).read_text()
     assert provision.render_plist(template, 503, 601) == mac.render_plist(ROOT, config)
     assert provision.render_installed_config(503) == mac.render_installed_config(config)

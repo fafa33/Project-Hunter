@@ -58,11 +58,17 @@ LAUNCHER_STATUSES: Final = frozenset(
         "DEVICE_AUTH_FAILED",
         "SANDBOX_SETUP_FAILED",
         "SESSION_NOT_STARTED",
+        # ADR 0041 F5: the signed-in session's catalog does not offer the pinned model; no model ran.
+        "MODEL_UNAVAILABLE",
         "ATTESTED",
         "FAILED",
         "REFUSED",
     }
 )
+
+
+#: The launcher's closed verdict on the model that served a completed run; only ``VERIFIED`` admits a result.
+MODEL_IDENTITIES: Final = frozenset({"VERIFIED", "REROUTED", "AMBIGUOUS", "UNVERIFIED"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +80,8 @@ class HostConfig:
     agent_uid: int
     codex_version: str
     codex_sha256: str
+    #: The one Codex model the fallback may request, pinned at ``control_sha`` (owner decision, Issue #390).
+    codex_model: str
 
 
 def load_host_config(checkout: Path) -> HostConfig:
@@ -93,6 +101,7 @@ def load_host_config(checkout: Path) -> HostConfig:
         "agent_uid",
         "codex_version",
         "codex_sha256",
+        "codex_model",
     }
     if not isinstance(document, dict) or set(document) != fields or document["schema_version"] != HOST_SCHEMA_VERSION:
         raise RoleRefused("EXECUTION_NOT_STARTED", "the Codex fallback host configuration has an unknown schema")
@@ -103,6 +112,8 @@ def load_host_config(checkout: Path) -> HostConfig:
         raise RoleRefused("EXECUTION_NOT_STARTED", "the fallback principals must be two distinct non-system users")
     if _SHA64.fullmatch(str(document["codex_sha256"])) is None or not document["codex_version"]:
         raise RoleRefused("EXECUTION_NOT_STARTED", "the Codex binary is not pinned")
+    if not isinstance(document["codex_model"], str) or _MODEL.fullmatch(document["codex_model"]) is None:
+        raise RoleRefused("EXECUTION_NOT_STARTED", "the Codex fallback model is not pinned")
     return HostConfig(**{name: document[name] for name in fields - {"schema_version", "provisioned"}})
 
 
@@ -248,6 +259,7 @@ class MacCodexIsolation:
         self.attestation_sha256: str | None = None
         self.session_secrets: tuple[str, ...] = ()
         self.last_stderr_category: str | None = None
+        self.model_identity: str | None = None
 
     def attest(self, workroot: Path) -> str:
         """Pinned bytes, least-privilege principals and live denials, before any key or session is used."""
@@ -309,6 +321,9 @@ class MacCodexIsolation:
         if cwd.resolve() != WORK_ROOT / self.workroot_id / "workspace":
             raise RoleRefused("EXECUTION_NOT_STARTED", "the fallback runs only in its attested workspace")
         model = model_from_argv(argv)
+        if model != self.config.codex_model:
+            # The requested name is configuration, not authority: only the model pinned at control_sha may run.
+            raise RoleRefused("EXECUTION_NOT_STARTED", "the requested fallback model is not the pinned model")
         # The device code goes only to the owner-only inbox on this Mac, never to this (public) log.
         print("codex fallback: awaiting owner device approval in the local owner inbox", flush=True)
         response = self._launcher(
@@ -325,6 +340,13 @@ class MacCodexIsolation:
         self.last_stderr_category = category if isinstance(category, str) else "UNCLASSIFIED"
         if response.get("exit") == "TIMEOUT":
             raise subprocess.TimeoutExpired(["codex", "exec"], timeout)
+        # Fail closed on the served model (owner decision, Issue #390): a result leaves the Mac only when the
+        # launcher proved, from the pinned CLI's own event stream, that the pinned model served the whole run.
+        identity = response.get("model_identity")
+        self.model_identity = identity if isinstance(identity, str) and identity in MODEL_IDENTITIES else "AMBIGUOUS"
+        print(f"codex fallback model identity: {self.model_identity}", flush=True)
+        if self.model_identity != "VERIFIED":
+            return 1
         return 0 if response.get("exit") == "ZERO" else 1
 
     def stop(self) -> None:

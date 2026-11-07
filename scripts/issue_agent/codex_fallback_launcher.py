@@ -56,8 +56,84 @@ STDERR_CATEGORIES = (
 )
 
 
+#: ADR 0041 F5 (owner decision, Issue #390 comment 6706666538): the served model must be proven, never assumed.
+MAX_EVENT_STREAM = 8 * 1024 * 1024
+MAX_CATALOG = 4 * 1024 * 1024
+_REROUTE_MARKERS = (b"reroute", b"routed to")
+_UNKNOWN_MODEL_MARKER = b"model metadata for"
+
+
 class Refused(Exception):
     pass
+
+
+def catalog_offers(catalog: bytes, model: str) -> bool:
+    """The signed-in session's own model catalog (``codex debug models``) lists exactly this slug, once.
+
+    Read before the prompt exists, so no model output can influence it. Anything unparsable is "not offered".
+    """
+
+    if len(catalog) > MAX_CATALOG:
+        return False
+    try:
+        document = json.loads(catalog)
+    except ValueError:
+        return False
+    models = document.get("models") if isinstance(document, dict) else None
+    if not isinstance(models, list):
+        return False
+    return sum(isinstance(entry, dict) and entry.get("slug") == model for entry in models) == 1
+
+
+def model_identity(events: bytes, model: str) -> str:
+    """Verdict on the model that actually served the run, from the pinned CLI's own ``--json`` event stream.
+
+    The stream is the Codex process's stdout pipe: every line is a CLI-built JSON event, and model-generated text
+    (agent messages, command output) only ever appears JSON-escaped inside an item. That text is never consulted, so
+    it can neither prove nor forge an identity. Only the event structure and the CLI's own warning/error items are.
+
+    ``VERIFIED`` needs a complete, well-formed turn with no reroute and no unknown-model warning. A reroute is
+    ``REROUTED``; an unknown model, a malformed or oversized stream or a mismatching model field is ``AMBIGUOUS``; a
+    turn that never completed is ``UNVERIFIED``. Only ``VERIFIED`` lets a result leave the Mac.
+    """
+
+    if len(events) > MAX_EVENT_STREAM:
+        return "AMBIGUOUS"
+    started = completed = failed = 0
+    ambiguous = False
+    for line in events.splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            return "AMBIGUOUS"
+        if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+            return "AMBIGUOUS"
+        kind = event["type"]
+        item = event.get("item") if isinstance(event.get("item"), dict) else {}
+        item_kind = item.get("type") if isinstance(item.get("type"), str) else ""
+        if "reroute" in kind.lower() or "reroute" in item_kind.lower():
+            return "REROUTED"
+        for scope in (event, item):
+            served = scope.get("model")
+            if served is not None and served != model:
+                return "REROUTED" if isinstance(served, str) else "AMBIGUOUS"
+        if kind == "error" or item_kind == "error":
+            message = event.get("message") if kind == "error" else item.get("message")
+            text = message.lower().encode() if isinstance(message, str) else b""
+            if any(marker in text for marker in _REROUTE_MARKERS):
+                return "REROUTED"
+            if _UNKNOWN_MODEL_MARKER in text:
+                ambiguous = True
+        started += kind == "thread.started"
+        completed += kind == "turn.completed"
+        failed += kind == "turn.failed"
+    if ambiguous:
+        return "AMBIGUOUS"
+    if started != 1 or completed < 1 or failed:
+        return "UNVERIFIED"
+    return "VERIFIED"
 
 
 def validate_request(header: object, prompt: bytes) -> dict[str, str]:
@@ -135,6 +211,7 @@ def codex_exec_argv(model: str, workspace: Path) -> list[str]:
         str(workspace),
         "--skip-git-repo-check",
         "--ephemeral",
+        "--json",
         "-c",
         'model_reasoning_effort="low"',
         "-",
@@ -257,24 +334,40 @@ def run_codex(request: dict[str, str], prompt: bytes) -> dict[str, object]:
         status = device_session(request["workroot_id"], workspace, home)
         response = {"status": status}
         if status == "AUTHENTICATED":
-            code, _out, err = _run(
-                sandbox_argv(workspace, home, codex_exec_argv(request["model"], workspace)),
-                model_environment(home),
-                stdin=prompt,
-                timeout=MODEL_TIMEOUT_SECONDS,
-            )
-            exit_class = "TIMEOUT" if code == -1 else ("ZERO" if code == 0 else "NONZERO")
-            response = (
-                {"status": "SANDBOX_SETUP_FAILED"}
-                if code in SETUP_EXITS
-                else {"status": "COMPLETED", "exit": exit_class, "stderr_category": classify(err[:65536])}
-            )
+            response = _signed_in_run(request, prompt, workspace, home)
     finally:
         # Every path logs the session out and deletes it, including a timed-out or failed sign-in.
         secrets = end_session(workspace, home)
     if secrets:
         response["session_secrets"] = secrets
     return response
+
+
+def _signed_in_run(request: dict[str, str], prompt: bytes, workspace: Path, home: Path) -> dict[str, object]:
+    # Before any prompt: the signed-in session must offer exactly the pinned model, or no model runs.
+    catalog_code, catalog, _ = _run(
+        sandbox_argv(workspace, home, [str(CODEX_BINARY), "debug", "models", *codex_common()]),
+        model_environment(home),
+        timeout=120,
+    )
+    if catalog_code in SETUP_EXITS:
+        return {"status": "SANDBOX_SETUP_FAILED"}
+    if catalog_code != 0 or not catalog_offers(catalog, request["model"]):
+        return {"status": "MODEL_UNAVAILABLE"}
+    code, out, err = _run(
+        sandbox_argv(workspace, home, codex_exec_argv(request["model"], workspace)),
+        model_environment(home),
+        stdin=prompt,
+        timeout=MODEL_TIMEOUT_SECONDS,
+    )
+    if code in SETUP_EXITS:
+        return {"status": "SANDBOX_SETUP_FAILED"}
+    return {
+        "status": "COMPLETED",
+        "exit": "TIMEOUT" if code == -1 else ("ZERO" if code == 0 else "NONZERO"),
+        "stderr_category": classify(err[:65536]),
+        "model_identity": model_identity(out, request["model"]),
+    }
 
 
 def attest(request: dict[str, str]) -> dict[str, object]:

@@ -420,6 +420,32 @@ A fallback result enters the **identical** chain:
 The validator and publisher domains, the exact `base_sha` binding, `collect_result`, the signing identity and the
 Validation Stage Contract are unchanged. The executor identity is evidence only. It never relaxes a stage.
 
+### F5a. Pinned fallback model and served-model guard (owner decision, Issue #390 comment 6706666538)
+
+The requested model name is configuration, never evidence of the model that served the run.
+
+- **Pin.** `config/issue_agent_codex_fallback.json` pins `codex_model` (`gpt-5.6`) at `control_sha`. A missing or
+  malformed pin leaves the fallback inert. `MacCodexIsolation` refuses any other requested model before the
+  launcher is contacted, whatever `HUNTER_ISSUE_AGENT_FALLBACK_MODEL` says.
+- **Before the prompt.** Inside the owner's signed-in session and the outer Seatbelt profile, the launcher reads the
+  session's own catalog (`codex debug models`). It must list the pinned slug exactly once, or the launcher answers
+  `MODEL_UNAVAILABLE` and no model runs.
+- **After the run.** Codex runs with `--json`. The launcher's verdict comes only from the pinned CLI's event
+  structure and its own warning/error items. It returns `REROUTED` for a reroute event, a "routed to" CLI notice
+  or a mismatching model field; `AMBIGUOUS` for an unknown-model warning, or a malformed or oversized stream;
+  `UNVERIFIED` for a turn that did not complete; `VERIFIED` otherwise. Model-generated text (agent messages,
+  command output) is never consulted, so it can neither prove nor forge an identity.
+- **Fail closed.** Only `VERIFIED` with a clean exit lets the runner collect a result. Anything else is a failed
+  fallback: nothing is sealed, uploaded or published.
+- **Observed limits (pinned CLI 0.167.0, unauthenticated).**
+  - The built-in catalog has no plain `gpt-5.6` entry, only `gpt-5.6-sol`, `-terra` and `-luna`.
+  - `exec --model gpt-5.6` warns `Model metadata for 'gpt-5.6' not found`.
+
+  The guard therefore rejects `gpt-5.6` unless the authenticated session's catalog offers it. Whether it does can
+  only be established on the fallback Mac after the owner's device sign-in.
+- **Installation.** The launcher is attested by hash, so the owner must reinstall it (`provision_codex_fallback_host.py
+  --apply`) from the merged commit before the fallback can attest again.
+
 ### F8. Owner-armed fallback canary (revision 5, implemented as P9)
 
 **Problem.** P8 requires a primary that fails for an F2 cause. A real `RATE_LIMIT`, `QUOTA_EXCEEDED` or `NETWORK`
