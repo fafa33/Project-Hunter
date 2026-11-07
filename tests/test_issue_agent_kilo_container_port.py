@@ -225,3 +225,91 @@ def test_agent_is_not_started_until_the_broker_snapshot_is_ready(tmp_path: Path)
             isolation.prepare(workspace, home)
     assert not isolation.started  # torn down: the agent was never launched
     assert sum(1 for c in calls if c[:2] == ("logs", isolation.broker)) >= 60
+
+
+# --- Issue #577: a non-zero Kilo exit is attributable from a content-free stderr outline -------------------------
+
+_ESC = "\x1b"
+_LOCAL_SUCCESS_SHAPE = (
+    "(node:1) [UNDICI-EHPA] Warning: EnvHttpProxyAgent is experimental\n"
+    f"{_ESC}[0m\n> code · nvidia/nemotron-3-ultra-550b-a55b:free\n{_ESC}[0m\n"
+    f"{_ESC}[0m→ {_ESC}[0mRead src/hunter/automation/issue_agent_control.py\n"
+    f"{_ESC}[0m← {_ESC}[0mEdit tests/test_issue_agent_control.py\n"
+    "+    assert run['repository']['id'] == 503\n"  # diff text: numbers outside an Error line are never reported
+    "$ python -m pytest tests/test_issue_agent_control.py\n\nDENIED\n"
+).encode()
+
+
+def test_stderr_structure_counts_the_cli_line_shapes_only() -> None:
+    assert kilo_port.stderr_structure(_LOCAL_SUCCESS_SHAPE) == {
+        "tool_calls": "2",
+        "shell": "1",
+        "denied": "1",
+        "error_lines": "0",
+        "stack_frames": "0",
+        "http_status": "none",
+    }
+
+
+@pytest.mark.parametrize(
+    "error,status",
+    [
+        (f"{_ESC}[91mError: {_ESC}[0mAI_APICallError: Too Many Requests (429)", "429"),
+        ("Error: upstream returned 503 for request 4040404", "503"),
+        ("Error: request 404040 failed with code 418", "none"),  # unlisted status and embedded digits stay unreported
+        ("Error: something unexpected", "none"),
+    ],
+)
+def test_stderr_structure_reports_only_an_allowlisted_status_from_an_error_line(error: str, status: str) -> None:
+    sample = (f"> code · m\n{error}\n    at fetch (/app/node_modules/x.js:1:2)\n").encode()
+    outline = kilo_port.stderr_structure(sample)
+    assert outline["error_lines"] == "1" and outline["stack_frames"] == "1" and outline["http_status"] == status
+
+
+def test_stderr_structure_never_echoes_stderr_content() -> None:
+    sample = b"Error: key sk-live-SECRET123 rejected for /workspace/private.py 429\n$ cat ~/.netrc\n"
+    rendered = " ".join(f"{k}={v}" for k, v in kilo_port.stderr_structure(sample).items())
+    for fragment in ("SECRET", "sk-live", "private.py", "netrc", "rejected", "cat"):
+        assert fragment not in rendered
+    assert set(rendered.replace("=", " ").split()) <= {
+        "tool_calls",
+        "shell",
+        "denied",
+        "error_lines",
+        "stack_frames",
+        "http_status",
+        "none",
+        "0",
+        "1",
+        "429",
+    }
+
+
+@pytest.mark.parametrize("returncode,printed", [(1, True), (0, False)])
+def test_only_a_non_zero_exit_prints_the_stderr_outline(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], returncode: int, printed: bool
+) -> None:
+    workspace, home = _roots(tmp_path)
+    isolation = KiloContainerIsolation(SCRIPTS)
+    isolation.workspace, isolation.home, isolation.started = workspace.resolve(), home.resolve(), True
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        stderr = b"> code \xc2\xb7 m\nError: provider said no (key sk-SECRET) 502\n" if args[0] == "run" else b""
+        return subprocess.CompletedProcess(args, returncode if args[0] == "run" else 0, b"", stderr)
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
+        status = isolation.run(
+            ("kilo", "run"),
+            cwd=workspace,
+            public_env={"KILO_CONFIG_CONTENT": POLICY},
+            secret_env={},
+            stdin=b"",
+            timeout=1,
+        )
+    out = capsys.readouterr().out
+    assert status == returncode and "sk-SECRET" not in out and "provider said no" not in out
+    assert (
+        "isolated Kilo stderr structure: tool_calls=0 shell=0 denied=0 error_lines=1 stack_frames=0 "
+        "http_status=502" in out
+    ) is printed
+    assert "stderr_category=UNCLASSIFIED" in out  # the closed category and its fallback consequence are unchanged
