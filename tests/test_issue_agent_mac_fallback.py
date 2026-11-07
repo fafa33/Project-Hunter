@@ -237,9 +237,17 @@ def provisioned_checkout(tmp_path: Path, **changes: Any) -> Path:
     return checkout
 
 
-def test_the_repository_pins_an_unprovisioned_host_so_the_fallback_is_inert() -> None:
+def test_an_unprovisioned_host_pin_keeps_the_fallback_inert(tmp_path: Path) -> None:
     with pytest.raises(RoleRefused, match="not provisioned"):
-        mac.load_host_config(ROOT)
+        mac.load_host_config(provisioned_checkout(tmp_path, provisioned=False))
+
+
+def test_the_repository_pins_the_provisioned_least_privilege_host() -> None:
+    # Owner-provisioned values, measured from the installed host (dscl and the installed launchd socket owner).
+    config = mac.load_host_config(ROOT)
+    assert (config.runner_user, config.agent_user) == ("hunterrunner", "hunteragent")
+    assert (config.runner_uid, config.runner_gid, config.agent_uid) == (505, 504, 502)
+    assert len({config.runner_uid, config.agent_uid}) == 2 and min(config.runner_uid, config.agent_uid) >= 501
 
 
 @pytest.mark.parametrize(

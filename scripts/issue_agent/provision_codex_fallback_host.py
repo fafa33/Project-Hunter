@@ -54,6 +54,8 @@ CODEX_TARBALL_INTEGRITY = (
     "sha512-wKoBiI6SBSg8fqiEYEOJs/NM/ZzKaCgy1cseX9LJbuDq3GCCKkeW9BUGe1ZEkyhhZ5Yfj+HzdUfp698abP2tDA=="
 )
 CODEX_TARBALL_MEMBER = "package/vendor/x86_64-apple-darwin/bin/codex"
+#: The pinned archive is 158,115,646 bytes; the read bound only caps memory (integrity is pinned separately).
+CODEX_TARBALL_MAX_BYTES = 256 * 1024 * 1024
 CODEX_BINARY_SHA256 = "a3b4df639ed5808100fe9d3dacdb324c9fb50b2804d72d5ab59def67bb2d6ab6"
 MIN_ID = 503  # never the first users (501) or the existing hunteragent (502)
 
@@ -182,14 +184,14 @@ def read_pinned_tarball(path: Path) -> bytes:
         raise ProvisionError("Codex archive cannot be opened safely") from error
     try:
         info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode) or info.st_size > 150 * 1024 * 1024:
+        if not stat.S_ISREG(info.st_mode) or info.st_size > CODEX_TARBALL_MAX_BYTES:
             raise ProvisionError("Codex archive must be a bounded regular file")
         if info.st_mode & 0o022:
             raise ProvisionError("Codex archive cannot be group- or world-writable")
         if info.st_uid not in (0, os.getuid(), int(os.environ.get("SUDO_UID", os.getuid()))):
             raise ProvisionError("Codex archive has an unexpected owner")
         with os.fdopen(descriptor, "rb", closefd=False) as handle:
-            return handle.read(150 * 1024 * 1024 + 1)
+            return handle.read(CODEX_TARBALL_MAX_BYTES + 1)
     finally:
         os.close(descriptor)
 

@@ -4,6 +4,11 @@
 
 **Proposed, revision 4: owner-approved interim implementation direction** (2026-11-06, Issue #390).
 
+**Revision 5 (proposed 2026-11-07, awaiting owner decision; not implemented):** F8 adds an owner-armed,
+independently verifiable fallback canary, because P8 cannot otherwise run. No approved mechanism makes the primary
+fail recoverably. In the last fifteen lifecycle runs, every primary outcome was terminal under F2 (`UNCLASSIFIED`,
+`NOT_FOUND` or a timeout). Until the owner approves F8 and it is implemented, nothing in this revision has any effect.
+
 Revision 4 applies the owner's decision of 2026-11-06:
 
 - the 10-minute approval deadline is removed;
@@ -415,6 +420,76 @@ A fallback result enters the **identical** chain:
 The validator and publisher domains, the exact `base_sha` binding, `collect_result`, the signing identity and the
 Validation Stage Contract are unchanged. The executor identity is evidence only. It never relaxes a stage.
 
+### F8. Owner-armed fallback canary (proposed in revision 5, not implemented)
+
+**Problem.** P8 requires a primary that fails for an F2 cause. A real `RATE_LIMIT`, `QUOTA_EXCEEDED` or `NETWORK`
+failure cannot be scheduled, and F2's two-observation rule must not be weakened to stage one. F8 adds one bounded
+way to *induce* a real, observable provider unreachability. It records that failure under its own cause, so a
+staged failure can never be mistaken for, or relabelled as, a real one.
+
+**Arming (owner only, before authorization).**
+
+- The repository owner labels the open Issue `hunter-codex-fallback-canary` **before** the `hunter-agent-execute`
+  label event.
+- `authorize` re-verifies the label from the Issue timeline (actor is the owner, applied before the authorizing
+  event) and records `fallback_canary: true` in the signed `AUTHORIZED` evidence. Otherwise the field is `false`.
+- A canary cannot be armed after `AUTHORIZED`, cannot be selected from Issue text, prompts or workflow inputs, and
+  never applies to another authorization.
+
+**Inducement (trusted step, primary run only).**
+
+- With `fallback_canary: true`, the trusted executor step starts the existing `model_egress_gateway.py` with a
+  `canary` profile. It equals the Kilo profile except that the pinned provider host is removed from the allowlist,
+  so the gateway refuses `CONNECT` to it and counts each refusal.
+- The isolated Kilo run is unchanged: same container, argv, network and handoff. It fails only because its sole
+  external route refuses the provider.
+
+**Two observations (F2 unchanged in kind).**
+
+- The untrusted `stderr_category` must be `NETWORK`.
+- For a canary authorization only, the trusted probe sends its unchanged bodiless `GET` through the **same gateway
+  instance** with `CONNECT`, instead of directly. It must observe the refusal, which `classify_probe` maps to `NETWORK`.
+- The gateway must report at least one refusal for the pinned provider host, and none for any other host.
+
+**Admission.**
+
+- `bind` writes `FALLBACK_AUTHORIZED` with `primary_cause = CANARY_NETWORK`, a new closed value, only when all of
+  these hold:
+  - `AUTHORIZED.fallback_canary` is `true`;
+  - both categories are `NETWORK`;
+  - the gateway refusal evidence (count and digest) is present;
+  - every other F2 condition holds.
+- `CANARY_NETWORK` is never admissible without the signed flag.
+- A canary authorization never admits `RATE_LIMIT`, `QUOTA_EXCEEDED` or `NETWORK`, so a canary is never
+  reported as a real provider failure, and a real failure is never relabelled as a canary.
+
+**Unchanged.**
+
+- F1: one fallback per authorization, an owner approval label per run, and no chaining.
+- F3: the handoff, `X_FB` and the download checks.
+- F5 and F6: Mac isolation, the Codex gateway profile (the fallback never uses the canary profile) and the
+  owner-attended device sign-in.
+- F7: the exact-head proof.
+
+**Independent verification.** A reviewer can confirm a canary from public facts alone:
+
+- the label event's actor and time, from the GitHub timeline;
+- the signed ledger: `AUTHORIZED.fallback_canary`, `FALLBACK_AUTHORIZED.primary_cause = CANARY_NETWORK`, the
+  gateway refusal digest, then `RESULT_BOUND` (attempt 2);
+- the exact-head Pre-PR run.
+
+**Bounds.**
+
+- No production authorization can carry the flag without the owner's own pre-authorization label.
+- The induced failure is limited to one gateway instance in one primary run.
+- No credential, key or evidence is synthesised: both categories are real observations of a real refusal.
+
+**Schema.**
+
+- `AUTHORIZED` gains the optional boolean `fallback_canary`, and the cause vocabulary gains `CANARY_NETWORK`.
+- As in F4, the schema version is not bumped. A reader at an older `control_sha` rejects the unknown field or cause
+  through the closed schema, so it fails closed.
+
 ## Consequences
 
 - **Inert until prerequisites hold.** The fallback does nothing until:
@@ -477,4 +552,5 @@ without owner approval.
 | **P5** Mac isolation | `codex_fallback_launcher.py` (closed schema, peer-uid check, launcher-built argv); `codex-fallback.sb`; plist template; `MacCodexIsolation` (installation hashes, principals, live cases, ACL workroot); loopback gateway profile | `test_issue_agent_mac_fallback.py`, `test_issue_agent_fallback_executor.py` | **done** |
 | **P6** session | Device-code session with owner-only inbox, window, logout and delete on every path, token scan | launcher and port tests | **done** |
 | **P7** workflow, docs | `execute-fallback` (self-hosted, `X_FB` only), `bind-fallback`, validate gating; static guard extended; state machine document | `test_issue_agent_workflows.py` | **done** (defect registry entry deferred to independent review) |
-| **P8** end to end | After push and merge approval: an owner-labelled Issue with the primary deliberately rate-limited, observed through `FALLBACK_AUTHORIZED`, then `RESULT_BOUND` (attempt 2), validated, published, Draft PR, and hosted Pre-PR Preflight on the exact head | exact-head SHA equality; ledger chain verified | gated |
+| **P8** end to end | After push and merge approval: an owner-labelled Issue with the primary failing recoverably (F8 canary, P9), observed through `FALLBACK_AUTHORIZED`, then `RESULT_BOUND` (attempt 2), validated, published, Draft PR, and hosted Pre-PR Preflight on the exact head | exact-head SHA equality; ledger chain verified | gated |
+| **P9** canary (F8, revision 5) | Owner label verified in `authorize`; `fallback_canary` in `AUTHORIZED`; gateway `canary` profile with refusal counter; canary-only probe via the gateway; `CANARY_NETWORK` admission | positive canary admission; flag absent → terminal; real `NETWORK` on a canary authorization → terminal; label after authorization → unarmed; non-owner label → unarmed; refusal for another host → terminal | **awaiting owner approval** |
