@@ -348,6 +348,40 @@ def _bool(value: object, where: str) -> None:
         raise _fail(where, "must be a boolean")
 
 
+FALLBACK_MODEL_PROVENANCE: Final = frozenset(
+    {"REPORTED", "REROUTED", "REROUTED_UNIDENTIFIED", "NOT_OBSERVED", "STREAM_INVALID"}
+)
+_FALLBACK_OBSERVING: Final = frozenset({"REPORTED", "REROUTED"})
+_MODEL_SLUG: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def _fallback_model(value: object, where: str) -> None:
+    """ADR 0041 F5a: a closed model record that can name an observed model only when the CLI reported one."""
+
+    if not isinstance(value, dict) or set(value) != {"requested", "requested_listed", "observed", "provenance"}:
+        raise _fail(where, "fields differ from the closed schema")
+    observed, provenance = value["observed"], value["provenance"]
+    if not isinstance(value["requested"], str) or _MODEL_SLUG.fullmatch(value["requested"]) is None:
+        raise _fail(where, "malformed requested model")
+    if type(value["requested_listed"]) is not bool:
+        raise _fail(where, "requested_listed must be a boolean")
+    if not isinstance(provenance, str) or provenance not in FALLBACK_MODEL_PROVENANCE:
+        raise _fail(where, "provenance outside the closed vocabulary")
+    names = isinstance(observed, str) and _MODEL_SLUG.fullmatch(observed) is not None
+    if (provenance in _FALLBACK_OBSERVING) != names or (not names and observed is not None):
+        raise _fail(where, "an observed model is recorded only when the CLI reported one")
+    if provenance == "REPORTED" and observed != value["requested"]:
+        raise _fail(where, "a reported model that differs from the request is a reroute")
+
+
+def fallback_model_conforms(value: object) -> bool:
+    try:
+        _fallback_model(value, "fallback.model")
+    except LedgerSchemaError:
+        return False
+    return True
+
+
 def _optional(inner: Validator) -> Validator:
     def check(value: object, where: str) -> None:
         if value is not None:
@@ -600,7 +634,12 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
                     "attestation_sha256": SHA64,
                     # The publish deadline restarts at the fallback's bind: an owner may approve days later.
                     "deadline_published_at": TIMESTAMP,
-                }
+                },
+                optional={
+                    # ADR 0041 F5a: requested and observed model, as the attested launcher reported them. A permitted
+                    # provider reroute is recorded here, never hidden; ``observed`` is null unless the CLI named it.
+                    "model": _fallback_model,
+                },
             )
         },
     ),

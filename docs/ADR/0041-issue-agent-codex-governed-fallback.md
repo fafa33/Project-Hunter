@@ -420,29 +420,41 @@ A fallback result enters the **identical** chain:
 The validator and publisher domains, the exact `base_sha` binding, `collect_result`, the signing identity and the
 Validation Stage Contract are unchanged. The executor identity is evidence only. It never relaxes a stage.
 
-### F5a. Pinned fallback model and served-model guard (owner decision, Issue #390 comment 6706666538)
+### F5a. Preferred fallback model and recorded model provenance (owner decisions, Issue #390)
 
-The requested model name is configuration, never evidence of the model that served the run.
+The owner's comment 6706679138 supersedes the exact-model fail-closed requirement of 6706666538. Success is governed
+execution, not a specific model.
 
-- **Pin.** `config/issue_agent_codex_fallback.json` pins `codex_model` (`gpt-5.6`) at `control_sha`. A missing or
-  malformed pin leaves the fallback inert. `MacCodexIsolation` refuses any other requested model before the
-  launcher is contacted, whatever `HUNTER_ISSUE_AGENT_FALLBACK_MODEL` says.
-- **Before the prompt.** Inside the owner's signed-in session and the outer Seatbelt profile, the launcher reads the
-  session's own catalog (`codex debug models`). It must list the pinned slug exactly once, or the launcher answers
-  `MODEL_UNAVAILABLE` and no model runs.
-- **After the run.** Codex runs with `--json`. The launcher's verdict comes only from the pinned CLI's event
-  structure and its own warning/error items. It returns `REROUTED` for a reroute event, a "routed to" CLI notice
-  or a mismatching model field; `AMBIGUOUS` for an unknown-model warning, or a malformed or oversized stream;
-  `UNVERIFIED` for a turn that did not complete; `VERIFIED` otherwise. Model-generated text (agent messages,
-  command output) is never consulted, so it can neither prove nor forge an identity.
-- **Fail closed.** Only `VERIFIED` with a clean exit lets the runner collect a result. Anything else is a failed
-  fallback: nothing is sealed, uploaded or published.
-- **Observed limits (pinned CLI 0.167.0, unauthenticated).**
-  - The built-in catalog has no plain `gpt-5.6` entry, only `gpt-5.6-sol`, `-terra` and `-luna`.
-  - `exec --model gpt-5.6` warns `Model metadata for 'gpt-5.6' not found`.
+- **Trust boundary (unchanged).** The authorized provider and model trust policy is the one F5 and F6 already define:
+  - the owner-approved ChatGPT-plan Codex session;
+  - the pinned CLI;
+  - the outer Seatbelt profile;
+  - the gateway allowlisted to `auth.openai.com` and `chatgpt.com`.
 
-  The guard therefore rejects `gpt-5.6` unless the authenticated session's catalog offers it. Whether it does can
-  only be established on the fallback Mac after the owner's device sign-in.
+  A server-side reroute stays inside that boundary: same service, session, sandbox and egress. It is therefore
+  permitted. No signed contract binds an exact model: `AUTHORIZED`, `FALLBACK_AUTHORIZED` and the transport and SPM
+  envelope bindings name none. Signed TaskScope, SPM/DPM lineage, X_FB, validation and exact-head proof are untouched.
+- **Preferred model.** `config/issue_agent_codex_fallback.json` pins `codex_model` (`gpt-5.6`) at `control_sha` as the
+  model the fallback *requests*. A missing or malformed pin leaves the fallback inert. `MacCodexIsolation` refuses
+  any other requested model, so workflow configuration can never choose the model.
+- **Provenance, never asserted.**
+  - Before the prompt, inside the signed-in, sandboxed session, the launcher records whether the session's catalog
+    (`codex debug models`) lists the preferred model. This is evidence only; it never gates the run.
+  - Codex runs with `--json`. From the pinned CLI's event structure and its own error/warning items only, the
+    launcher records one of these provenance codes:
+    - `REPORTED`: the CLI named the requested model;
+    - `REROUTED`: a reroute event, the CLI's "routed to X" notice, or a different reported model, naming X;
+    - `REROUTED_UNIDENTIFIED`: a reroute without a well-formed target;
+    - `NOT_OBSERVED`: the CLI named no model, and nothing is asserted, not even the request;
+    - `STREAM_INVALID`: a malformed or oversized stream.
+  - Model-generated text (agent messages, command output) is never consulted.
+- **Outcome.** A permitted reroute never fails a run: success is still decided only by the exit status, collection,
+  the secret scan, validation and the exact-head proof. Bind-fallback records `{requested, requested_listed,
+  observed, provenance}` in `RESULT_BOUND.fallback.model` when the report conforms. A report that would name an
+  observed model without CLI evidence, or relabel a reroute as `REPORTED`, never conforms and is left out.
+- **Observed limits (pinned CLI 0.167.0, unauthenticated).** The built-in catalog has no plain `gpt-5.6` entry (only
+  `-sol`, `-terra` and `-luna`), and `exec --model gpt-5.6` warns `Model metadata for 'gpt-5.6' not found`. What
+  the account is actually served is recorded only after the owner's device sign-in on the fallback Mac.
 - **Installation.** The launcher is attested by hash, so the owner must reinstall it (`provision_codex_fallback_host.py
   --apply`) from the merged commit before the fallback can attest again.
 

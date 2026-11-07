@@ -1394,6 +1394,7 @@ def _evidence(
     configuration: Configuration,
     now: datetime,
     fallback_attestation_sha256: str | None = None,
+    fallback_model: Mapping[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]] | None:
     """``(target_state, evidence)`` for a transition, or ``None`` when its evidence is not (yet) conforming."""
 
@@ -1441,6 +1442,9 @@ def _evidence(
                 "attestation_sha256": fallback_attestation_sha256,
                 "deadline_published_at": _timestamp(now + FALLBACK_PUBLISH_DEADLINE),
             }
+            # ADR 0041 F5a: provenance only. A conforming report is recorded; anything else is left out, never guessed.
+            if state.fallback_model_conforms(fallback_model):
+                bound_evidence["fallback"]["model"] = dict(fallback_model or {})
         return target, bound_evidence
     if target == state.VALIDATED:
         receipt = facts.receipt
@@ -1511,6 +1515,7 @@ def step(
     executor_probe_category: str | None = None,
     fallback_attestation_sha256: str | None = None,
     executor_canary_refusal: Mapping[str, Any] | None = None,
+    fallback_model: Mapping[str, Any] | None = None,
     new_nonce: Callable[[], str] = lambda: secrets.token_hex(32),
     chain: bool = True,
 ) -> state.Decision:
@@ -1561,6 +1566,7 @@ def step(
             configuration=configuration,
             now=moment,
             fallback_attestation_sha256=fallback_attestation_sha256,
+            fallback_model=fallback_model,
         )
         if built is None:
             return state.Decision("noop", reason="transition evidence not conforming yet")
@@ -1619,6 +1625,7 @@ def step(
                 executor_probe_category=executor_probe_category,
                 fallback_attestation_sha256=fallback_attestation_sha256,
                 executor_canary_refusal=executor_canary_refusal,
+                fallback_model=fallback_model,
                 new_nonce=new_nonce,
                 chain=False,
             )

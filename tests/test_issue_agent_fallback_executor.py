@@ -191,7 +191,6 @@ def codex_edits(workspace: Path, prompt: bytes, *, extra: str = "") -> dict[str,
         "status": "COMPLETED",
         "exit": "ZERO",
         "stderr_category": "UNCLASSIFIED",
-        "model_identity": "VERIFIED",
         "session_secrets": ["s" * 40],
     }
 

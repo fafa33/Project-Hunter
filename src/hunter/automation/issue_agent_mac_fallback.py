@@ -58,8 +58,6 @@ LAUNCHER_STATUSES: Final = frozenset(
         "DEVICE_AUTH_FAILED",
         "SANDBOX_SETUP_FAILED",
         "SESSION_NOT_STARTED",
-        # ADR 0041 F5: the signed-in session's catalog does not offer the pinned model; no model ran.
-        "MODEL_UNAVAILABLE",
         "ATTESTED",
         "FAILED",
         "REFUSED",
@@ -67,8 +65,38 @@ LAUNCHER_STATUSES: Final = frozenset(
 )
 
 
-#: The launcher's closed verdict on the model that served a completed run; only ``VERIFIED`` admits a result.
-MODEL_IDENTITIES: Final = frozenset({"VERIFIED", "REROUTED", "AMBIGUOUS", "UNVERIFIED"})
+#: ADR 0041 F5a: how the launcher observed the served model. Only REPORTED and REROUTED name an observed model.
+MODEL_PROVENANCE: Final = frozenset({"REPORTED", "REROUTED", "REROUTED_UNIDENTIFIED", "NOT_OBSERVED", "STREAM_INVALID"})
+_OBSERVING: Final = frozenset({"REPORTED", "REROUTED"})
+_MODEL_FIELDS: Final = frozenset({"requested", "requested_listed", "observed", "provenance"})
+
+
+def model_record(reported: object, requested: str) -> dict[str, object]:
+    """The launcher's model report in closed form; anything malformed is recorded as observing nothing.
+
+    Never asserts that the requested model served the run: ``observed`` is set only when the pinned CLI named it.
+    """
+
+    record: dict[str, object] = {
+        "requested": requested,
+        "requested_listed": False,
+        "observed": None,
+        "provenance": "STREAM_INVALID",
+    }
+    if not isinstance(reported, dict) or set(reported) != _MODEL_FIELDS:
+        return record
+    provenance, observed = reported["provenance"], reported["observed"]
+    names_model = isinstance(observed, str) and _MODEL.fullmatch(observed) is not None
+    if (
+        reported["requested"] != requested
+        or type(reported["requested_listed"]) is not bool
+        or not isinstance(provenance, str)
+        or provenance not in MODEL_PROVENANCE
+        or (provenance in _OBSERVING and not names_model)
+        or (provenance not in _OBSERVING and observed is not None)
+    ):
+        return record
+    return {name: reported[name] for name in ("requested", "requested_listed", "observed", "provenance")}
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,7 +108,8 @@ class HostConfig:
     agent_uid: int
     codex_version: str
     codex_sha256: str
-    #: The one Codex model the fallback may request, pinned at ``control_sha`` (owner decision, Issue #390).
+    #: The preferred Codex model the fallback requests, pinned at ``control_sha`` (owner decisions, Issue #390). A
+    #: permitted provider reroute is accepted and recorded (ADR 0041 F5a); workflow inputs never choose the model.
     codex_model: str
 
 
@@ -259,7 +288,7 @@ class MacCodexIsolation:
         self.attestation_sha256: str | None = None
         self.session_secrets: tuple[str, ...] = ()
         self.last_stderr_category: str | None = None
-        self.model_identity: str | None = None
+        self.model: dict[str, object] | None = None
 
     def attest(self, workroot: Path) -> str:
         """Pinned bytes, least-privilege principals and live denials, before any key or session is used."""
@@ -322,7 +351,7 @@ class MacCodexIsolation:
             raise RoleRefused("EXECUTION_NOT_STARTED", "the fallback runs only in its attested workspace")
         model = model_from_argv(argv)
         if model != self.config.codex_model:
-            # The requested name is configuration, not authority: only the model pinned at control_sha may run.
+            # Workflow configuration never chooses the model: only the preferred model pinned at control_sha is requested.
             raise RoleRefused("EXECUTION_NOT_STARTED", "the requested fallback model is not the pinned model")
         # The device code goes only to the owner-only inbox on this Mac, never to this (public) log.
         print("codex fallback: awaiting owner device approval in the local owner inbox", flush=True)
@@ -340,13 +369,13 @@ class MacCodexIsolation:
         self.last_stderr_category = category if isinstance(category, str) else "UNCLASSIFIED"
         if response.get("exit") == "TIMEOUT":
             raise subprocess.TimeoutExpired(["codex", "exec"], timeout)
-        # Fail closed on the served model (owner decision, Issue #390): a result leaves the Mac only when the
-        # launcher proved, from the pinned CLI's own event stream, that the pinned model served the whole run.
-        identity = response.get("model_identity")
-        self.model_identity = identity if isinstance(identity, str) and identity in MODEL_IDENTITIES else "AMBIGUOUS"
-        print(f"codex fallback model identity: {self.model_identity}", flush=True)
-        if self.model_identity != "VERIFIED":
-            return 1
+        # ADR 0041 F5a: a permitted provider reroute is recorded, never rejected and never hidden.
+        self.model = model_record(response.get("model"), model)
+        print(
+            "codex fallback model: requested={requested} listed={requested_listed} observed={observed} "
+            "provenance={provenance}".format(**self.model),
+            flush=True,
+        )
         return 0 if response.get("exit") == "ZERO" else 1
 
     def stop(self) -> None:

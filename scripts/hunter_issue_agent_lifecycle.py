@@ -223,6 +223,7 @@ def cmd_step(configuration: control.Configuration, arguments: argparse.Namespace
                 executor_probe_category=getattr(arguments, "probe_category", "") or None,
                 fallback_attestation_sha256=getattr(arguments, "attestation_sha256", "") or None,
                 executor_canary_refusal=_canary_refusal(arguments),
+                fallback_model=_fallback_model(arguments),
             )
             print(f"issue {issue}: {decision.action} {decision.target_state or decision.code or ''}".rstrip())
             if arguments.role == "bind":
@@ -251,6 +252,18 @@ def _canary_refusal(arguments: argparse.Namespace) -> dict[str, Any] | None:
         "probe_refusals": 1,
         "refusal_digest": str(digest),
     }
+
+
+def _fallback_model(arguments: argparse.Namespace) -> dict[str, Any] | None:
+    """ADR 0041 F5a: the fallback job's model report (a JSON object), validated in the ledger's closed form."""
+    raw = getattr(arguments, "fallback_model", "") or ""
+    if not raw or len(raw) > 1024:
+        return None
+    try:
+        value = json.loads(raw)
+    except ValueError:
+        return None
+    return value if state.fallback_model_conforms(value) else None
 
 
 def _record_proven_classification(
@@ -1518,6 +1531,7 @@ def cmd_execute_fallback(configuration: control.Configuration, arguments: argpar
         sealed="true" if outcome.sealed_result else "false",
         result_artifact=state.fallback_result_artifact_name(arguments.authorization_id),
         attestation_sha256=attestation,
+        fallback_model=json.dumps(isolation.model, sort_keys=True, separators=(",", ":")) if isolation.model else "",
     )
     return 0
 
@@ -1775,6 +1789,8 @@ def _parser() -> argparse.ArgumentParser:
     # ADR 0041 F8: the armed canary's gateway refusal outputs from the primary executor job.
     step.add_argument("--canary-primary-refusals", default="")
     step.add_argument("--canary-refusal-digest", default="")
+    # ADR 0041 F5a: the fallback job's requested/observed model report.
+    step.add_argument("--fallback-model", default="")
     step.add_argument("--attestation-sha256", default="")
     step.add_argument("--job", choices=["bind-fallback"])
     resume = add("resume-bind", cmd_resume_bind)

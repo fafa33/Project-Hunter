@@ -391,6 +391,7 @@ jobs:
     outputs:
       advisory_code: ${{ steps.execute.outputs.advisory_code }}
       attestation_sha256: ${{ steps.execute.outputs.attestation_sha256 }}
+      fallback_model: ${{ steps.execute.outputs.fallback_model }}
     env:
       ISSUE: ${{ inputs.issue }}
       AUTHORIZATION_ID: ${{ inputs.authorization_id }}
@@ -482,9 +483,10 @@ jobs:
           ISSUE: ${{ inputs.issue }}
           ADVISORY: ${{ needs.execute-fallback.outputs.advisory_code }}
           ATTESTATION: ${{ needs.execute-fallback.outputs.attestation_sha256 }}
+          FALLBACK_MODEL: ${{ needs.execute-fallback.outputs.fallback_model }}
         run: >-
           python scripts/hunter_issue_agent_lifecycle.py step --role bind --job bind-fallback --issue "$ISSUE"
-          --advisory "$ADVISORY" --attestation-sha256 "$ATTESTATION"
+          --advisory "$ADVISORY" --attestation-sha256 "$ATTESTATION" --fallback-model "$FALLBACK_MODEL"
 
   resume-bind:
     name: resume-bind

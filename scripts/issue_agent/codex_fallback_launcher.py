@@ -56,11 +56,13 @@ STDERR_CATEGORIES = (
 )
 
 
-#: ADR 0041 F5 (owner decision, Issue #390 comment 6706666538): the served model must be proven, never assumed.
+#: ADR 0041 F5a (owner decisions, Issue #390 comments 6706666538 and 6706679138): the preferred model is requested,
+#: a permitted provider reroute is accepted, and the requested and observed models are recorded, never assumed.
 MAX_EVENT_STREAM = 8 * 1024 * 1024
 MAX_CATALOG = 4 * 1024 * 1024
-_REROUTE_MARKERS = (b"reroute", b"routed to")
-_UNKNOWN_MODEL_MARKER = b"model metadata for"
+_ROUTED_TO = re.compile(rb"routed to ([A-Za-z0-9][A-Za-z0-9._-]{0,63})")
+#: Closed provenance vocabulary. Only REPORTED and REROUTED name an observed model, and only from the CLI itself.
+MODEL_PROVENANCE = ("REPORTED", "REROUTED", "REROUTED_UNIDENTIFIED", "NOT_OBSERVED", "STREAM_INVALID")
 
 
 class Refused(Exception):
@@ -68,9 +70,10 @@ class Refused(Exception):
 
 
 def catalog_offers(catalog: bytes, model: str) -> bool:
-    """The signed-in session's own model catalog (``codex debug models``) lists exactly this slug, once.
+    """Whether the signed-in session's own catalog (``codex debug models``) lists exactly this slug, once.
 
-    Read before the prompt exists, so no model output can influence it. Anything unparsable is "not offered".
+    Read before the prompt exists, so no model output can influence it. Evidence only: a preferred model missing from
+    the catalog does not stop the run (the provider may serve a permitted alternative). Unparsable means "not listed".
     """
 
     if len(catalog) > MAX_CATALOG:
@@ -85,55 +88,70 @@ def catalog_offers(catalog: bytes, model: str) -> bool:
     return sum(isinstance(entry, dict) and entry.get("slug") == model for entry in models) == 1
 
 
-def model_identity(events: bytes, model: str) -> str:
-    """Verdict on the model that actually served the run, from the pinned CLI's own ``--json`` event stream.
+def _slug(value: object) -> str | None:
+    return value if isinstance(value, str) and MODEL.fullmatch(value) else None
+
+
+def model_provenance(events: bytes, model: str) -> tuple[str, str | None]:
+    """The observed model, from the pinned CLI's own ``--json`` event stream, and how it was observed.
 
     The stream is the Codex process's stdout pipe: every line is a CLI-built JSON event, and model-generated text
     (agent messages, command output) only ever appears JSON-escaped inside an item. That text is never consulted, so
-    it can neither prove nor forge an identity. Only the event structure and the CLI's own warning/error items are.
+    it can neither assert nor forge a model. Only event structure and the CLI's own error/warning items are read.
 
-    ``VERIFIED`` needs a complete, well-formed turn with no reroute and no unknown-model warning. A reroute is
-    ``REROUTED``; an unknown model, a malformed or oversized stream or a mismatching model field is ``AMBIGUOUS``; a
-    turn that never completed is ``UNVERIFIED``. Only ``VERIFIED`` lets a result leave the Mac.
+    - ``REROUTED``: the CLI reported a reroute (an event, or its own "routed to X" notice) naming the served model.
+    - ``REROUTED_UNIDENTIFIED``: a reroute was reported without a well-formed target.
+    - ``REPORTED``: an event's own ``model`` field named the served model (no reroute reported).
+    - ``NOT_OBSERVED``: the CLI never named the served model. Nothing is asserted, not even the requested model.
+    - ``STREAM_INVALID``: the stream is malformed or oversized, so nothing in it is used.
     """
 
     if len(events) > MAX_EVENT_STREAM:
-        return "AMBIGUOUS"
-    started = completed = failed = 0
-    ambiguous = False
+        return "STREAM_INVALID", None
+    reported: set[str] = set()
+    rerouted: list[str | None] = []
     for line in events.splitlines():
         if not line.strip():
             continue
         try:
             event = json.loads(line)
         except ValueError:
-            return "AMBIGUOUS"
+            return "STREAM_INVALID", None
         if not isinstance(event, dict) or not isinstance(event.get("type"), str):
-            return "AMBIGUOUS"
-        kind = event["type"]
-        item = event.get("item") if isinstance(event.get("item"), dict) else {}
-        item_kind = item.get("type") if isinstance(item.get("type"), str) else ""
-        if "reroute" in kind.lower() or "reroute" in item_kind.lower():
-            return "REROUTED"
-        for scope in (event, item):
-            served = scope.get("model")
-            if served is not None and served != model:
-                return "REROUTED" if isinstance(served, str) else "AMBIGUOUS"
-        if kind == "error" or item_kind == "error":
-            message = event.get("message") if kind == "error" else item.get("message")
-            text = message.lower().encode() if isinstance(message, str) else b""
-            if any(marker in text for marker in _REROUTE_MARKERS):
-                return "REROUTED"
-            if _UNKNOWN_MODEL_MARKER in text:
-                ambiguous = True
-        started += kind == "thread.started"
-        completed += kind == "turn.completed"
-        failed += kind == "turn.failed"
-    if ambiguous:
-        return "AMBIGUOUS"
-    if started != 1 or completed < 1 or failed:
-        return "UNVERIFIED"
-    return "VERIFIED"
+            return "STREAM_INVALID", None
+        raw_item = event.get("item")
+        item: dict[str, object] = raw_item if isinstance(raw_item, dict) else {}
+        kinds = (event["type"].lower(), str(item.get("type", "")).lower())
+        if any("reroute" in kind for kind in kinds):
+            scope = item if "reroute" in kinds[1] else event
+            rerouted.append(_slug(scope.get("to_model")))
+            continue
+        if "error" in kinds:
+            message = event.get("message") if kinds[0] == "error" else item.get("message")
+            match = _ROUTED_TO.search(message.encode()) if isinstance(message, str) else None
+            if match is not None:
+                rerouted.append(_slug(match.group(1).decode()))
+            continue
+        if "agent_message" in kinds or "command_execution" in kinds:
+            continue  # model-influenced content is never evidence
+        scopes: tuple[dict[str, object], ...] = (event, item)
+        for scope in scopes:
+            if "model" in scope:
+                served = _slug(scope["model"])
+                if served is None:
+                    return "STREAM_INVALID", None
+                reported.add(served)
+    if rerouted:
+        targets = set(rerouted)
+        if None in targets or len(targets) != 1:
+            return "REROUTED_UNIDENTIFIED", None
+        return "REROUTED", targets.pop()
+    if len(reported) == 1:
+        served = reported.pop()
+        return ("REPORTED", served) if served == model else ("REROUTED", served)
+    if reported:
+        return "REROUTED_UNIDENTIFIED", None
+    return "NOT_OBSERVED", None
 
 
 def validate_request(header: object, prompt: bytes) -> dict[str, str]:
@@ -344,7 +362,7 @@ def run_codex(request: dict[str, str], prompt: bytes) -> dict[str, object]:
 
 
 def _signed_in_run(request: dict[str, str], prompt: bytes, workspace: Path, home: Path) -> dict[str, object]:
-    # Before any prompt: the signed-in session must offer exactly the pinned model, or no model runs.
+    # Before any prompt: whether the signed-in session lists the preferred model (evidence, not a gate).
     catalog_code, catalog, _ = _run(
         sandbox_argv(workspace, home, [str(CODEX_BINARY), "debug", "models", *codex_common()]),
         model_environment(home),
@@ -352,8 +370,7 @@ def _signed_in_run(request: dict[str, str], prompt: bytes, workspace: Path, home
     )
     if catalog_code in SETUP_EXITS:
         return {"status": "SANDBOX_SETUP_FAILED"}
-    if catalog_code != 0 or not catalog_offers(catalog, request["model"]):
-        return {"status": "MODEL_UNAVAILABLE"}
+    listed = catalog_code == 0 and catalog_offers(catalog, request["model"])
     code, out, err = _run(
         sandbox_argv(workspace, home, codex_exec_argv(request["model"], workspace)),
         model_environment(home),
@@ -362,11 +379,17 @@ def _signed_in_run(request: dict[str, str], prompt: bytes, workspace: Path, home
     )
     if code in SETUP_EXITS:
         return {"status": "SANDBOX_SETUP_FAILED"}
+    provenance, observed = model_provenance(out, request["model"])
     return {
         "status": "COMPLETED",
         "exit": "TIMEOUT" if code == -1 else ("ZERO" if code == 0 else "NONZERO"),
         "stderr_category": classify(err[:65536]),
-        "model_identity": model_identity(out, request["model"]),
+        "model": {
+            "requested": request["model"],
+            "requested_listed": listed,
+            "observed": observed,
+            "provenance": provenance,
+        },
     }
 
 
