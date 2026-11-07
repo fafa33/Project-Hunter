@@ -45,6 +45,11 @@ PUSH_TOKEN_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_PUSH_TOKEN"
 #: Read-only credential (Administration: read + Metadata: read, this repository only) used solely to observe the
 #: live ruleset contract. It has no push, PR or other authority and is never a fallback for, or from, any other token.
 HGCC_TOKEN_ENV = "HUNTER_HGCC_READ_TOKEN"
+#: The validate job's own job-scoped ``GITHUB_TOKEN`` (``actions: read`` only), handed to its trusted intake steps
+#: solely for the ledger's run-provenance reads (AT-44). Anonymous reads share a 60/hour per-runner-IP budget that a
+#: long ledger exhausts on its own (Issue #577). It is removed from the environment when read, so no subprocess,
+#: and never the credential-free isolation uid, inherits it. Absent, the reads stay anonymous exactly as before.
+PROVENANCE_TOKEN_ENV = "HUNTER_ISSUE_AGENT_PROVENANCE_TOKEN"
 PUBLISHER_SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_PUBLISHER_SIGNING_KEY"
 #: K_AUTH: the issuer key that mints both an Issue authorization and a remediation authorization (ADR 0039 L4).
 AUTHORIZATION_SIGNING_KEY_ENV = "HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY"
@@ -140,8 +145,24 @@ def _writer(role: str, job: str, workflow: str = control.LIFECYCLE_WORKFLOW) -> 
     return control.Writer(workflow, job, role, run_id, attempt, head_sha)
 
 
-def _ledger_access(configuration: control.Configuration) -> roles.LedgerAccess:
-    github = _github(configuration, authenticated=False)
+def _provenance_github(configuration: control.Configuration) -> control.GitHubRest:
+    """The read client for one role step's ledger access: the job's read-only token when provisioned, else anonymous.
+
+    The token is popped from the environment here, before any subprocess starts, so it lives only in this trusted
+    process's request headers.
+    """
+
+    token = os.environ.pop(PROVENANCE_TOKEN_ENV, "").strip()
+    return control.GitHubRest(configuration.repository, token or None)
+
+
+def _ledger_access(
+    configuration: control.Configuration, github: control.GitHubRest | None = None
+) -> roles.LedgerAccess:
+    """One verified-ledger reader. Callers that verify the chain more than once in a step share one instance, so each
+    distinct writer run is observed once per step rather than once per verification (Issue #577)."""
+
+    github = github or _provenance_github(configuration)
     return roles.LedgerAccess(
         _store(configuration, authenticated=False), configuration.trust, control.run_provenance(github, configuration)
     )
@@ -1301,8 +1322,13 @@ def cmd_authorize_commit(configuration: control.Configuration, arguments: argpar
 # --- role jobs -----------------------------------------------------------------------------------------------
 
 
-def _view(configuration: control.Configuration, issue: int, authorization_id: str) -> state.AuthorizationView:
-    access = _ledger_access(configuration)
+def _view(
+    configuration: control.Configuration,
+    issue: int,
+    authorization_id: str,
+    access: roles.LedgerAccess | None = None,
+) -> state.AuthorizationView:
+    access = access or _ledger_access(configuration)
     _, entries = access.store.read(issue)
     view = state.verify_chain(
         [entry.record for entry in entries],
@@ -1501,7 +1527,8 @@ def cmd_execute_fallback(configuration: control.Configuration, arguments: argpar
     run_id, attempt, _ = _run_context()
     if getattr(configuration, "fallback_handoff_recipient", None) is None:
         raise LifecycleRefused("MISSING_CONFIGURATION", "no fallback recipient is provisioned")
-    view = _view(configuration, arguments.issue, arguments.authorization_id)
+    access = _ledger_access(configuration)
+    view = _view(configuration, arguments.issue, arguments.authorization_id, access)
     if view.state != state.FALLBACK_AUTHORIZED:
         raise roles.RoleRefused("EXECUTION_NOT_STARTED", "no signed FALLBACK_AUTHORIZED record on the ledger")
     os.environ["HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"] = configuration.prompt_verifying_key
@@ -1517,7 +1544,7 @@ def cmd_execute_fallback(configuration: control.Configuration, arguments: argpar
             issue=arguments.issue,
             authorization_id=arguments.authorization_id,
             context=roles.RoleContext(run_id, attempt),
-            ledger=_ledger_access(configuration),
+            ledger=access,
             handoff_envelope=Path(arguments.handoff).read_bytes(),
             config=roles.ExecutorConfig(
                 remote=_remote(configuration),
@@ -1571,13 +1598,15 @@ def _write_outcome(path: str, document: Mapping[str, Any]) -> None:
 
 
 def cmd_validate(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
-    view = _view(configuration, arguments.issue, arguments.authorization_id)
+    github = _provenance_github(configuration)
+    access = _ledger_access(configuration, github)
+    view = _view(configuration, arguments.issue, arguments.authorization_id, access)
     try:
         receipt = roles.run_validator(
             issue=arguments.issue,
             authorization_id=arguments.authorization_id,
             repository=configuration.repository,
-            ledger=_ledger_access(configuration),
+            ledger=access,
             result_envelope=Path(arguments.result).read_bytes(),
             result_key=_x25519(RESULT_KEY_ENV),
             trusted_repo=Path(arguments.trusted_repo),
@@ -1585,7 +1614,7 @@ def cmd_validate(configuration: control.Configuration, arguments: argparse.Names
             writer=configuration.writer,
             validation_definition=_digest_files(VALIDATION_DEFINITION_FILES),
             toolchain_sha256=_digest_files(TOOLCHAIN_FILES, extra=sys.version),
-            remediation=_promotion_port(configuration, _github(configuration, authenticated=False)),
+            remediation=_promotion_port(configuration, github),
         )
     except roles.RoleRefused as error:
         if error.code not in state.VALIDATION_REFUSAL_CODES:
@@ -1716,7 +1745,7 @@ def cmd_publish(configuration: control.Configuration, arguments: argparse.Namesp
             issue=arguments.issue,
             authorization_id=arguments.authorization_id,
             repository=configuration.repository,
-            ledger=_ledger_access(configuration),
+            ledger=_ledger_access(configuration, github),
             result_envelope=Path(arguments.result).read_bytes(),
             result_key=_x25519(RESULT_KEY_ENV),
             trusted_repo=Path(arguments.trusted_repo),
@@ -1728,7 +1757,7 @@ def cmd_publish(configuration: control.Configuration, arguments: argparse.Namesp
             signing_key=str(signing_key),
             push_url=_remote(configuration),
             push_config=(("http.extraheader", header),),
-            derive_promotion=_promotion_port(configuration, _github(configuration, authenticated=False)).promote,
+            derive_promotion=_promotion_port(configuration, github).promote,
         )
     except roles.RoleRefused as error:
         if error.code not in state.PUBLICATION_REFUSAL_CODES:
