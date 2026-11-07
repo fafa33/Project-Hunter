@@ -401,14 +401,14 @@ jobs:
         with:
           ref: ${{ needs.resume-bind.outputs.control_sha || github.sha }}
           persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
-        with:
-          python-version: "3.11.13"
+      - name: Verify provisioned macOS Python runtime
+        run: |
+          set -euo pipefail
+          /usr/local/bin/python3 -c 'import platform, sys; assert sys.version_info[:2] == (3, 11) and platform.machine() == "x86_64"'
       - name: Install pinned runtime into a per-run environment
         run: |
           set -euo pipefail
-          python -m venv "$RUNNER_TEMP/venv"
+          /usr/local/bin/python3 -m venv "$RUNNER_TEMP/venv"
           "$RUNNER_TEMP/venv/bin/python" -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
           echo "$RUNNER_TEMP/venv/bin" >> "$GITHUB_PATH"
       - name: Read the bound fallback handoff from the ledger

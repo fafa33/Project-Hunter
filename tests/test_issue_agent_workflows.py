@@ -295,6 +295,20 @@ def test_only_the_admitted_fallback_runs_on_the_self_hosted_host() -> None:
     assert any(step.get("if") == "always()" and "hunter-fallback/work" in str(step.get("run")) for step in steps(job))
 
 
+def test_fallback_mac_uses_preprovisioned_python_without_hosted_toolcache() -> None:
+    job = load(LIFECYCLE)["jobs"]["execute-fallback"]
+    job_steps = list(steps(job))
+    assert not any(str(step.get("uses", "")).startswith("actions/setup-python@") for step in job_steps)
+    runtime = next(step for step in job_steps if step.get("name") == "Verify provisioned macOS Python runtime")
+    assert "/usr/local/bin/python3" in runtime["run"]
+    assert "sys.version_info[:2] == (3, 11)" in runtime["run"]
+    install = next(
+        step for step in job_steps if step.get("name") == "Install pinned runtime into a per-run environment"
+    )
+    assert '/usr/local/bin/python3 -m venv "$RUNNER_TEMP/venv"' in install["run"]
+    assert "requirements/ci-constraints.txt" in install["run"]
+
+
 @pytest.mark.parametrize(
     "runs_on,expected",
     [
