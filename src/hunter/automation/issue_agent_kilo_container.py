@@ -10,13 +10,17 @@ import ast
 import hashlib
 import ipaddress
 import json
+import os
 import re
+import sqlite3
+import stat
 import subprocess
 import tempfile
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
+from typing import Final
 from urllib.parse import urlunsplit
 
 from hunter.automation.issue_agent_roles import RoleRefused, stderr_category
@@ -68,6 +72,95 @@ def stderr_structure(sample: bytes) -> dict[str, str]:
                 found = next((int(m) for m in _STATUS.findall(line) if int(m) in _REPORTED_STATUSES), None)
                 status = str(found) if found is not None else "none"
     return {**{name: str(value) for name, value in counts.items()}, "http_status": status}
+
+
+#: Issue #577: Kilo's own session store under the isolated home (``XDG_DATA_HOME=/hunter-home/.local/share``).
+KILO_SESSION_STORE: Final = (".local", "share", "kilo", "kilo.db")
+_SESSION_STORE_LIMIT = 64 * 1024 * 1024
+#: The CLI's closed session-error names (OpenCode ``MessageV2``); any other recorded name is reported as ``OTHER``.
+_SESSION_ERRORS: Final = frozenset(
+    {
+        "APIError",
+        "ProviderAuthError",
+        "UnknownError",
+        "MessageOutputLengthError",
+        "MessageAbortedError",
+        "ContextOverflowError",
+        "StructuredOutputError",
+    }
+)
+_FINISH_REASONS: Final = frozenset({"stop", "length", "tool-calls", "content-filter", "error", "other", "unknown"})
+_NO_SESSION: Final = {"error": "none", "status": "none", "retryable": "none", "finish": "none", "tool_errors": "0"}
+
+
+def _private_copy(source: Path, target: Path) -> bool:
+    """Copy one regular file the isolated uid wrote, never following a link and never beyond the size bound."""
+
+    try:
+        descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        return False
+    with os.fdopen(descriptor, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode) or info.st_size > _SESSION_STORE_LIMIT:
+            raise OSError("not a bounded regular file")
+        target.write_bytes(handle.read(_SESSION_STORE_LIMIT + 1)[:_SESSION_STORE_LIMIT])
+    return True
+
+
+def kilo_session_outcome(home: Path) -> dict[str, str]:
+    """Issue #577: the CLI's own record of why its last turn ended, in a closed vocabulary only.
+
+    Kilo stores each assistant turn with a structured ``error`` (``name``, ``data.statusCode``,
+    ``data.isRetryable``) and a ``finish`` reason. The trusted step reads a private copy of that store after the
+    container has exited: no link is followed, no directory is trusted, the untrusted file is never opened in place,
+    and SQLite runs with ``trusted_schema=OFF`` and ``query_only``. Only allowlisted names, an allowlisted status,
+    a boolean and a count leave this function, never a message. The model's uid wrote the store, so the outline is
+    diagnostic only: it never feeds a ledger decision or fallback admission.
+    """
+
+    try:
+        current = home
+        for name in KILO_SESSION_STORE[:-1]:
+            current = current / name
+            if not stat.S_ISDIR(os.lstat(current).st_mode):
+                return {**_NO_SESSION, "error": "UNREADABLE"}
+        store = current / KILO_SESSION_STORE[-1]
+        with tempfile.TemporaryDirectory(prefix="hunter-kilo-session-") as private:
+            copy = Path(private) / "kilo.db"
+            if not _private_copy(store, copy):
+                return {**_NO_SESSION, "error": "ABSENT"}
+            _private_copy(store.with_name(store.name + "-wal"), Path(private) / "kilo.db-wal")
+            connection = sqlite3.connect(copy)
+            try:
+                connection.execute("PRAGMA trusted_schema=OFF")
+                connection.execute("PRAGMA query_only=ON")
+                row = connection.execute(
+                    "SELECT json_extract(data, '$.error.name'), json_extract(data, '$.error.data.statusCode'),"
+                    " json_extract(data, '$.error.data.isRetryable'), json_extract(data, '$.finish')"
+                    " FROM message WHERE json_extract(data, '$.role') = 'assistant'"
+                    " ORDER BY time_created DESC, id DESC LIMIT 1"
+                ).fetchone()
+                (tool_errors,) = connection.execute(
+                    "SELECT count(*) FROM part WHERE json_extract(data, '$.type') = 'tool'"
+                    " AND json_extract(data, '$.state.status') = 'error'"
+                ).fetchone()
+            finally:
+                connection.close()
+    except FileNotFoundError:
+        return {**_NO_SESSION, "error": "ABSENT"}
+    except (OSError, sqlite3.Error, ValueError):
+        return {**_NO_SESSION, "error": "UNREADABLE"}
+    if row is None:
+        return {**_NO_SESSION, "tool_errors": str(min(int(tool_errors), 999))}
+    name, status, retryable, finish = row
+    return {
+        "error": "none" if name is None else name if name in _SESSION_ERRORS else "OTHER",
+        "status": str(status) if type(status) is int and status in _REPORTED_STATUSES else "none",
+        "retryable": {1: "true", 0: "false"}.get(retryable, "none") if type(retryable) is int else "none",
+        "finish": "none" if finish is None else finish if finish in _FINISH_REASONS else "OTHER",
+        "tool_errors": str(min(int(tool_errors), 999)) if type(tool_errors) is int else "none",
+    }
 
 
 def gateway_refusals(log: str) -> tuple[list[str], int]:
@@ -473,6 +566,11 @@ class KiloContainerIsolation:
             print(
                 "isolated Kilo stderr structure: "
                 + " ".join(f"{name}={value}" for name, value in stderr_structure(result.stderr).items()),
+                flush=True,
+            )
+            print(
+                "isolated Kilo session outcome: "
+                + " ".join(f"{name}={value}" for name, value in kilo_session_outcome(self.home).items()),
                 flush=True,
             )
         print(
