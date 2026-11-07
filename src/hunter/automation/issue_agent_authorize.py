@@ -221,7 +221,9 @@ def fallback_canary_armed(
     signed ``issue_updated_at``. The canary is armed only if the last canary label event strictly before it is the
     owner's ``labeled`` event, and that event is later than the owner's previous authorizing label event, so one
     arming never carries over to another authorization. Anything else, including a label applied after the
-    authorizing event or by anyone but the owner, leaves the canary unarmed. A malformed label event raises.
+    authorizing event or by anyone but the owner, leaves the canary unarmed. Event times have one-second resolution:
+    any canary event sharing a second with an authorizing event, or a deciding second holding anything but the
+    owner's arming, is ambiguous and leaves the canary unarmed (fail closed). A malformed label event raises.
     """
 
     relevant: list[tuple[datetime, int, str, str, str]] = []
@@ -244,13 +246,22 @@ def fallback_canary_armed(
     ]
     if not authorizing:
         return False
+    current = authorizing[-1]
+    previous = authorizing[-2] if len(authorizing) > 1 else None
     canary = [(at, kind, actor) for at, _, kind, label, actor in relevant if label == FALLBACK_CANARY_LABEL]
-    before = [entry for entry in canary if entry[0] < authorizing[-1]]
+    # GitHub stamps events to the second, so order within one second is unknowable. Any canary event in the second
+    # of this or the previous authorizing event is ambiguous (a same-second removal may precede authorization), and
+    # an ambiguity always leaves the canary unarmed.
+    if any(at in (current, previous) for at, _, _ in canary):
+        return False
+    before = [entry for entry in canary if entry[0] < current]
     if not before:
         return False
-    at, kind, actor = before[-1]
-    previous = authorizing[-2] if len(authorizing) > 1 else None
-    return kind == "labeled" and actor == owner_login and (previous is None or at > previous)
+    last = before[-1][0]
+    # Every canary event in the deciding second must be the owner's arming; any other event there is ambiguous.
+    if any(kind != "labeled" or actor != owner_login for at, kind, actor in before if at == last):
+        return False
+    return previous is None or last > previous
 
 
 def _plus(timestamp: str, delta: timedelta) -> str:

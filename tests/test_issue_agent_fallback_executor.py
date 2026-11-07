@@ -130,12 +130,29 @@ def offer_and_admit(
             {
                 "primary_executor_job_id": 5,
                 "primary_executor_conclusion": "success",
-                "primary_cause": "RATE_LIMIT",
-                "stderr_category": "RATE_LIMIT",
-                "probe_category": "RATE_LIMIT",
                 "primary_result_artifacts": 0,
                 "fallback_executor": "codex",
                 "fallback_execution_id": fallback_id,
+                **(
+                    {
+                        # ADR 0041 F8: a canary-armed authorization admits only its own canary.
+                        "primary_cause": "CANARY_NETWORK",
+                        "stderr_category": "NETWORK",
+                        "probe_category": "NETWORK",
+                        "canary_refusal": {
+                            "provider_host": state.CANARY_PROVIDER_HOST,
+                            "primary_refusals": 3,
+                            "probe_refusals": 1,
+                            "refusal_digest": "d" * 64,
+                        },
+                    }
+                    if canary
+                    else {
+                        "primary_cause": "RATE_LIMIT",
+                        "stderr_category": "RATE_LIMIT",
+                        "probe_category": "RATE_LIMIT",
+                    }
+                ),
             },
             "bind",
         )

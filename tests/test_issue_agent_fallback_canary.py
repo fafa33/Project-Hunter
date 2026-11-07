@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import test_issue_agent_fallback_executor as fx
 import test_issue_agent_roles as base
 from test_issue_agent_fallback_executor import offer_and_admit
 from test_issue_agent_fallback_ledger import FALLBACK_ID, admitted_evidence, facts, offered, offered_evidence
@@ -334,6 +335,65 @@ def test_a_rearmed_canary_applies_to_the_next_authorization_only() -> None:
     )
 
 
+ARMED_EARLY = _label("labeled", CANARY_LABEL, "2026-11-07T11:00:00Z")
+
+
+@pytest.mark.parametrize(
+    "events",
+    [
+        # Codex P2 (PR #693): a removal in the authorizing event's own second, listed before or after it
+        [ARMED_EARLY, _label("unlabeled", CANARY_LABEL, AT), _label("labeled", EXECUTE, AT)],
+        [ARMED_EARLY, _label("labeled", EXECUTE, AT), _label("unlabeled", CANARY_LABEL, AT)],
+        # the same, by an unauthorized actor (a removal by anyone withdraws or makes it ambiguous)
+        [ARMED_EARLY, _label("unlabeled", CANARY_LABEL, AT, "mallory"), _label("labeled", EXECUTE, AT)],
+        # an arming in the authorizing second, by the owner or anyone else
+        [_label("labeled", EXECUTE, AT), _label("labeled", CANARY_LABEL, AT)],
+        [_label("labeled", CANARY_LABEL, AT, "mallory"), _label("labeled", EXECUTE, AT)],
+        # arm and remove in one earlier second: their order is unknowable
+        [
+            _label("labeled", CANARY_LABEL, "2026-11-07T12:00:00Z"),
+            _label("unlabeled", CANARY_LABEL, "2026-11-07T12:00:00Z"),
+            _label("labeled", EXECUTE, AT),
+        ],
+        [
+            _label("unlabeled", CANARY_LABEL, "2026-11-07T12:00:00Z"),
+            _label("labeled", CANARY_LABEL, "2026-11-07T12:00:00Z"),
+            _label("labeled", EXECUTE, AT),
+        ],
+        # the owner's arming shares its second with a non-owner's arming
+        [
+            _label("labeled", CANARY_LABEL, "2026-11-07T12:00:00Z", "mallory"),
+            _label("labeled", CANARY_LABEL, "2026-11-07T12:00:00Z"),
+            _label("labeled", EXECUTE, AT),
+        ],
+        # replay: an arming in the second of the previous authorizing event never carries over
+        [
+            _label("labeled", EXECUTE, "2026-11-07T10:00:05Z"),
+            _label("labeled", CANARY_LABEL, "2026-11-07T10:00:05Z"),
+            _label("labeled", EXECUTE, AT),
+        ],
+        # replay: two authorizing events in one second (the previous one is this one's twin)
+        [
+            _label("labeled", CANARY_LABEL, "2026-11-07T12:00:00Z"),
+            _label("labeled", EXECUTE, AT),
+            _label("labeled", EXECUTE, AT),
+        ],
+    ],
+)
+def test_any_same_second_ambiguity_leaves_the_canary_unarmed(events: list[dict[str, Any]]) -> None:
+    assert not _armed(*events)
+
+
+def test_a_removal_before_authorization_disarms_and_a_later_rearm_rearms() -> None:
+    removed = [ARMED_EARLY, _label("unlabeled", CANARY_LABEL, "2026-11-07T11:30:00Z")]
+    assert not _armed(*removed, _label("labeled", EXECUTE, AT))
+    assert _armed(*removed, _label("labeled", CANARY_LABEL, "2026-11-07T12:00:00Z"), _label("labeled", EXECUTE, AT))
+
+
+def test_an_unambiguous_owner_arming_one_second_earlier_is_armed() -> None:
+    assert _armed(_label("labeled", CANARY_LABEL, "2026-11-07T12:00:09Z"), _label("labeled", EXECUTE, AT))
+
+
 def test_a_malformed_label_event_is_indefinite_not_unarmed() -> None:
     with pytest.raises(ValueError):
         _armed({"event": "labeled", "label": {"name": CANARY_LABEL}, "created_at": AT})
@@ -521,3 +581,52 @@ def test_an_armed_primary_that_succeeds_is_never_observed(repos: dict[str, Any],
 def test_an_armed_canary_never_runs_without_the_kilo_gateway(repos: dict[str, Any]) -> None:
     with pytest.raises(roles.RoleRefused, match="Kilo gateway"):
         _run(repos, RecordingIsolation(CANARY, fail=True), canary=True, argv=("opencode", "run"))
+
+
+# --- SPM/DPM signed-context continuity through the canary's Kilo -> Codex fallback ------------------------------
+
+
+def test_the_canary_fallback_gives_codex_the_identical_signed_prompt_and_lineage(
+    repos: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ledger, _primary, second = offer_and_admit(repos, canary=True)
+    view = ledger.view.authorizations[AUTH]
+    bound = view.evidence[state.AUTHORIZED]
+    assert view.state == state.FALLBACK_AUTHORIZED and bound["fallback_canary"] is True
+    assert view.evidence[state.FALLBACK_AUTHORIZED]["primary_cause"] == "CANARY_NETWORK"
+    seen: list[bytes] = []
+
+    def codex(workspace: Path, prompt: bytes) -> dict[str, Any]:
+        seen.append(prompt)
+        return fx.codex_edits(workspace, prompt)
+
+    port = fx.mac_port(tmp_path, monkeypatch, codex)
+    outcome = fx.run(ledger, second, fx.fallback_config(repos), port, fx.mac.WORK_ROOT / fx.WORKROOT_ID)
+    assert outcome.advisory_code is None and outcome.sealed_result
+    # The prompt Codex received is the SPM-compiled prompt bound at authorization, byte for byte, and the signed
+    # lineage (build record, DPM context, handoff) is the primary's: the canary changes no signed context.
+    assert len(seen) == 1 and state.sha256_hex(seen[0]) == bound["lineage"]["prompt_sha256"]
+    reference = ledger.view.authorizations[AUTH].evidence[state.AUTHORIZED]["lineage"]
+    assert reference == bound["lineage"] and set(reference) >= {
+        "build_record_id",
+        "dpm_context_sha256",
+        "handoff_sha256",
+    }
+
+
+@pytest.mark.parametrize("attack", ["tampered-fallback-seal", "primary-seal"])
+def test_the_canary_fallback_refuses_any_handoff_but_the_signed_x_fb_seal(
+    repos: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, attack: str
+) -> None:
+    ledger, primary, second = offer_and_admit(repos, canary=True)
+    envelope = primary if attack == "primary-seal" else second[:-1] + bytes([second[-1] ^ 1])
+    launched: list[bytes] = []
+
+    def codex(workspace: Path, prompt: bytes) -> dict[str, Any]:
+        launched.append(prompt)
+        return {}
+
+    port = fx.mac_port(tmp_path, monkeypatch, codex)
+    with pytest.raises(roles.RoleRefused) as refused:
+        fx.run(ledger, envelope, fx.fallback_config(repos), port, fx.mac.WORK_ROOT / fx.WORKROOT_ID)
+    assert refused.value.code == "TRANSPORT_INTEGRITY_FAILED" and launched == []
