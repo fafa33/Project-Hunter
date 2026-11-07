@@ -313,3 +313,162 @@ def test_only_a_non_zero_exit_prints_the_stderr_outline(
         "http_status=502" in out
     ) is printed
     assert "stderr_category=UNCLASSIFIED" in out  # the closed category and its fallback consequence are unchanged
+
+
+# --- Issue #577: the CLI's own closed record of why the last turn ended -------------------------------------------
+
+import sqlite3  # noqa: E402
+
+
+def _session_store(home: Path, *messages: dict, parts: tuple[dict, ...] = (), wal: bool = False) -> Path:
+    store_dir = home.joinpath(*kilo_port.KILO_SESSION_STORE[:-1])
+    store_dir.mkdir(parents=True, exist_ok=True)
+    store = store_dir / kilo_port.KILO_SESSION_STORE[-1]
+    connection = sqlite3.connect(store)
+    if wal:
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA wal_autocheckpoint=0")
+    connection.execute("CREATE TABLE message (id text, session_id text, time_created integer, data text)")
+    connection.execute("CREATE TABLE part (id text, message_id text, session_id text, time_created integer, data text)")
+    for index, message in enumerate(messages):
+        connection.execute("INSERT INTO message VALUES (?, 's', ?, ?)", (f"m{index}", index, json.dumps(message)))
+    for index, part in enumerate(parts):
+        connection.execute("INSERT INTO part VALUES (?, 'm0', 's', ?, ?)", (f"p{index}", index, json.dumps(part)))
+    connection.commit()
+    if not wal:
+        connection.close()
+    return store
+
+
+def test_the_last_assistant_turn_reports_its_closed_error_status_and_retryability(tmp_path: Path) -> None:
+    _session_store(
+        tmp_path,
+        {"role": "user"},
+        {"role": "assistant", "finish": "tool-calls"},
+        {
+            "role": "assistant",
+            "error": {
+                "name": "APIError",
+                "data": {"message": "upstream said sk-SECRET", "statusCode": 503, "isRetryable": True},
+            },
+        },
+        parts=(
+            {"type": "tool", "state": {"status": "error", "error": "oldString not found"}},
+            {"type": "tool", "state": {"status": "completed"}},
+        ),
+    )
+    outcome = kilo_port.kilo_session_outcome(tmp_path)
+    assert outcome == {"error": "APIError", "status": "503", "retryable": "true", "finish": "none", "tool_errors": "1"}
+    assert "SECRET" not in json.dumps(outcome) and "oldString" not in json.dumps(outcome)
+
+
+@pytest.mark.parametrize(
+    "message,expected",
+    [
+        ({"role": "assistant", "finish": "stop"}, {"error": "none", "finish": "stop"}),
+        ({"role": "assistant", "finish": "length"}, {"error": "none", "finish": "length"}),
+        (
+            {"role": "assistant", "error": {"name": "Injected sk-SECRET text", "data": {"statusCode": 418}}},
+            {"error": "OTHER", "status": "none"},
+        ),
+        (
+            {
+                "role": "assistant",
+                "error": {"name": "UnknownError", "data": {"statusCode": "503"}},
+                "finish": "free text",
+            },
+            {"error": "UnknownError", "status": "none", "finish": "OTHER"},
+        ),
+        (
+            {"role": "assistant", "error": {"name": "MessageAbortedError", "data": {"isRetryable": "yes"}}},
+            {"error": "MessageAbortedError", "retryable": "none"},
+        ),
+    ],
+)
+def test_anything_outside_the_closed_vocabulary_is_never_echoed(tmp_path: Path, message: dict, expected: dict) -> None:
+    _session_store(tmp_path, message)
+    outcome = kilo_port.kilo_session_outcome(tmp_path)
+    assert {key: outcome[key] for key in expected} == expected
+    assert "SECRET" not in json.dumps(outcome) and "free text" not in json.dumps(outcome)
+
+
+def test_an_uncheckpointed_write_ahead_log_is_still_read_from_the_private_copy(tmp_path: Path) -> None:
+    store = _session_store(tmp_path, {"role": "assistant", "error": {"name": "APIError", "data": {}}}, wal=True)
+    assert store.with_name(store.name + "-wal").stat().st_size > 0
+    assert kilo_port.kilo_session_outcome(tmp_path)["error"] == "APIError"
+
+
+def test_a_missing_store_is_absent(tmp_path: Path) -> None:
+    assert kilo_port.kilo_session_outcome(tmp_path)["error"] == "ABSENT"
+
+
+def test_a_linked_store_or_directory_is_never_followed(tmp_path: Path) -> None:
+    elsewhere = tmp_path / "elsewhere"
+    _session_store(elsewhere, {"role": "assistant", "error": {"name": "APIError", "data": {}}})
+    linked_file = tmp_path / "file-home"
+    linked_file.joinpath(*kilo_port.KILO_SESSION_STORE[:-1]).mkdir(parents=True)
+    linked_file.joinpath(*kilo_port.KILO_SESSION_STORE).symlink_to(elsewhere.joinpath(*kilo_port.KILO_SESSION_STORE))
+    assert kilo_port.kilo_session_outcome(linked_file)["error"] == "UNREADABLE"
+    linked_dir = tmp_path / "dir-home"
+    linked_dir.joinpath(".local", "share").mkdir(parents=True)
+    linked_dir.joinpath(".local", "share", "kilo").symlink_to(elsewhere.joinpath(".local", "share", "kilo"))
+    assert kilo_port.kilo_session_outcome(linked_dir)["error"] == "UNREADABLE"
+
+
+def test_a_corrupt_or_oversized_store_is_unreadable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    store = tmp_path.joinpath(*kilo_port.KILO_SESSION_STORE)
+    store.parent.mkdir(parents=True)
+    store.write_bytes(b"not a database")
+    assert kilo_port.kilo_session_outcome(tmp_path)["error"] == "UNREADABLE"
+    _session_store(tmp_path / "big", {"role": "assistant"})
+    monkeypatch.setattr(kilo_port, "_SESSION_STORE_LIMIT", 16)
+    assert kilo_port.kilo_session_outcome(tmp_path / "big")["error"] == "UNREADABLE"
+
+
+@pytest.mark.parametrize("returncode,printed", [(1, True), (0, False)])
+def test_only_a_non_zero_exit_prints_the_session_outcome(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], returncode: int, printed: bool
+) -> None:
+    workspace, home = _roots(tmp_path)
+    _session_store(home, {"role": "assistant", "error": {"name": "APIError", "data": {"statusCode": 502}}})
+    isolation = KiloContainerIsolation(SCRIPTS)
+    isolation.workspace, isolation.home, isolation.started = workspace.resolve(), home.resolve(), True
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        return subprocess.CompletedProcess(args, returncode if args[0] == "run" else 0, b"", b"")
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
+        isolation.run(
+            ("kilo", "run"),
+            cwd=workspace,
+            public_env={"KILO_CONFIG_CONTENT": POLICY},
+            secret_env={},
+            stdin=b"",
+            timeout=1,
+        )
+    out = capsys.readouterr().out
+    line = "isolated Kilo session outcome: error=APIError status=502 retryable=none finish=none tool_errors=0"
+    assert (line in out) is printed
+    assert "stderr_category=UNCLASSIFIED" in out  # the closed category and the F2 admission it drives are unchanged
+
+
+def test_session_fifo_is_rejected_without_waiting_for_writer(tmp_path: Path) -> None:
+    directory = tmp_path.joinpath(*kilo_port.KILO_SESSION_STORE[:-1])
+    directory.mkdir(parents=True)
+    __import__("os").mkfifo(directory / kilo_port.KILO_SESSION_STORE[-1])
+    assert kilo_port.kilo_session_outcome(tmp_path)["error"] == "UNREADABLE"
+
+
+def test_untrusted_recursive_sqlite_view_has_bounded_query_budget(tmp_path: Path) -> None:
+    store = _session_store(tmp_path)
+    connection = sqlite3.connect(store)
+    connection.execute("DROP TABLE message")
+    connection.execute(
+        "CREATE VIEW message AS WITH RECURSIVE infinite(n) AS "
+        "(VALUES(1) UNION ALL SELECT n+1 FROM infinite) "
+        "SELECT cast(n as text) AS id, 's' AS session_id, n AS time_created, "
+        '\'{"role":"assistant"}\' AS data FROM infinite'
+    )
+    connection.commit()
+    connection.close()
+    assert kilo_port.kilo_session_outcome(tmp_path)["error"] == "UNREADABLE"
