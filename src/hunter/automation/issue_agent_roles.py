@@ -175,6 +175,8 @@ _STDERR_CATEGORIES: Final = (
     (b"connection refused", "NETWORK"),
     (b"connection reset", "NETWORK"),
     (b"network unreachable", "NETWORK"),
+    # The run's sole egress route refused the tunnel (Kilo CLI: "Proxy refused to open a tunnel: 403 Forbidden").
+    (b"proxy refused to open a tunnel", "NETWORK"),
     (b"provider unavailable", "PROVIDER_UNAVAILABLE"),
     (b"service unavailable", "PROVIDER_UNAVAILABLE"),
     (b"bad gateway", "PROVIDER_UNAVAILABLE"),

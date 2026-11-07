@@ -499,8 +499,18 @@ staged failure can never be mistaken for, or relabelled as, a real one.
   `CONNECT` it refuses for its host. The trusted step reads that instance's log before and after the probe. Evidence
   exists only when:
   - the primary was refused the provider host at least once;
-  - the probe was refused exactly once more;
-  - nothing else was refused or denied.
+  - after the agent exited, the only new refusal is the probe's single refusal of the provider host;
+  - no malformed request was denied.
+
+  "None for any other host" is enforced in this narrower form, because the pinned Kilo 7.8.18 also sends telemetry
+  to `us.i.posthog.com`. Both Kilo profiles refuse that host on every run, canary or not, so its refusal says
+  nothing about the canary. The canary profile differs from the Kilo profile only by the provider host, so any
+  other refused host is one the Kilo profile refuses too. Such hosts are bound into the digest but never counted.
+  This was observed by running the pinned CLI through this gateway in the canary profile.
+- *Stderr hint.* The pinned Kilo CLI reports a refused tunnel as `Proxy refused to open a tunnel: 403 Forbidden`.
+  The closed stderr vocabulary maps that text to `NETWORK`: the run's only egress route refused the connection.
+  Before this mapping, the text classified as `UNCLASSIFIED`, so the canary could never be admitted. For a run
+  that is not a canary, this changes nothing: the direct trusted probe still has to observe `NETWORK` itself.
 
   `FALLBACK_AUTHORIZED.canary_refusal` records `primary_refusals`, `probe_refusals` (always 1) and
   `refusal_digest`. The digest is the SHA-256 of the canonical JSON of the gateway instance name, the provider host

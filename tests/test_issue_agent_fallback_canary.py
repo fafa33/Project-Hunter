@@ -150,8 +150,10 @@ def test_refusal_evidence_binds_the_primary_and_one_probe_refusal() -> None:
         ([], [HOST], 0),  # the primary was never refused: its failure was something else
         ([HOST], [HOST], 0),  # the probe did not meet the refusal
         ([HOST], [HOST, HOST, HOST], 0),  # more than one probe refusal
-        ([HOST, "telemetry.example"], [HOST, "telemetry.example", HOST], 0),  # another host was refused
+        (["us.i.posthog.com"], ["us.i.posthog.com", HOST], 0),  # only telemetry was refused before the probe
         ([HOST], [HOST, "models.dev"], 0),  # the probe was refused for a different host
+        ([HOST], [HOST, HOST, "us.i.posthog.com"], 0),  # a refusal after the agent exited, besides the probe
+        ([HOST], ["us.i.posthog.com", HOST, HOST], 0),  # the log before the probe was rewritten
         ([HOST], [HOST, HOST], 1),  # a malformed request was denied
     ],
 )
@@ -159,6 +161,19 @@ def test_anything_but_exactly_the_canary_refusal_yields_no_evidence(
     primary: list[str], everything: list[str], other: int
 ) -> None:
     assert _evidence(primary, everything, other) is None
+
+
+def test_a_baseline_telemetry_refusal_is_bound_into_the_digest_but_never_counted() -> None:
+    # Observed with the pinned Kilo 7.8.18 through this gateway: telemetry is refused by both Kilo profiles.
+    primary = ["us.i.posthog.com", "us.i.posthog.com", HOST, HOST, HOST, "us.i.posthog.com"]
+    evidence = _evidence(primary, [*primary, HOST])
+    assert evidence is not None and evidence["primary_refusals"] == 3 and evidence["probe_refusals"] == 1
+    assert evidence != _evidence([HOST, HOST, HOST], [HOST, HOST, HOST, HOST])
+
+
+def test_the_pinned_kilo_tunnel_refusal_is_a_network_hint() -> None:
+    observed = b"\x1b[91m\x1b[1mError: \x1b[0mProxy refused to open a tunnel: 403 Forbidden\n"
+    assert roles.stderr_category(observed) == "NETWORK"
 
 
 def test_gateway_logs_are_parsed_without_content() -> None:

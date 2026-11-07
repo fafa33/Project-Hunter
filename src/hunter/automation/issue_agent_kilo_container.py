@@ -50,15 +50,15 @@ def gateway_refusals(log: str) -> tuple[list[str], int]:
 def canary_refusal_evidence(
     *, gateway_instance: str, provider_host: str, primary_hosts: Sequence[str], all_hosts: Sequence[str], other: int
 ) -> dict[str, object] | None:
-    """F8 evidence only when the primary was refused the provider, the probe exactly once more, and nothing else."""
-    primary = len(primary_hosts)
-    if (
-        primary < 1
-        or other
-        or len(all_hosts) != primary + 1
-        or list(all_hosts[:primary]) != list(primary_hosts)
-        or any(host != provider_host for host in all_hosts)
-    ):
+    """F8 evidence only when the primary was refused the provider and the probe exactly once more, and nothing else.
+
+    The canary profile is the Kilo profile minus the provider host, so any *other* refused host is one the Kilo
+    profile refuses on every run (Kilo 7.8.18 sends telemetry to ``us.i.posthog.com``); it says nothing about the
+    canary and is bound into the digest, not counted. A malformed request, or any refusal after the agent exited
+    other than the probe's single provider refusal, yields no evidence.
+    """
+    primary = sum(host == provider_host for host in primary_hosts)
+    if primary < 1 or other or list(all_hosts) != [*primary_hosts, provider_host]:
         return None
     digest = hashlib.sha256(
         json.dumps(
@@ -141,8 +141,12 @@ class KiloContainerIsolation:
         if inspected.returncode or not address.is_private or address.version != 4:
             return "UNCLASSIFIED", None
         category = probe((str(address), 8080))
-        after = self._docker("logs", self.gateway, timeout=15)
-        all_hosts, other = gateway_refusals((after.stdout + after.stderr).decode("utf-8", errors="replace"))
+        for _ in range(10):  # the log driver may lag the gateway's flushed line by a moment
+            after = self._docker("logs", self.gateway, timeout=15)
+            all_hosts, other = gateway_refusals((after.stdout + after.stderr).decode("utf-8", errors="replace"))
+            if len(all_hosts) > len(primary_hosts):
+                break
+            time.sleep(0.5)
         for index, host in enumerate(all_hosts, start=1):
             print(f"isolated gateway refusal: seq={index} host={host}", flush=True)
         evidence = canary_refusal_evidence(
@@ -153,7 +157,7 @@ class KiloContainerIsolation:
             other=other,
         )
         print(
-            f"isolated gateway canary: instance={self.gateway} primary_refusals={len(primary_hosts)} "
+            f"isolated gateway canary: instance={self.gateway} refused_before_probe={len(primary_hosts)} "
             f"total_refusals={len(all_hosts)} other_denials={other} "
             f"refusal_digest={'' if evidence is None else evidence['refusal_digest']}",
             flush=True,
