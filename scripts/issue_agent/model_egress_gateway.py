@@ -8,20 +8,33 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 import select
 import socket
 import socketserver
 
 MAX_HEADER = 4096
-ALLOWED_HOSTS = frozenset({"ai-gateway.kilo.ai", "models.dev"})
+#: The pinned Kilo provider host. ADR 0041 F8: the ``kilo-canary`` profile is the Kilo profile without it.
+KILO_PROVIDER_HOST = "ai-gateway.kilo.ai"
+ALLOWED_HOSTS = frozenset({KILO_PROVIDER_HOST, "models.dev"})
 #: ADR 0041 F5: the macOS Codex fallback gateway. ChatGPT-plan Codex signs in at auth.openai.com and runs against
 #: chatgpt.com. It listens on loopback only; the sandbox profile admits no other network destination.
 CODEX_ALLOWED_HOSTS = frozenset({"auth.openai.com", "chatgpt.com"})
 CODEX_LISTEN = ("127.0.0.1", 18443)
-PROFILES = {"kilo": (ALLOWED_HOSTS, ("0.0.0.0", 8080)), "codex": (CODEX_ALLOWED_HOSTS, CODEX_LISTEN)}  # noqa: S104
+PROFILES = {
+    "kilo": (ALLOWED_HOSTS, ("0.0.0.0", 8080)),  # noqa: S104
+    # ADR 0041 F8: armed only by the signed AUTHORIZED.fallback_canary flag, for one primary run's gateway instance.
+    "kilo-canary": (ALLOWED_HOSTS - {KILO_PROVIDER_HOST}, ("0.0.0.0", 8080)),  # noqa: S104
+    "codex": (CODEX_ALLOWED_HOSTS, CODEX_LISTEN),
+}
+#: One content-free line per well-formed CONNECT refused only because its host is outside the profile.
+REFUSED_HOST_MARKER = "GATEWAY_REFUSED_HOST"
+_HOSTNAME = re.compile(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")
 
 
-def permitted_target(request: bytes, allowed: frozenset[str] = ALLOWED_HOSTS) -> tuple[str, int] | None:
+def connect_target(request: bytes) -> tuple[str, int] | None:
+    """The ``host:443`` of one well-formed HTTP/1.1 ``CONNECT`` request, before any allowlist decision."""
+
     if len(request) > MAX_HEADER or b"\r\n\r\n" not in request:
         return None
     try:
@@ -30,13 +43,16 @@ def permitted_target(request: bytes, allowed: frozenset[str] = ALLOWED_HOSTS) ->
         if method != "CONNECT" or version != "HTTP/1.1" or target.count(":") != 1:
             return None
         host, port = target.split(":")
-        if host not in allowed or port != "443":
-            return None
-        if any(ord(ch) < 33 or ord(ch) > 126 for ch in host):
+        if port != "443" or _HOSTNAME.fullmatch(host) is None:
             return None
         return host, 443
     except (UnicodeError, ValueError):
         return None
+
+
+def permitted_target(request: bytes, allowed: frozenset[str] = ALLOWED_HOSTS) -> tuple[str, int] | None:
+    target = connect_target(request)
+    return target if target is not None and target[0] in allowed else None
 
 
 def public_addresses(host: str) -> list[tuple]:
@@ -64,7 +80,12 @@ class Handler(socketserver.BaseRequestHandler):
                 if not part:
                     break
                 header += part
-            target = permitted_target(header, self.allowed)
+            requested = connect_target(header)
+            target = requested if requested is not None and requested[0] in self.allowed else None
+            if requested is not None and target is None:
+                print(REFUSED_HOST_MARKER, requested[0], flush=True)
+                self.request.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                return
             if target is None:
                 print("GATEWAY_DENIED_CONNECT", repr(header.split(b"\r\n", 1)[0][:180]), flush=True)
                 self.request.sendall(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")

@@ -222,6 +222,7 @@ def cmd_step(configuration: control.Configuration, arguments: argparse.Namespace
                 executor_stderr_category=getattr(arguments, "stderr_category", "") or None,
                 executor_probe_category=getattr(arguments, "probe_category", "") or None,
                 fallback_attestation_sha256=getattr(arguments, "attestation_sha256", "") or None,
+                executor_canary_refusal=_canary_refusal(arguments),
             )
             print(f"issue {issue}: {decision.action} {decision.target_state or decision.code or ''}".rstrip())
             if arguments.role == "bind":
@@ -237,6 +238,19 @@ def cmd_step(configuration: control.Configuration, arguments: argparse.Namespace
         except control.FactsUnavailable as error:
             print(f"issue {issue}: no-op ({error})")
     return 0
+
+
+def _canary_refusal(arguments: argparse.Namespace) -> dict[str, Any] | None:
+    """ADR 0041 F8: the primary job's gateway refusal outputs, in the ledger's closed form (untrusted until bound)."""
+    primary, digest = getattr(arguments, "canary_primary_refusals", ""), getattr(arguments, "canary_refusal_digest", "")
+    if not primary or not digest or not str(primary).isdigit():
+        return None
+    return {
+        "provider_host": state.CANARY_PROVIDER_HOST,
+        "primary_refusals": int(primary),
+        "probe_refusals": 1,
+        "refusal_digest": str(digest),
+    }
 
 
 def _record_proven_classification(
@@ -861,6 +875,9 @@ def cmd_resume_bind(configuration: control.Configuration, arguments: argparse.Na
 
 # --- authorize (T1) ---------------------------------------------------------------------------------------
 
+#: ADR 0041 F8: the Issue event listing is read to its end within this bound, or arming is indefinite.
+ISSUE_EVENT_PAGES: Final = 10
+
 
 def _export_public_trust(configuration: control.Configuration) -> None:
     """Point the existing env-configured constructors at the pinned public trust material only."""
@@ -909,6 +926,20 @@ def _authorize_dependencies(
             raise control.FactsUnavailable("run listing missing")
         return max(int(listing.get("total_count", 0)) - 1, 0)  # this run is one of them
 
+    def issue_label_events(issue: int) -> list[Mapping[str, Any]]:
+        """ADR 0041 F8: every event of the Issue, read to its end; an incomplete listing is indefinite."""
+        events: list[Mapping[str, Any]] = []
+        for page in range(1, ISSUE_EVENT_PAGES + 1):
+            listing = control.definitive(
+                github.get(f"/repos/{configuration.repository}/issues/{issue}/events?per_page=100&page={page}")
+            )
+            if not isinstance(listing, list):
+                raise control.FactsUnavailable("issue event listing missing")
+            events.extend(item for item in listing if isinstance(item, Mapping))
+            if len(listing) < 100:
+                return events
+        raise control.FactsUnavailable("issue event listing exceeds its bound")
+
     run_id, _, control_sha = _run_context()
     operator = configuration.source_handling
     return authorize.AuthorizeDependencies(
@@ -929,6 +960,7 @@ def _authorize_dependencies(
         state_signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
         handoff_recipient=configuration.handoff_recipient,
         fallback_handoff_recipient=getattr(configuration, "fallback_handoff_recipient", None),
+        issue_label_events=issue_label_events,
         open_issue_agent_pull_request=open_pull_request,
         active_lifecycles=active_lifecycles,
         compiler_identity_sha256=authorize.compiler_identity(
@@ -1383,6 +1415,8 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
         result_artifact=state.result_artifact_name(arguments.authorization_id),
         stderr_category=outcome.stderr_category or "",
         probe_category=outcome.probe_category or "",
+        canary_primary_refusals=str((outcome.canary_refusal or {}).get("primary_refusals", "")),
+        canary_refusal_digest=str((outcome.canary_refusal or {}).get("refusal_digest", "")),
     )
     return 0
 
@@ -1738,6 +1772,9 @@ def _parser() -> argparse.ArgumentParser:
     # ADR 0041 F2: the primary executor job's closed fallback signals, and the fallback job's attestation digest.
     step.add_argument("--stderr-category", default="")
     step.add_argument("--probe-category", default="")
+    # ADR 0041 F8: the armed canary's gateway refusal outputs from the primary executor job.
+    step.add_argument("--canary-primary-refusals", default="")
+    step.add_argument("--canary-refusal-digest", default="")
     step.add_argument("--attestation-sha256", default="")
     step.add_argument("--job", choices=["bind-fallback"])
     resume = add("resume-bind", cmd_resume_bind)

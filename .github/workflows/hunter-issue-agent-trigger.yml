@@ -222,6 +222,8 @@ jobs:
       advisory_code: ${{ steps.execute.outputs.advisory_code }}
       stderr_category: ${{ steps.execute.outputs.stderr_category }}
       probe_category: ${{ steps.execute.outputs.probe_category }}
+      canary_primary_refusals: ${{ steps.execute.outputs.canary_primary_refusals }}
+      canary_refusal_digest: ${{ steps.execute.outputs.canary_refusal_digest }}
     steps:
       - name: Checkout control_sha
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -326,9 +328,12 @@ jobs:
           ADVISORY: ${{ needs.execute.outputs.advisory_code }}
           STDERR_CATEGORY: ${{ needs.execute.outputs.stderr_category }}
           PROBE_CATEGORY: ${{ needs.execute.outputs.probe_category }}
+          CANARY_PRIMARY_REFUSALS: ${{ needs.execute.outputs.canary_primary_refusals }}
+          CANARY_REFUSAL_DIGEST: ${{ needs.execute.outputs.canary_refusal_digest }}
         run: >-
           python scripts/hunter_issue_agent_lifecycle.py step --role bind --issue "$ISSUE" --advisory "$ADVISORY"
           --stderr-category "$STDERR_CATEGORY" --probe-category "$PROBE_CATEGORY"
+          --canary-primary-refusals "$CANARY_PRIMARY_REFUSALS" --canary-refusal-digest "$CANARY_REFUSAL_DIGEST"
 
   # ADR 0041 F1: the owner records a decision on a pending fallback with a label. Approval requests one
   # nonce-bound fallback run; rejection withdraws the request. Nothing waits on a runner in between.

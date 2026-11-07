@@ -331,3 +331,47 @@ def test_an_unknown_decision_or_writer_is_refused(repos: dict[str, Any], decisio
             decision=decision,
             clock=lambda: NOW,
         )
+
+
+# --- ADR 0041 F8: the armed canary ------------------------------------------------------------------------------
+
+CANARY_REFUSAL = {
+    "provider_host": state.CANARY_PROVIDER_HOST,
+    "primary_refusals": 3,
+    "probe_refusals": 1,
+    "refusal_digest": "d" * 64,
+}
+
+
+def test_bind_records_the_canary_as_canary_network_with_its_refusal_evidence(repos: dict[str, Any]) -> None:
+    fx.offer_and_admit(repos, admit=False, canary=True)
+    decision = step(
+        repos,
+        primary_failed_world(),
+        configuration=FALLBACK_CONFIG,
+        executor_advisory_code="PROVIDER_UNAVAILABLE",
+        executor_stderr_category="NETWORK",
+        executor_probe_category="NETWORK",
+        executor_canary_refusal=dict(CANARY_REFUSAL),
+    )
+    assert decision.target_state == state.FALLBACK_AUTHORIZED
+    evidence = ledger_state(repos).evidence[state.FALLBACK_AUTHORIZED]
+    assert evidence["primary_cause"] == "CANARY_NETWORK"
+    assert evidence["stderr_category"] == evidence["probe_category"] == "NETWORK"
+    assert evidence["canary_refusal"] == CANARY_REFUSAL
+
+
+@pytest.mark.parametrize("refusal", [None, {**CANARY_REFUSAL, "probe_refusals": 0}, {"forged": True}])
+def test_bind_never_admits_an_armed_canary_without_conforming_refusal_evidence(
+    repos: dict[str, Any], refusal: Any
+) -> None:
+    fx.offer_and_admit(repos, admit=False, canary=True)
+    decision = step(
+        repos,
+        primary_failed_world(),
+        configuration=FALLBACK_CONFIG,
+        executor_stderr_category="NETWORK",
+        executor_probe_category="NETWORK",
+        executor_canary_refusal=refusal,
+    )
+    assert decision.code == "EXECUTION_NOT_COMPLETED" and ledger_state(repos).state == state.FAILED

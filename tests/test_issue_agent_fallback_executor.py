@@ -76,7 +76,9 @@ def approve(ledger: Any, run_id: int = APPROVED_RUN) -> None:
 WORKROOT_ID = "f" * 32
 
 
-def offer_and_admit(repos: dict[str, Any], *, admit: bool = True, approved: bool = True) -> tuple[Any, bytes, bytes]:
+def offer_and_admit(
+    repos: dict[str, Any], *, admit: bool = True, approved: bool = True, canary: bool | None = None
+) -> tuple[Any, bytes, bytes]:
     """A real signed ledger: AUTHORIZED with a fallback offer (second seal to X_FB), then FALLBACK_AUTHORIZED."""
 
     # The reference AUTHORIZED evidence and primary seal come from the canonical helper, run against a scratch clone
@@ -118,6 +120,8 @@ def offer_and_admit(repos: dict[str, Any], *, admit: bool = True, approved: bool
             "recipient_key_id": recipient_key_id(FALLBACK_KEY.public_key()),
         },
     }
+    if canary is not None:
+        evidence["fallback_canary"] = canary  # ADR 0041 F8
     fresh = base.Ledger(repos)
     fresh.write(state.AUTHORIZED, evidence, "authorize")
     if admit:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -186,3 +187,95 @@ def test_without_a_fallback_recipient_the_prepared_record_is_unchanged(
     (prepared, _sealed), _deps = base.run_prepare(world, monkeypatch, "plain")
     assert prepared.fallback_handoff_binding is None and prepared.fallback_handoff_ciphertext_sha256 is None
     assert "fallback" not in prepared.unsigned_authorized
+
+
+# --- ADR 0041 F8: the owner-armed canary -----------------------------------------------------------------------
+
+
+def _label_events(armed: bool) -> list[dict[str, Any]]:
+    authorized = state._instant(base.UPDATED_AT)
+    before = (authorized - timedelta(seconds=30)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    canary = [
+        {
+            "event": "labeled",
+            "label": {"name": authorize.FALLBACK_CANARY_LABEL},
+            "actor": {"login": base.OWNER},
+            "created_at": before,
+        }
+    ]
+    execute = {
+        "event": "labeled",
+        "label": {"name": base.ISSUE_AGENT_AUTHORIZATION_LABEL},
+        "actor": {"login": base.OWNER},
+        "created_at": base.UPDATED_AT,
+    }
+    return [*(canary if armed else []), execute]
+
+
+@pytest.mark.parametrize("armed", [True, False])
+def test_the_signed_authorization_records_whether_the_owner_armed_the_canary(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch, armed: bool
+) -> None:
+    bootstrap_ledger(world)
+    sink: list[bytes] = []
+    deps = dependencies(
+        world,
+        monkeypatch,
+        fallback_handoff_recipient=FALLBACK.public_key(),
+        issue_label_events=lambda issue: _label_events(armed),
+    )
+    name = f"canary-{armed}"
+    prepared, _ = authorize.prepare(
+        document(),
+        dependencies=deps,
+        context=context(),
+        state_store=store(world, f"{name}-state"),
+        source_handling_store=store(world, f"{name}-sh"),
+        workdir=world["tmp"] / f"work-{name}",
+        fallback_sink=sink.append,
+    )
+    assert prepared.fallback_canary is armed
+    assert authorize.Prepared.from_json(prepared.to_json()).fallback_canary is armed
+    authorize.commit(
+        prepared,
+        uploaded=uploaded(prepared),
+        fallback_uploaded=fallback_upload(prepared),
+        dependencies=deps,
+        context=context(),
+        state_store=store(world, f"{name}-commit"),
+        source_handling_store=store(world, f"{name}-commit-sh"),
+    )
+    _, entries = store(world, f"{name}-verify").read(520)
+    view = state.verify_chain(
+        [e.record for e in entries],
+        repository_id=1,
+        issue_number=520,
+        trust=TRUST,
+        provenance=trusted,
+        indexes=[e.index for e in entries],
+    )
+    assert view.authorizations[prepared.authorization_id].evidence[state.AUTHORIZED]["fallback_canary"] is armed
+
+
+def test_an_indefinite_label_read_refuses_rather_than_disarming(
+    world: dict[str, Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bootstrap_ledger(world)
+
+    def unavailable(issue: int) -> list[dict[str, Any]]:
+        raise ConnectionError("indefinite")
+
+    deps = dependencies(
+        world, monkeypatch, fallback_handoff_recipient=FALLBACK.public_key(), issue_label_events=unavailable
+    )
+    with pytest.raises(authorize.AuthorizeRefused) as refused:
+        authorize.prepare(
+            document(),
+            dependencies=deps,
+            context=context(),
+            state_store=store(world, "indefinite-state"),
+            source_handling_store=store(world, "indefinite-sh"),
+            workdir=world["tmp"] / "work-indefinite",
+            fallback_sink=[].append,
+        )
+    assert refused.value.code == "NOT_ELIGIBLE"
