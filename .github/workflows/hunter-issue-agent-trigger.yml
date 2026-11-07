@@ -574,6 +574,9 @@ jobs:
           sudo ip6tables -A OUTPUT -m owner --uid-owner hunter-untrusted -j REJECT
       - name: Read the bound result binding from the ledger
         id: bound
+        env:
+          # Issue #577: run-provenance reads only; this job's token is actions:read and the step runs no untrusted code.
+          HUNTER_ISSUE_AGENT_PROVENANCE_TOKEN: ${{ github.token }}
         run: >-
           python scripts/hunter_issue_agent_lifecycle.py bound
           --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID"
@@ -588,6 +591,8 @@ jobs:
       - name: Validate the exact unsigned commit (credential-free)
         env:
           HUNTER_ISSUE_AGENT_RESULT_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_RESULT_KEY }}
+          # Issue #577: popped by the trusted intake before any subprocess; the isolation uid runs under `env -i`.
+          HUNTER_ISSUE_AGENT_PROVENANCE_TOKEN: ${{ github.token }}
         run: >-
           python scripts/hunter_issue_agent_lifecycle.py validate
           --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID"
@@ -673,6 +678,9 @@ jobs:
         run: python -m pip install --only-binary ':all:' -c requirements/ci-constraints.txt .
       - name: Read the bound result binding from the ledger
         id: bound
+        env:
+          # Issue #577: run-provenance reads only; this job's token is read-only and the step runs no candidate code.
+          HUNTER_ISSUE_AGENT_PROVENANCE_TOKEN: ${{ github.token }}
         run: >-
           python scripts/hunter_issue_agent_lifecycle.py bound
           --issue "$ISSUE" --authorization-id "$AUTHORIZATION_ID"
