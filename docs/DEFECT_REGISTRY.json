@@ -1152,6 +1152,16 @@
       "guard": "Grant cross-principal access to exactly the one principal that needs it, never to 'others': WORK_ROOT is runner 0700 with a single 'user:hunteragent allow search' ACL that verify() checks for exactness; the live-denial canary and probe root stay 0600/0700 with hunteragent-only read and search,add_file ACLs, so Unix still allows the denied actions and only the sandbox can deny them. The sandbox probe allocates its root as hunteragent with mktemp -d (the agent's own private per-user temp directory), verifies one absolute agent-owned 0700 real directory, never removes an unverified path, and passes paths to the profile only as -D parameters. A structural AST test refuses any literal world-writable mode in chmod/mkdir calls in the fallback host scripts. Sonar findings are resolved by removing the grant, never by NOSONAR or a weakened gate.",
       "test": "tests/test_provision_codex_fallback_host.py::test_the_work_root_grants_hunteragent_traversal_and_nothing_else; tests/test_provision_codex_fallback_host.py::test_any_other_work_root_acl_fails_verification; tests/test_provision_codex_fallback_host.py::test_no_fallback_host_script_grants_world_write; tests/test_provision_codex_fallback_host.py::test_the_world_write_guard_sees_code_not_prose; tests/test_hunter_codex_sandbox_probe.py::test_a_directory_readable_or_traversable_by_others_is_refused; tests/test_hunter_codex_sandbox_probe.py::test_an_unverified_path_is_never_removed; tests/test_hunter_codex_sandbox_probe.py::test_paths_reach_the_profile_only_as_parameters",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-130",
+      "class": "provisioning-input-guard-bound-rejects-the-pinned-canonical-artifact",
+      "source": "Issue #390 E2E preparation at main 71dd920: read_pinned_tarball capped archives at 150 MiB (157,286,400 bytes) while the official pinned @openai/codex@0.167.0-darwin-x64 archive is 158,115,646 bytes, so provision_codex_fallback_host.py --apply refused the only archive it is pinned to accept and the fallback host could not be re-provisioned from main",
+      "classification": "systemic",
+      "guard_boundary": "privileged fallback host provisioning, before any archive byte is trusted",
+      "guard": "The read bound is a named constant (CODEX_TARBALL_MAX_BYTES) that only caps memory; authenticity stays with the pinned registry integrity and binary SHA-256. A regression binds the bound to the measured size of the pinned official archive, and an edge test proves the bound is exact (at-bound accepted, one byte over refused). A hardening bound on a pinned input must be tested against the real pinned artifact, not only synthetic fixtures.",
+      "test": "tests/test_provision_codex_fallback_host.py::test_the_read_bound_admits_the_pinned_official_archive; tests/test_provision_codex_fallback_host.py::test_the_read_bound_is_exact_at_its_edge",
+      "status": "guarded"
     }
   ],
   "families": [

@@ -318,3 +318,22 @@ def test_the_world_write_guard_sees_code_not_prose(tmp_path: Path) -> None:
         "os.chmod(p, mode=0o777)\nPath(p).mkdir(0o1777)\n"
     )
     assert _world_writable_mode_literals(trap) == ["trap.py:5 0o777", "trap.py:6 0o1777"]
+
+
+#: Measured size of the official pinned archive (npm @openai/codex@0.167.0-darwin-x64, integrity CODEX_TARBALL_INTEGRITY).
+PINNED_CODEX_TARBALL_BYTES = 158_115_646
+
+
+def test_the_read_bound_admits_the_pinned_official_archive() -> None:
+    # A bound below the pinned archive made --apply refuse the only archive it is pinned to accept.
+    assert provision.CODEX_TARBALL_MAX_BYTES >= PINNED_CODEX_TARBALL_BYTES
+
+
+def test_the_read_bound_is_exact_at_its_edge(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(provision, "CODEX_TARBALL_MAX_BYTES", 64)
+    at_bound, over_bound = tmp_path / "at.tgz", tmp_path / "over.tgz"
+    at_bound.write_bytes(b"a" * 64)
+    over_bound.write_bytes(b"a" * 65)
+    assert provision.read_pinned_tarball(at_bound) == b"a" * 64
+    with pytest.raises(provision.ProvisionError, match="bounded regular file"):
+        provision.read_pinned_tarball(over_bound)
