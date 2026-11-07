@@ -302,9 +302,11 @@ def test_fallback_mac_uses_preprovisioned_python_without_hosted_toolcache() -> N
     runtime = next(step for step in job_steps if step.get("name") == "Verify provisioned macOS Python runtime")
     assert "/usr/local/bin/python3" in runtime["run"]
     assert "sys.version_info[:2] == (3, 11)" in runtime["run"]
-    install = next(step for step in job_steps if step.get("name") == "Install pinned runtime into a per-run environment")
+    install = next(
+        step for step in job_steps if step.get("name") == "Install pinned runtime into a per-run environment"
+    )
     assert '/usr/local/bin/python3 -m venv "$RUNNER_TEMP/venv"' in install["run"]
-    assert 'requirements/ci-constraints.txt' in install["run"]
+    assert "requirements/ci-constraints.txt" in install["run"]
 
 
 @pytest.mark.parametrize(
