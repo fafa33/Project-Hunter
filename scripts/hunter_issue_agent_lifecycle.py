@@ -195,6 +195,23 @@ def _promotion_port(configuration: control.Configuration, github: control.GitHub
 # --- control jobs ------------------------------------------------------------------------------------------
 
 
+def terminal_outcome_annotation(issue: int, decision: state.Decision) -> str | None:
+    """A run-page error annotation for a signed terminal ``FAILED`` (Issue #577), never a job failure.
+
+    The step job's success means only that the signed transition was written; the ledger, not the job
+    conclusion, is the canonical outcome. Failing the job would change every downstream ``if:``, so the
+    terminal outcome is surfaced as a GitHub ``::error`` annotation instead. Only the closed code is emitted.
+    """
+
+    if decision.action != "fail":  # the only decision that writes a terminal FAILED record (freeze raises)
+        return None
+    code = decision.code if decision.code in state.FAILURE_CODES else "UNKNOWN"  # the FAILED record's closed vocabulary
+    return (
+        f"::error title=Issue agent FAILED::issue {issue}: FAILED {code}. The signed ledger is the outcome; "
+        "this run's job conclusions report orchestration only, not task completion."
+    )
+
+
 def cmd_step(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     workflow = {
         "reconcile": control.RECONCILE_WORKFLOW,
@@ -226,6 +243,9 @@ def cmd_step(configuration: control.Configuration, arguments: argparse.Namespace
                 fallback_model=_fallback_model(arguments),
             )
             print(f"issue {issue}: {decision.action} {decision.target_state or decision.code or ''}".rstrip())
+            annotation = terminal_outcome_annotation(issue, decision)
+            if annotation is not None:
+                print(annotation, flush=True)
             if arguments.role == "bind":
                 # Job success does not imply a bound result. Only the signed
                 # transition permits the downstream validator to start, and only
