@@ -450,3 +450,25 @@ def test_only_a_non_zero_exit_prints_the_session_outcome(
     line = "isolated Kilo session outcome: error=APIError status=502 retryable=none finish=none tool_errors=0"
     assert (line in out) is printed
     assert "stderr_category=UNCLASSIFIED" in out  # the closed category and the F2 admission it drives are unchanged
+
+
+def test_session_fifo_is_rejected_without_waiting_for_writer(tmp_path: Path) -> None:
+    directory = tmp_path.joinpath(*kilo_port.KILO_SESSION_STORE[:-1])
+    directory.mkdir(parents=True)
+    __import__("os").mkfifo(directory / kilo_port.KILO_SESSION_STORE[-1])
+    assert kilo_port.kilo_session_outcome(tmp_path)["error"] == "UNREADABLE"
+
+
+def test_untrusted_recursive_sqlite_view_has_bounded_query_budget(tmp_path: Path) -> None:
+    store = _session_store(tmp_path)
+    connection = sqlite3.connect(store)
+    connection.execute("DROP TABLE message")
+    connection.execute(
+        "CREATE VIEW message AS WITH RECURSIVE infinite(n) AS "
+        "(VALUES(1) UNION ALL SELECT n+1 FROM infinite) "
+        "SELECT cast(n as text) AS id, 's' AS session_id, n AS time_created, "
+        '\'{"role":"assistant"}\' AS data FROM infinite'
+    )
+    connection.commit()
+    connection.close()
+    assert kilo_port.kilo_session_outcome(tmp_path)["error"] == "UNREADABLE"

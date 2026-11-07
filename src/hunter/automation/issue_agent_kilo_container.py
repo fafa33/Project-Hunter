@@ -97,7 +97,7 @@ def _private_copy(source: Path, target: Path) -> bool:
     """Copy one regular file the isolated uid wrote, never following a link and never beyond the size bound."""
 
     try:
-        descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW)
+        descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     except FileNotFoundError:
         return False
     with os.fdopen(descriptor, "rb") as handle:
@@ -135,6 +135,16 @@ def kilo_session_outcome(home: Path) -> dict[str, str]:
             try:
                 connection.execute("PRAGMA trusted_schema=OFF")
                 connection.execute("PRAGMA query_only=ON")
+                # Untrusted SQLite views may contain non-terminating recursive queries.
+                # Abort after a bounded number of SQLite VM instructions.
+                remaining = 2000
+
+                def _query_budget() -> int:
+                    nonlocal remaining
+                    remaining -= 1
+                    return 1 if remaining <= 0 else 0
+
+                connection.set_progress_handler(_query_budget, 1000)
                 row = connection.execute(
                     "SELECT json_extract(data, '$.error.name'), json_extract(data, '$.error.data.statusCode'),"
                     " json_extract(data, '$.error.data.isRetryable'), json_extract(data, '$.finish')"
