@@ -56,8 +56,102 @@ STDERR_CATEGORIES = (
 )
 
 
+#: ADR 0041 F5a (owner decisions, Issue #390 comments 6706666538 and 6706679138): the preferred model is requested,
+#: a permitted provider reroute is accepted, and the requested and observed models are recorded, never assumed.
+MAX_EVENT_STREAM = 8 * 1024 * 1024
+MAX_CATALOG = 4 * 1024 * 1024
+_ROUTED_TO = re.compile(rb"routed to ([A-Za-z0-9][A-Za-z0-9._-]{0,63})")
+#: Closed provenance vocabulary. Only REPORTED and REROUTED name an observed model, and only from the CLI itself.
+MODEL_PROVENANCE = ("REPORTED", "REROUTED", "REROUTED_UNIDENTIFIED", "NOT_OBSERVED", "STREAM_INVALID")
+
+
 class Refused(Exception):
     pass
+
+
+def catalog_offers(catalog: bytes, model: str) -> bool:
+    """Whether the signed-in session's own catalog (``codex debug models``) lists exactly this slug, once.
+
+    Read before the prompt exists, so no model output can influence it. Evidence only: a preferred model missing from
+    the catalog does not stop the run (the provider may serve a permitted alternative). Unparsable means "not listed".
+    """
+
+    if len(catalog) > MAX_CATALOG:
+        return False
+    try:
+        document = json.loads(catalog)
+    except ValueError:
+        return False
+    models = document.get("models") if isinstance(document, dict) else None
+    if not isinstance(models, list):
+        return False
+    return sum(isinstance(entry, dict) and entry.get("slug") == model for entry in models) == 1
+
+
+def _slug(value: object) -> str | None:
+    return value if isinstance(value, str) and MODEL.fullmatch(value) else None
+
+
+def model_provenance(events: bytes, model: str) -> tuple[str, str | None]:
+    """The observed model, from the pinned CLI's own ``--json`` event stream, and how it was observed.
+
+    The stream is the Codex process's stdout pipe: every line is a CLI-built JSON event, and model-generated text
+    (agent messages, command output) only ever appears JSON-escaped inside an item. That text is never consulted, so
+    it can neither assert nor forge a model. Only event structure and the CLI's own error/warning items are read.
+
+    - ``REROUTED``: the CLI reported a reroute (an event, or its own "routed to X" notice) naming the served model.
+    - ``REROUTED_UNIDENTIFIED``: a reroute was reported without a well-formed target.
+    - ``REPORTED``: an event's own ``model`` field named the served model (no reroute reported).
+    - ``NOT_OBSERVED``: the CLI never named the served model. Nothing is asserted, not even the requested model.
+    - ``STREAM_INVALID``: the stream is malformed or oversized, so nothing in it is used.
+    """
+
+    if len(events) > MAX_EVENT_STREAM:
+        return "STREAM_INVALID", None
+    reported: set[str] = set()
+    rerouted: list[str | None] = []
+    for line in events.splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            return "STREAM_INVALID", None
+        if not isinstance(event, dict) or not isinstance(event.get("type"), str):
+            return "STREAM_INVALID", None
+        raw_item = event.get("item")
+        item: dict[str, object] = raw_item if isinstance(raw_item, dict) else {}
+        kinds = (event["type"].lower(), str(item.get("type", "")).lower())
+        if any("reroute" in kind for kind in kinds):
+            scope = item if "reroute" in kinds[1] else event
+            rerouted.append(_slug(scope.get("to_model")))
+            continue
+        if "error" in kinds:
+            message = event.get("message") if kinds[0] == "error" else item.get("message")
+            match = _ROUTED_TO.search(message.encode()) if isinstance(message, str) else None
+            if match is not None:
+                rerouted.append(_slug(match.group(1).decode()))
+            continue
+        if "agent_message" in kinds or "command_execution" in kinds:
+            continue  # model-influenced content is never evidence
+        scopes: tuple[dict[str, object], ...] = (event, item)
+        for scope in scopes:
+            if "model" in scope:
+                served = _slug(scope["model"])
+                if served is None:
+                    return "STREAM_INVALID", None
+                reported.add(served)
+    if rerouted:
+        targets = set(rerouted)
+        if None in targets or len(targets) != 1:
+            return "REROUTED_UNIDENTIFIED", None
+        return "REROUTED", targets.pop()
+    if len(reported) == 1:
+        served = reported.pop()
+        return ("REPORTED", served) if served == model else ("REROUTED", served)
+    if reported:
+        return "REROUTED_UNIDENTIFIED", None
+    return "NOT_OBSERVED", None
 
 
 def validate_request(header: object, prompt: bytes) -> dict[str, str]:
@@ -135,6 +229,7 @@ def codex_exec_argv(model: str, workspace: Path) -> list[str]:
         str(workspace),
         "--skip-git-repo-check",
         "--ephemeral",
+        "--json",
         "-c",
         'model_reasoning_effort="low"',
         "-",
@@ -257,24 +352,45 @@ def run_codex(request: dict[str, str], prompt: bytes) -> dict[str, object]:
         status = device_session(request["workroot_id"], workspace, home)
         response = {"status": status}
         if status == "AUTHENTICATED":
-            code, _out, err = _run(
-                sandbox_argv(workspace, home, codex_exec_argv(request["model"], workspace)),
-                model_environment(home),
-                stdin=prompt,
-                timeout=MODEL_TIMEOUT_SECONDS,
-            )
-            exit_class = "TIMEOUT" if code == -1 else ("ZERO" if code == 0 else "NONZERO")
-            response = (
-                {"status": "SANDBOX_SETUP_FAILED"}
-                if code in SETUP_EXITS
-                else {"status": "COMPLETED", "exit": exit_class, "stderr_category": classify(err[:65536])}
-            )
+            response = _signed_in_run(request, prompt, workspace, home)
     finally:
         # Every path logs the session out and deletes it, including a timed-out or failed sign-in.
         secrets = end_session(workspace, home)
     if secrets:
         response["session_secrets"] = secrets
     return response
+
+
+def _signed_in_run(request: dict[str, str], prompt: bytes, workspace: Path, home: Path) -> dict[str, object]:
+    # Before any prompt: whether the signed-in session lists the preferred model (evidence, not a gate).
+    catalog_code, catalog, _ = _run(
+        sandbox_argv(workspace, home, [str(CODEX_BINARY), "debug", "models", *codex_common()]),
+        model_environment(home),
+        timeout=120,
+    )
+    if catalog_code in SETUP_EXITS:
+        return {"status": "SANDBOX_SETUP_FAILED"}
+    listed = catalog_code == 0 and catalog_offers(catalog, request["model"])
+    code, out, err = _run(
+        sandbox_argv(workspace, home, codex_exec_argv(request["model"], workspace)),
+        model_environment(home),
+        stdin=prompt,
+        timeout=MODEL_TIMEOUT_SECONDS,
+    )
+    if code in SETUP_EXITS:
+        return {"status": "SANDBOX_SETUP_FAILED"}
+    provenance, observed = model_provenance(out, request["model"])
+    return {
+        "status": "COMPLETED",
+        "exit": "TIMEOUT" if code == -1 else ("ZERO" if code == 0 else "NONZERO"),
+        "stderr_category": classify(err[:65536]),
+        "model": {
+            "requested": request["model"],
+            "requested_listed": listed,
+            "observed": observed,
+            "provenance": provenance,
+        },
+    }
 
 
 def attest(request: dict[str, str]) -> dict[str, object]:

@@ -76,7 +76,9 @@ def approve(ledger: Any, run_id: int = APPROVED_RUN) -> None:
 WORKROOT_ID = "f" * 32
 
 
-def offer_and_admit(repos: dict[str, Any], *, admit: bool = True, approved: bool = True) -> tuple[Any, bytes, bytes]:
+def offer_and_admit(
+    repos: dict[str, Any], *, admit: bool = True, approved: bool = True, canary: bool | None = None
+) -> tuple[Any, bytes, bytes]:
     """A real signed ledger: AUTHORIZED with a fallback offer (second seal to X_FB), then FALLBACK_AUTHORIZED."""
 
     # The reference AUTHORIZED evidence and primary seal come from the canonical helper, run against a scratch clone
@@ -118,6 +120,8 @@ def offer_and_admit(repos: dict[str, Any], *, admit: bool = True, approved: bool
             "recipient_key_id": recipient_key_id(FALLBACK_KEY.public_key()),
         },
     }
+    if canary is not None:
+        evidence["fallback_canary"] = canary  # ADR 0041 F8
     fresh = base.Ledger(repos)
     fresh.write(state.AUTHORIZED, evidence, "authorize")
     if admit:
@@ -126,12 +130,29 @@ def offer_and_admit(repos: dict[str, Any], *, admit: bool = True, approved: bool
             {
                 "primary_executor_job_id": 5,
                 "primary_executor_conclusion": "success",
-                "primary_cause": "RATE_LIMIT",
-                "stderr_category": "RATE_LIMIT",
-                "probe_category": "RATE_LIMIT",
                 "primary_result_artifacts": 0,
                 "fallback_executor": "codex",
                 "fallback_execution_id": fallback_id,
+                **(
+                    {
+                        # ADR 0041 F8: a canary-armed authorization admits only its own canary.
+                        "primary_cause": "CANARY_NETWORK",
+                        "stderr_category": "NETWORK",
+                        "probe_category": "NETWORK",
+                        "canary_refusal": {
+                            "provider_host": state.CANARY_PROVIDER_HOST,
+                            "primary_refusals": 3,
+                            "probe_refusals": 1,
+                            "refusal_digest": "d" * 64,
+                        },
+                    }
+                    if canary
+                    else {
+                        "primary_cause": "RATE_LIMIT",
+                        "stderr_category": "RATE_LIMIT",
+                        "probe_category": "RATE_LIMIT",
+                    }
+                ),
             },
             "bind",
         )
@@ -166,7 +187,12 @@ def codex_edits(workspace: Path, prompt: bytes, *, extra: str = "") -> dict[str,
     assert b"canary" in prompt  # the sealed task reached Codex, and only through the launcher
     (workspace / "docs").mkdir(exist_ok=True)
     (workspace / "docs" / "ISSUE_AGENT_CANARY.md").write_text("canary\n" + extra)
-    return {"status": "COMPLETED", "exit": "ZERO", "stderr_category": "UNCLASSIFIED", "session_secrets": ["s" * 40]}
+    return {
+        "status": "COMPLETED",
+        "exit": "ZERO",
+        "stderr_category": "UNCLASSIFIED",
+        "session_secrets": ["s" * 40],
+    }
 
 
 def fallback_config(repos: dict[str, Any], key: X25519PrivateKey = FALLBACK_KEY, argv: tuple[str, ...] = ()) -> Any:

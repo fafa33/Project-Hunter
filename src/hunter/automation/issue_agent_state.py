@@ -137,6 +137,12 @@ EXECUTOR_CONCLUSIONS: Final = frozenset({"success", "failure", "cancelled", "tim
 #: Closed vocabularies the primary executor job reports for a fallback decision (ADR 0041 F2). Untrusted job outputs:
 #: they can only *withhold* a fallback, because admission also requires the policy's agreement and every ledger fact.
 FALLBACK_CAUSES: Final = frozenset({"RATE_LIMIT", "QUOTA_EXCEEDED", "NETWORK"})
+#: ADR 0041 F8: the owner-armed canary's own cause. Never a real provider failure, never admitted without the signed
+#: ``AUTHORIZED.fallback_canary`` flag, and the only cause a canary authorization can admit.
+CANARY_FALLBACK_CAUSE: Final = "CANARY_NETWORK"
+FALLBACK_PRIMARY_CAUSES: Final = frozenset(FALLBACK_CAUSES | {CANARY_FALLBACK_CAUSE})
+#: The pinned provider host the canary gateway profile removes (``issue_agent_provider_probe.KILO_PROVIDER_HOST``).
+CANARY_PROVIDER_HOST: Final = "ai-gateway.kilo.ai"
 FALLBACK_SIGNAL_CATEGORIES: Final = frozenset(
     FALLBACK_CAUSES
     | {
@@ -337,6 +343,45 @@ def _enum(values: Iterable[str]) -> Validator:
     return check
 
 
+def _bool(value: object, where: str) -> None:
+    if type(value) is not bool:
+        raise _fail(where, "must be a boolean")
+
+
+FALLBACK_MODEL_PROVENANCE: Final = frozenset(
+    {"REPORTED", "REROUTED", "REROUTED_UNIDENTIFIED", "NOT_OBSERVED", "STREAM_INVALID"}
+)
+_FALLBACK_OBSERVING: Final = frozenset({"REPORTED", "REROUTED"})
+_MODEL_SLUG: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def _fallback_model(value: object, where: str) -> None:
+    """ADR 0041 F5a: a closed model record that can name an observed model only when the CLI reported one."""
+
+    if not isinstance(value, dict) or set(value) != {"requested", "requested_listed", "observed", "provenance"}:
+        raise _fail(where, "fields differ from the closed schema")
+    observed, provenance = value["observed"], value["provenance"]
+    if not isinstance(value["requested"], str) or _MODEL_SLUG.fullmatch(value["requested"]) is None:
+        raise _fail(where, "malformed requested model")
+    if type(value["requested_listed"]) is not bool:
+        raise _fail(where, "requested_listed must be a boolean")
+    if not isinstance(provenance, str) or provenance not in FALLBACK_MODEL_PROVENANCE:
+        raise _fail(where, "provenance outside the closed vocabulary")
+    names = isinstance(observed, str) and _MODEL_SLUG.fullmatch(observed) is not None
+    if (provenance in _FALLBACK_OBSERVING) != names or (not names and observed is not None):
+        raise _fail(where, "an observed model is recorded only when the CLI reported one")
+    if provenance == "REPORTED" and observed != value["requested"]:
+        raise _fail(where, "a reported model that differs from the request is a reroute")
+
+
+def fallback_model_conforms(value: object) -> bool:
+    try:
+        _fallback_model(value, "fallback.model")
+    except LedgerSchemaError:
+        return False
+    return True
+
+
 def _optional(inner: Validator) -> Validator:
     def check(value: object, where: str) -> None:
         if value is not None:
@@ -437,6 +482,16 @@ def _disposition(value: object, where: str) -> None:
     )
 
 
+#: ADR 0041 F8: the canary's gateway refusal evidence: the primary was refused the pinned provider host at least once,
+#: the trusted probe exactly once more through the same gateway instance, and no other host or request was denied.
+_CANARY_REFUSAL = _object(
+    {
+        "provider_host": _exact(CANARY_PROVIDER_HOST),
+        "primary_refusals": _int(1),
+        "probe_refusals": _exact(1),
+        "refusal_digest": SHA64,
+    }
+)
 _ARTIFACT = _object(
     {
         "run_id": POSITIVE,
@@ -532,6 +587,8 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
             # ADR 0041 F3: present only when a fallback recipient is provisioned. The second seal of the identical
             # handoff plaintext, bound to the attempt-2 execution identity and the distinct fallback key.
             "fallback": _object({"execution_id": SHA64, "handoff_artifact": _ARTIFACT}),
+            # ADR 0041 F8: whether the owner armed the single-use canary before the authorizing label event.
+            "fallback_canary": _bool,
             # ADR 0039 L4: present only on a finding-driven remediation of the parent's open PR.
             "remediation": _object(
                 {
@@ -548,13 +605,17 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
         {
             "primary_executor_job_id": POSITIVE,
             "primary_executor_conclusion": _enum(EXECUTOR_CONCLUSIONS),
-            "primary_cause": _enum(FALLBACK_CAUSES),
+            "primary_cause": _enum(FALLBACK_PRIMARY_CAUSES),
             "stderr_category": _enum(FALLBACK_CAUSES),
             "probe_category": _enum(FALLBACK_CAUSES),
             "primary_result_artifacts": _exact(0),
             "fallback_executor": _enum(FALLBACK_EXECUTORS),
             "fallback_execution_id": SHA64,
-        }
+        },
+        optional={
+            # ADR 0041 F8: present exactly when ``primary_cause`` is ``CANARY_NETWORK``.
+            "canary_refusal": _CANARY_REFUSAL
+        },
     ),
     RESULT_BOUND: _object(
         {
@@ -573,7 +634,12 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
                     "attestation_sha256": SHA64,
                     # The publish deadline restarts at the fallback's bind: an owner may approve days later.
                     "deadline_published_at": TIMESTAMP,
-                }
+                },
+                optional={
+                    # ADR 0041 F5a: requested and observed model, as the attested launcher reported them. A permitted
+                    # provider reroute is recorded here, never hidden; ``observed`` is null unless the CLI named it.
+                    "model": _fallback_model,
+                },
             )
         },
     ),
@@ -935,6 +1001,8 @@ def _check_authorized_bindings(record: Mapping[str, Any], view: LedgerView | Non
     if evidence["execution_id"] != expected:
         raise LedgerCorruptError("execution identity does not derive from the bound run and handoff")
     fallback = evidence.get("fallback")
+    if "fallback_canary" in evidence and fallback is None:
+        raise LedgerCorruptError("a fallback canary was armed for an authorization that bound no fallback")
     if fallback is not None:
         if fallback["execution_id"] != execution_identity(
             authorization_id=authorization_id,
@@ -959,7 +1027,17 @@ def _check_cross_bindings(view: AuthorizationView, record: Mapping[str, Any]) ->
             raise LedgerCorruptError("a fallback was admitted for an authorization that bound none")
         if evidence["fallback_execution_id"] != offered["execution_id"]:
             raise LedgerCorruptError("admitted fallback identity is not the bound fallback identity")
-        if not evidence["primary_cause"] == evidence["stderr_category"] == evidence["probe_category"]:
+        if view.evidence[AUTHORIZED].get("fallback_canary") is True:
+            # ADR 0041 F8: a canary admits only its own cause, from two NETWORK observations and the refusal evidence.
+            if (
+                evidence["primary_cause"] != CANARY_FALLBACK_CAUSE
+                or not evidence["stderr_category"] == evidence["probe_category"] == "NETWORK"
+                or "canary_refusal" not in evidence
+            ):
+                raise LedgerCorruptError("a canary authorization admitted something other than its armed canary")
+        elif evidence["primary_cause"] == CANARY_FALLBACK_CAUSE or "canary_refusal" in evidence:
+            raise LedgerCorruptError("a canary cause was admitted without the signed canary flag")
+        elif not evidence["primary_cause"] == evidence["stderr_category"] == evidence["probe_category"]:
             raise LedgerCorruptError("a fallback cause is not agreed by the untrusted hint and the trusted probe")
     if state == RESULT_BOUND and (view.state == FALLBACK_AUTHORIZED) != ("fallback" in evidence):
         raise LedgerCorruptError("a bound result does not match the execution attempt it left")
@@ -1314,6 +1392,8 @@ class Facts:
     #: Only the agreement of both, inside the closed cause set, together with every ledger fact, admits a fallback.
     executor_stderr_category: str | None = None
     executor_probe_category: str | None = None
+    #: ADR 0041 F8: the primary job's gateway refusal evidence. Untrusted; it only completes an armed canary.
+    executor_canary_refusal: Mapping[str, Any] | None = None
     result_artifacts: tuple[ArtifactFact, ...] | _Unknown = UNKNOWN
     receipt: Mapping[str, Any] | None | _Unknown = UNKNOWN
     remote_branch_head: str | None | _Unknown = UNKNOWN
@@ -1388,7 +1468,13 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
             return Decision(
                 "transition",
                 target_state=FALLBACK_AUTHORIZED,
-                evidence_hint={"cause": facts.executor_probe_category},
+                evidence_hint={
+                    "cause": (
+                        CANARY_FALLBACK_CAUSE
+                        if view.evidence[AUTHORIZED].get("fallback_canary") is True
+                        else facts.executor_probe_category
+                    )
+                },
             )
         return _executor_failure(facts)
 
@@ -1485,6 +1571,11 @@ def _fallback_admissible(view: AuthorizationView, facts: Facts, *, primary_resul
     stderr, probe = facts.executor_stderr_category, facts.executor_probe_category
     if stderr not in FALLBACK_SIGNAL_CATEGORIES or probe not in FALLBACK_SIGNAL_CATEGORIES:
         return False
+    if view.evidence[AUTHORIZED].get("fallback_canary") is True:
+        # ADR 0041 F8: the armed canary admits only an induced gateway refusal both observers saw, with its evidence.
+        # It never admits RATE_LIMIT or QUOTA_EXCEEDED, and its NETWORK is recorded only as CANARY_NETWORK.
+        if not (stderr == probe == "NETWORK" and canary_refusal_conforms(facts.executor_canary_refusal)):
+            return False
     return permit_codex_fallback(
         FallbackEvidence(
             primary="kilo",
@@ -1499,6 +1590,18 @@ def _fallback_admissible(view: AuthorizationView, facts: Facts, *, primary_resul
             attempts_started=1,
         )
     )
+
+
+def canary_refusal_conforms(refusal: object) -> bool:
+    """The F8 gateway refusal evidence, in its closed ledger form (``FALLBACK_AUTHORIZED.canary_refusal``)."""
+
+    if not isinstance(refusal, Mapping):
+        return False
+    try:
+        _CANARY_REFUSAL(dict(refusal), "canary_refusal")
+    except LedgerSchemaError:
+        return False
+    return True
 
 
 def _terminal_refusal(code: object, allowed: frozenset[str]) -> str:

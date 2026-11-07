@@ -65,6 +65,40 @@ LAUNCHER_STATUSES: Final = frozenset(
 )
 
 
+#: ADR 0041 F5a: how the launcher observed the served model. Only REPORTED and REROUTED name an observed model.
+MODEL_PROVENANCE: Final = frozenset({"REPORTED", "REROUTED", "REROUTED_UNIDENTIFIED", "NOT_OBSERVED", "STREAM_INVALID"})
+_OBSERVING: Final = frozenset({"REPORTED", "REROUTED"})
+_MODEL_FIELDS: Final = frozenset({"requested", "requested_listed", "observed", "provenance"})
+
+
+def model_record(reported: object, requested: str) -> dict[str, object]:
+    """The launcher's model report in closed form; anything malformed is recorded as observing nothing.
+
+    Never asserts that the requested model served the run: ``observed`` is set only when the pinned CLI named it.
+    """
+
+    record: dict[str, object] = {
+        "requested": requested,
+        "requested_listed": False,
+        "observed": None,
+        "provenance": "STREAM_INVALID",
+    }
+    if not isinstance(reported, dict) or set(reported) != _MODEL_FIELDS:
+        return record
+    provenance, observed = reported["provenance"], reported["observed"]
+    names_model = isinstance(observed, str) and _MODEL.fullmatch(observed) is not None
+    if (
+        reported["requested"] != requested
+        or type(reported["requested_listed"]) is not bool
+        or not isinstance(provenance, str)
+        or provenance not in MODEL_PROVENANCE
+        or (provenance in _OBSERVING and not names_model)
+        or (provenance not in _OBSERVING and observed is not None)
+    ):
+        return record
+    return {name: reported[name] for name in ("requested", "requested_listed", "observed", "provenance")}
+
+
 @dataclass(frozen=True, slots=True)
 class HostConfig:
     runner_user: str
@@ -74,6 +108,9 @@ class HostConfig:
     agent_uid: int
     codex_version: str
     codex_sha256: str
+    #: The preferred Codex model the fallback requests, pinned at ``control_sha`` (owner decisions, Issue #390). A
+    #: permitted provider reroute is accepted and recorded (ADR 0041 F5a); workflow inputs never choose the model.
+    codex_model: str
 
 
 def load_host_config(checkout: Path) -> HostConfig:
@@ -93,6 +130,7 @@ def load_host_config(checkout: Path) -> HostConfig:
         "agent_uid",
         "codex_version",
         "codex_sha256",
+        "codex_model",
     }
     if not isinstance(document, dict) or set(document) != fields or document["schema_version"] != HOST_SCHEMA_VERSION:
         raise RoleRefused("EXECUTION_NOT_STARTED", "the Codex fallback host configuration has an unknown schema")
@@ -103,6 +141,8 @@ def load_host_config(checkout: Path) -> HostConfig:
         raise RoleRefused("EXECUTION_NOT_STARTED", "the fallback principals must be two distinct non-system users")
     if _SHA64.fullmatch(str(document["codex_sha256"])) is None or not document["codex_version"]:
         raise RoleRefused("EXECUTION_NOT_STARTED", "the Codex binary is not pinned")
+    if not isinstance(document["codex_model"], str) or _MODEL.fullmatch(document["codex_model"]) is None:
+        raise RoleRefused("EXECUTION_NOT_STARTED", "the Codex fallback model is not pinned")
     return HostConfig(**{name: document[name] for name in fields - {"schema_version", "provisioned"}})
 
 
@@ -248,6 +288,7 @@ class MacCodexIsolation:
         self.attestation_sha256: str | None = None
         self.session_secrets: tuple[str, ...] = ()
         self.last_stderr_category: str | None = None
+        self.model: dict[str, object] | None = None
 
     def attest(self, workroot: Path) -> str:
         """Pinned bytes, least-privilege principals and live denials, before any key or session is used."""
@@ -309,6 +350,9 @@ class MacCodexIsolation:
         if cwd.resolve() != WORK_ROOT / self.workroot_id / "workspace":
             raise RoleRefused("EXECUTION_NOT_STARTED", "the fallback runs only in its attested workspace")
         model = model_from_argv(argv)
+        if model != self.config.codex_model:
+            # Workflow configuration never chooses the model: only the preferred model pinned at control_sha is requested.
+            raise RoleRefused("EXECUTION_NOT_STARTED", "the requested fallback model is not the pinned model")
         # The device code goes only to the owner-only inbox on this Mac, never to this (public) log.
         print("codex fallback: awaiting owner device approval in the local owner inbox", flush=True)
         response = self._launcher(
@@ -325,6 +369,13 @@ class MacCodexIsolation:
         self.last_stderr_category = category if isinstance(category, str) else "UNCLASSIFIED"
         if response.get("exit") == "TIMEOUT":
             raise subprocess.TimeoutExpired(["codex", "exec"], timeout)
+        # ADR 0041 F5a: a permitted provider reroute is recorded, never rejected and never hidden.
+        self.model = model_record(response.get("model"), model)
+        print(
+            "codex fallback model: requested={requested} listed={requested_listed} observed={observed} "
+            "provenance={provenance}".format(**self.model),
+            flush=True,
+        )
         return 0 if response.get("exit") == "ZERO" else 1
 
     def stop(self) -> None:

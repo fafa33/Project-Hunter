@@ -7,13 +7,15 @@ the dual-homed allowlisted CONNECT gateway is its sole external route.
 from __future__ import annotations
 
 import ast
+import hashlib
+import ipaddress
 import json
 import re
 import subprocess
 import tempfile
 import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from urllib.parse import urlunsplit
 
@@ -25,6 +27,47 @@ BROKER_IMAGE = "hunter-682-broker-canary:local"
 BROKER_MAX_COMMANDS = 16
 BROKER_DEADLINE_SECONDS = 660  # strictly below the 12 minute model timeout
 PYTHON_IMAGE = "python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea"
+
+
+#: ADR 0041 F8: the gateway's content-free refusal line (``model_egress_gateway.REFUSED_HOST_MARKER``).
+_REFUSED = re.compile(r"^GATEWAY_REFUSED_HOST ([a-z0-9.-]{1,253})$")
+_DENIED = "GATEWAY_DENIED_CONNECT"
+
+
+def gateway_refusals(log: str) -> tuple[list[str], int]:
+    """The refused hosts, in order, and the count of any other denial, from one gateway instance's log."""
+    hosts: list[str] = []
+    other = 0
+    for line in log[:262144].splitlines():
+        match = _REFUSED.fullmatch(line.strip())
+        if match is not None:
+            hosts.append(match.group(1))
+        elif line.startswith(_DENIED):
+            other += 1
+    return hosts, other
+
+
+def canary_refusal_evidence(
+    *, gateway_instance: str, provider_host: str, primary_hosts: Sequence[str], all_hosts: Sequence[str], other: int
+) -> dict[str, object] | None:
+    """F8 evidence only when the primary was refused the provider and the probe exactly once more, and nothing else.
+
+    The canary profile is the Kilo profile minus the provider host, so any *other* refused host is one the Kilo
+    profile refuses on every run (Kilo 7.8.18 sends telemetry to ``us.i.posthog.com``); it says nothing about the
+    canary and is bound into the digest, not counted. A malformed request, or any refusal after the agent exited
+    other than the probe's single provider refusal, yields no evidence.
+    """
+    primary = sum(host == provider_host for host in primary_hosts)
+    if primary < 1 or other or list(all_hosts) != [*primary_hosts, provider_host]:
+        return None
+    digest = hashlib.sha256(
+        json.dumps(
+            {"gateway_instance": gateway_instance, "provider_host": provider_host, "refused_hosts": list(all_hosts)},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {"primary_refusals": primary, "probe_refusals": 1, "refusal_digest": digest}
 
 
 _TRACE = re.compile(r"BROKER_EXECUTED: (\[[^\n]*?\]) EXIT: (-?\d+) TREE: ([0-9a-f]{64}) STDOUT_BYTES: (\d+)")
@@ -69,6 +112,57 @@ class KiloContainerIsolation:
         self.trace: list[dict[str, object]] = []
         #: ADR 0041 F2: the closed stderr category of the last isolated run (an untrusted hint, never content).
         self.last_stderr_category: str | None = None
+        #: ADR 0041 F8: set only by ``arm_canary`` from the signed ``AUTHORIZED.fallback_canary`` flag.
+        self.canary = False
+
+    def arm_canary(self) -> None:
+        """Start this run's gateway with the ``kilo-canary`` profile. Only before the gateway exists."""
+        if self.started:
+            raise RoleRefused("EXECUTION_NOT_STARTED", "the canary is armed only before isolation starts")
+        self.canary = True
+
+    def observe_canary(self, probe: Callable[[tuple[str, int]], str], provider_host: str) -> tuple[str, dict | None]:
+        """ADR 0041 F8: probe through this run's own gateway after the agent exited, and read its refusals.
+
+        Returns the trusted probe category and the refusal evidence (``None`` unless the refusal is exactly the
+        canary's). Called before ``stop``; the agent container has already exited (``docker run --rm``).
+        """
+        if not (self.started and self.canary):
+            raise RoleRefused("EXECUTION_NOT_STARTED", "no armed canary gateway is running")
+        before = self._docker("logs", self.gateway, timeout=15)
+        primary_hosts, _ = gateway_refusals((before.stdout + before.stderr).decode("utf-8", errors="replace"))
+        inspected = self._docker(
+            "inspect", "--format", "{{json .NetworkSettings.Networks.bridge.IPAddress}}", self.gateway, timeout=15
+        )
+        try:
+            address = ipaddress.ip_address(json.loads(inspected.stdout.decode("ascii")))
+        except (ValueError, UnicodeError):
+            return "UNCLASSIFIED", None
+        if inspected.returncode or not address.is_private or address.version != 4:
+            return "UNCLASSIFIED", None
+        category = probe((str(address), 8080))
+        for _ in range(10):  # the log driver may lag the gateway's flushed line by a moment
+            after = self._docker("logs", self.gateway, timeout=15)
+            all_hosts, other = gateway_refusals((after.stdout + after.stderr).decode("utf-8", errors="replace"))
+            if len(all_hosts) > len(primary_hosts):
+                break
+            time.sleep(0.5)
+        for index, host in enumerate(all_hosts, start=1):
+            print(f"isolated gateway refusal: seq={index} host={host}", flush=True)
+        evidence = canary_refusal_evidence(
+            gateway_instance=self.gateway,
+            provider_host=provider_host,
+            primary_hosts=primary_hosts,
+            all_hosts=all_hosts,
+            other=other,
+        )
+        print(
+            f"isolated gateway canary: instance={self.gateway} refused_before_probe={len(primary_hosts)} "
+            f"total_refusals={len(all_hosts)} other_denials={other} "
+            f"refusal_digest={'' if evidence is None else evidence['refusal_digest']}",
+            flush=True,
+        )
+        return category, evidence
 
     @staticmethod
     def _docker(*args: str, timeout: float = 40, stdin: bytes = b"") -> subprocess.CompletedProcess[bytes]:
@@ -158,6 +252,8 @@ class KiloContainerIsolation:
                 "32",
                 "--memory",
                 "128m",
+                "--env",
+                f"HUNTER_GATEWAY_PROFILE={'kilo-canary' if self.canary else 'kilo'}",
                 "--mount",
                 f"type=bind,src={self.scripts / 'model_egress_gateway.py'},dst=/opt/gateway.py,readonly",
                 PYTHON_IMAGE,

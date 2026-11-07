@@ -33,7 +33,7 @@ import json
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 
@@ -140,6 +140,8 @@ class AuthorizeDependencies:
     knowledge_overlay: Sequence[Mapping[str, Any]] = ()
     #: ADR 0041 F3: the distinct fallback recipient ``X_FB``. ``None`` binds no fallback (behaviour unchanged).
     fallback_handoff_recipient: X25519PublicKey | None = None
+    #: ADR 0041 F8: the Issue's label events (definitive; raises on an indefinite read). ``None``: never armed.
+    issue_label_events: Callable[[int], Sequence[Mapping[str, Any]]] | None = None
     clock: Clock = field(default_factory=SystemClock)
 
 
@@ -159,6 +161,8 @@ class Prepared:
     #: ADR 0041 F3: the second seal of the identical handoff, to ``X_FB`` under the attempt-2 identity.
     fallback_handoff_binding: dict[str, Any] | None = None
     fallback_handoff_ciphertext_sha256: str | None = None
+    #: ADR 0041 F8: the owner armed the single-use canary before this authorization's own label event.
+    fallback_canary: bool = False
 
     def to_json(self) -> str:
         return state.canonical_json(asdict(self)).decode("utf-8")
@@ -203,6 +207,61 @@ def compiler_identity(*, control_sha: str, checkout: Path) -> str:
             }
         )
     )
+
+
+FALLBACK_CANARY_LABEL: Final = "hunter-codex-fallback-canary"
+
+
+def fallback_canary_armed(
+    events: Sequence[Mapping[str, Any]], *, owner_login: str, authorization_label: str, authorized_at: str
+) -> bool:
+    """ADR 0041 F8: did the owner arm the canary for exactly this authorization's label event?
+
+    The authorizing event is the owner's latest ``labeled`` event for the authorization label at or before the
+    signed ``issue_updated_at``. The canary is armed only if the last canary label event strictly before it is the
+    owner's ``labeled`` event, and that event is later than the owner's previous authorizing label event, so one
+    arming never carries over to another authorization. Anything else, including a label applied after the
+    authorizing event or by anyone but the owner, leaves the canary unarmed. Event times have one-second resolution:
+    any canary event sharing a second with an authorizing event, or a deciding second holding anything but the
+    owner's arming, is ambiguous and leaves the canary unarmed (fail closed). A malformed label event raises.
+    """
+
+    relevant: list[tuple[datetime, int, str, str, str]] = []
+    for index, event in enumerate(events):
+        kind = event.get("event")
+        if kind not in ("labeled", "unlabeled"):
+            continue
+        label = (event.get("label") or {}).get("name")
+        actor = (event.get("actor") or {}).get("login")
+        created = event.get("created_at")
+        if not isinstance(label, str) or not isinstance(actor, str) or not isinstance(created, str):
+            raise ValueError("malformed label event")
+        relevant.append((state._instant(created), index, str(kind), label, actor))
+    relevant.sort()
+    cutoff = state._instant(authorized_at)
+    authorizing = [
+        at
+        for at, _, kind, label, actor in relevant
+        if kind == "labeled" and label == authorization_label and actor == owner_login and at <= cutoff
+    ]
+    if not authorizing:
+        return False
+    current = authorizing[-1]
+    previous = authorizing[-2] if len(authorizing) > 1 else None
+    canary = [(at, kind, actor) for at, _, kind, label, actor in relevant if label == FALLBACK_CANARY_LABEL]
+    # GitHub stamps events to the second, so order within one second is unknowable. Any canary event in the second
+    # of this or the previous authorizing event is ambiguous (a same-second removal may precede authorization), and
+    # an ambiguity always leaves the canary unarmed.
+    if any(at in (current, previous) for at, _, _ in canary):
+        return False
+    before = [entry for entry in canary if entry[0] < current]
+    if not before:
+        return False
+    last = before[-1][0]
+    # Every canary event in the deciding second must be the owner's arming; any other event there is ambiguous.
+    if any(kind != "labeled" or actor != owner_login for at, kind, actor in before if at == last):
+        return False
+    return previous is None or last > previous
 
 
 def _plus(timestamp: str, delta: timedelta) -> str:
@@ -423,6 +482,7 @@ def prepare(
     envelope_bytes = seal(bundle, recipient=dependencies.handoff_recipient, binding=binding)
     fallback_binding: TransportBinding | None = None
     fallback_bytes: bytes | None = None
+    canary = False
     if dependencies.fallback_handoff_recipient is not None:
         fallback_key_id = recipient_key_id(dependencies.fallback_handoff_recipient)
         if fallback_key_id == binding.recipient_key_id:
@@ -441,6 +501,18 @@ def prepare(
             }
         )
         fallback_bytes = seal(bundle, recipient=dependencies.fallback_handoff_recipient, binding=fallback_binding)
+        # ADR 0041 F8: only an owner-label event authorization can be armed; a remediation never is.
+        if remediation is None and dependencies.issue_label_events is not None:
+            events = _definitive(lambda: dependencies.issue_label_events(issue), "NOT_ELIGIBLE")  # type: ignore[misc]
+            canary = _definitive(
+                lambda: fallback_canary_armed(
+                    events,
+                    owner_login=dependencies.owner_login,
+                    authorization_label=authorization.authorization_label,
+                    authorized_at=authorization.issue_updated_at,
+                ),
+                "NOT_ELIGIBLE",
+            )
     unsigned_evidence = {
         "authorization_envelope_sha256": state.sha256_hex(signed.to_json().encode("utf-8")),
         "claims": claims,
@@ -494,6 +566,7 @@ def prepare(
         handoff_ciphertext_sha256=state.sha256_hex(envelope_bytes),
         fallback_handoff_binding=None if fallback_binding is None else fallback_binding.as_dict(),
         fallback_handoff_ciphertext_sha256=None if fallback_bytes is None else state.sha256_hex(fallback_bytes),
+        fallback_canary=canary,
     )
     if fallback_sink is not None and fallback_bytes is not None:
         fallback_sink(fallback_bytes)
@@ -586,6 +659,9 @@ def commit(
                 "recipient_key_id": prepared.fallback_handoff_binding["recipient_key_id"],
             },
         }
+        evidence["fallback_canary"] = prepared.fallback_canary
+    elif prepared.fallback_canary:
+        raise AuthorizeRefused("TRANSPORT_INTEGRITY_FAILED", "a canary is armed only with a bound fallback")
     record = state.sign_record(
         {
             "schema_version": state.RECORD_SCHEMA_VERSION,

@@ -4,10 +4,10 @@
 
 **Proposed, revision 4: owner-approved interim implementation direction** (2026-11-06, Issue #390).
 
-**Revision 5 (proposed 2026-11-07, awaiting owner decision; not implemented):** F8 adds an owner-armed,
-independently verifiable fallback canary, because P8 cannot otherwise run. No approved mechanism makes the primary
-fail recoverably. In the last fifteen lifecycle runs, every primary outcome was terminal under F2 (`UNCLASSIFIED`,
-`NOT_FOUND` or a timeout). Until the owner approves F8 and it is implemented, nothing in this revision has any effect.
+**Revision 5 (owner-approved 2026-11-07, Issue #390 comment 6705575255; implemented as P9):** F8 adds an
+owner-armed, independently verifiable fallback canary, because P8 cannot otherwise run. No approved mechanism makes
+the primary fail recoverably. In the last fifteen lifecycle runs, every primary outcome was terminal under F2
+(`UNCLASSIFIED`, `NOT_FOUND` or a timeout). F8 has no effect unless the owner arms it for one authorization.
 
 Revision 4 applies the owner's decision of 2026-11-06:
 
@@ -420,7 +420,45 @@ A fallback result enters the **identical** chain:
 The validator and publisher domains, the exact `base_sha` binding, `collect_result`, the signing identity and the
 Validation Stage Contract are unchanged. The executor identity is evidence only. It never relaxes a stage.
 
-### F8. Owner-armed fallback canary (proposed in revision 5, not implemented)
+### F5a. Preferred fallback model and recorded model provenance (owner decisions, Issue #390)
+
+The owner's comment 6706679138 supersedes the exact-model fail-closed requirement of 6706666538. Success is governed
+execution, not a specific model.
+
+- **Trust boundary (unchanged).** The authorized provider and model trust policy is the one F5 and F6 already define:
+  - the owner-approved ChatGPT-plan Codex session;
+  - the pinned CLI;
+  - the outer Seatbelt profile;
+  - the gateway allowlisted to `auth.openai.com` and `chatgpt.com`.
+
+  A server-side reroute stays inside that boundary: same service, session, sandbox and egress. It is therefore
+  permitted. No signed contract binds an exact model: `AUTHORIZED`, `FALLBACK_AUTHORIZED` and the transport and SPM
+  envelope bindings name none. Signed TaskScope, SPM/DPM lineage, X_FB, validation and exact-head proof are untouched.
+- **Preferred model.** `config/issue_agent_codex_fallback.json` pins `codex_model` (`gpt-5.6`) at `control_sha` as the
+  model the fallback *requests*. A missing or malformed pin leaves the fallback inert. `MacCodexIsolation` refuses
+  any other requested model, so workflow configuration can never choose the model.
+- **Provenance, never asserted.**
+  - Before the prompt, inside the signed-in, sandboxed session, the launcher records whether the session's catalog
+    (`codex debug models`) lists the preferred model. This is evidence only; it never gates the run.
+  - Codex runs with `--json`. From the pinned CLI's event structure and its own error/warning items only, the
+    launcher records one of these provenance codes:
+    - `REPORTED`: the CLI named the requested model;
+    - `REROUTED`: a reroute event, the CLI's "routed to X" notice, or a different reported model, naming X;
+    - `REROUTED_UNIDENTIFIED`: a reroute without a well-formed target;
+    - `NOT_OBSERVED`: the CLI named no model, and nothing is asserted, not even the request;
+    - `STREAM_INVALID`: a malformed or oversized stream.
+  - Model-generated text (agent messages, command output) is never consulted.
+- **Outcome.** A permitted reroute never fails a run: success is still decided only by the exit status, collection,
+  the secret scan, validation and the exact-head proof. Bind-fallback records `{requested, requested_listed,
+  observed, provenance}` in `RESULT_BOUND.fallback.model` when the report conforms. A report that would name an
+  observed model without CLI evidence, or relabel a reroute as `REPORTED`, never conforms and is left out.
+- **Observed limits (pinned CLI 0.167.0, unauthenticated).** The built-in catalog has no plain `gpt-5.6` entry (only
+  `-sol`, `-terra` and `-luna`), and `exec --model gpt-5.6` warns `Model metadata for 'gpt-5.6' not found`. What
+  the account is actually served is recorded only after the owner's device sign-in on the fallback Mac.
+- **Installation.** The launcher is attested by hash, so the owner must reinstall it (`provision_codex_fallback_host.py
+  --apply`) from the merged commit before the fallback can attest again.
+
+### F8. Owner-armed fallback canary (revision 5, implemented as P9)
 
 **Problem.** P8 requires a primary that fails for an F2 cause. A real `RATE_LIMIT`, `QUOTA_EXCEEDED` or `NETWORK`
 failure cannot be scheduled, and F2's two-observation rule must not be weakened to stage one. F8 adds one bounded
@@ -483,6 +521,41 @@ staged failure can never be mistaken for, or relabelled as, a real one.
 - No production authorization can carry the flag without the owner's own pre-authorization label.
 - The induced failure is limited to one gateway instance in one primary run.
 - No credential, key or evidence is synthesised: both categories are real observations of a real refusal.
+
+**Implementation notes (P9).**
+
+- *Arming.* `authorize` reads the Issue's label events to their end. The authorizing event is the owner's latest
+  `hunter-agent-execute` `labeled` event at or before the signed `issue_updated_at`. The canary is armed only when
+  the last canary label event strictly before it is the owner's `labeled` event, and that event is later than the
+  owner's previous authorizing label event. So one arming never carries over to a later authorization. An
+  indefinite read refuses the authorization rather than silently disarming it. A remediation is never armed.
+- *Probe target.* The canary probe sends its `GET` to the pinned provider host (`ai-gateway.kilo.ai`) instead of the
+  real probe's listing host (`api.kilo.ai`). The listing host is outside both gateway profiles, so its refusal would
+  prove nothing about the canary, and would itself be a refusal "for another host". The probe sends an HTTP/1.1
+  `CONNECT` the gateway can attribute to that host, and never a credential.
+- *Refusal evidence.* The gateway logs one content-free `GATEWAY_REFUSED_HOST <host>` line per well-formed
+  `CONNECT` it refuses for its host. The trusted step reads that instance's log before and after the probe. Evidence
+  exists only when:
+  - the primary was refused the provider host at least once;
+  - after the agent exited, the only new refusal is the probe's single refusal of the provider host;
+  - no malformed request was denied.
+
+  "None for any other host" is enforced in this narrower form, because the pinned Kilo 7.8.18 also sends telemetry
+  to `us.i.posthog.com`. Both Kilo profiles refuse that host on every run, canary or not, so its refusal says
+  nothing about the canary. The canary profile differs from the Kilo profile only by the provider host, so any
+  other refused host is one the Kilo profile refuses too. Such hosts are bound into the digest but never counted.
+  This was observed by running the pinned CLI through this gateway in the canary profile.
+- *Stderr hint.* The pinned Kilo CLI reports a refused tunnel as `Proxy refused to open a tunnel: 403 Forbidden`.
+  The closed stderr vocabulary maps that text to `NETWORK`: the run's only egress route refused the connection.
+  Before this mapping, the text classified as `UNCLASSIFIED`, so the canary could never be admitted. For a run
+  that is not a canary, this changes nothing: the direct trusted probe still has to observe `NETWORK` itself.
+
+  `FALLBACK_AUTHORIZED.canary_refusal` records `primary_refusals`, `probe_refusals` (always 1) and
+  `refusal_digest`. The digest is the SHA-256 of the canonical JSON of the gateway instance name, the provider host
+  and the ordered refused hosts. All three inputs are printed in the public executor job log, so anyone can
+  recompute it.
+- *Order.* The probe runs after the agent container has exited and before the isolation is torn down. That is the
+  only window in which the same gateway instance still exists.
 
 **Schema.**
 
@@ -553,4 +626,4 @@ without owner approval.
 | **P6** session | Device-code session with owner-only inbox, window, logout and delete on every path, token scan | launcher and port tests | **done** |
 | **P7** workflow, docs | `execute-fallback` (self-hosted, `X_FB` only), `bind-fallback`, validate gating; static guard extended; state machine document | `test_issue_agent_workflows.py` | **done** (defect registry entry deferred to independent review) |
 | **P8** end to end | After push and merge approval: an owner-labelled Issue with the primary failing recoverably (F8 canary, P9), observed through `FALLBACK_AUTHORIZED`, then `RESULT_BOUND` (attempt 2), validated, published, Draft PR, and hosted Pre-PR Preflight on the exact head | exact-head SHA equality; ledger chain verified | gated |
-| **P9** canary (F8, revision 5) | Owner label verified in `authorize`; `fallback_canary` in `AUTHORIZED`; gateway `canary` profile with refusal counter; canary-only probe via the gateway; `CANARY_NETWORK` admission | positive canary admission; flag absent → terminal; real `NETWORK` on a canary authorization → terminal; label after authorization → unarmed; non-owner label → unarmed; refusal for another host → terminal | **awaiting owner approval** |
+| **P9** canary (F8, revision 5) | Owner label verified in `authorize`; `fallback_canary` in `AUTHORIZED`; gateway `canary` profile with refusal counter; canary-only probe via the gateway; `CANARY_NETWORK` admission | positive canary admission; flag absent → terminal; real `NETWORK` on a canary authorization → terminal; label after authorization → unarmed; non-owner label → unarmed; refusal for another host → terminal | implemented (`tests/test_issue_agent_fallback_canary.py`) |

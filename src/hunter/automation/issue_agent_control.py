@@ -1177,6 +1177,7 @@ def observe(
     executor_advisory_code: str | None = None,
     executor_stderr_category: str | None = None,
     executor_probe_category: str | None = None,
+    executor_canary_refusal: Mapping[str, Any] | None = None,
 ) -> Observation:
     """Definitive GitHub facts for one active authorization. Any indefinite read raises ``FactsUnavailable``."""
 
@@ -1221,6 +1222,9 @@ def observe(
             fields["executor_stderr_category"] = executor_stderr_category
         if executor_probe_category in state.FALLBACK_SIGNAL_CATEGORIES:
             fields["executor_probe_category"] = executor_probe_category
+        # ADR 0041 F8: admitted only in its closed ledger form; it can only complete an armed, signed canary.
+        if state.canary_refusal_conforms(executor_canary_refusal):
+            fields["executor_canary_refusal"] = dict(executor_canary_refusal or {})
         observation["executor_job_id"] = executor_job_id
     if current == state.FALLBACK_AUTHORIZED:
         run_id = _owning_run(view)  # the owner-approved resume run, once one has claimed its nonce
@@ -1390,6 +1394,7 @@ def _evidence(
     configuration: Configuration,
     now: datetime,
     fallback_attestation_sha256: str | None = None,
+    fallback_model: Mapping[str, Any] | None = None,
 ) -> tuple[str, dict[str, Any]] | None:
     """``(target_state, evidence)`` for a transition, or ``None`` when its evidence is not (yet) conforming."""
 
@@ -1400,7 +1405,7 @@ def _evidence(
         cause = decision.evidence_hint["cause"]
         if observation.executor_job_id is None or facts.executor_conclusion not in state.EXECUTOR_CONCLUSIONS:
             return None
-        return target, {
+        admitted = {
             "primary_executor_job_id": observation.executor_job_id,
             "primary_executor_conclusion": facts.executor_conclusion,
             "primary_cause": cause,
@@ -1410,6 +1415,11 @@ def _evidence(
             "fallback_executor": "codex",
             "fallback_execution_id": bound["fallback"]["execution_id"],
         }
+        if cause == state.CANARY_FALLBACK_CAUSE:
+            if not state.canary_refusal_conforms(facts.executor_canary_refusal):
+                return None
+            admitted["canary_refusal"] = dict(facts.executor_canary_refusal or {})
+        return target, admitted
     if target == state.RESULT_BOUND:
         assert decision.evidence_hint is not None and not isinstance(facts.result_artifacts, type(state.UNKNOWN))
         artifact = next(a for a in facts.result_artifacts if a.artifact_id == decision.evidence_hint["artifact_id"])
@@ -1432,6 +1442,9 @@ def _evidence(
                 "attestation_sha256": fallback_attestation_sha256,
                 "deadline_published_at": _timestamp(now + FALLBACK_PUBLISH_DEADLINE),
             }
+            # ADR 0041 F5a: provenance only. A conforming report is recorded; anything else is left out, never guessed.
+            if state.fallback_model_conforms(fallback_model):
+                bound_evidence["fallback"]["model"] = dict(fallback_model or {})
         return target, bound_evidence
     if target == state.VALIDATED:
         receipt = facts.receipt
@@ -1501,6 +1514,8 @@ def step(
     executor_stderr_category: str | None = None,
     executor_probe_category: str | None = None,
     fallback_attestation_sha256: str | None = None,
+    executor_canary_refusal: Mapping[str, Any] | None = None,
+    fallback_model: Mapping[str, Any] | None = None,
     new_nonce: Callable[[], str] = lambda: secrets.token_hex(32),
     chain: bool = True,
 ) -> state.Decision:
@@ -1525,6 +1540,7 @@ def step(
         executor_advisory_code=executor_advisory_code,
         executor_stderr_category=executor_stderr_category,
         executor_probe_category=executor_probe_category,
+        executor_canary_refusal=executor_canary_refusal,
     )
     decision = state.advance(view, observation.facts)
     ledger = Ledger(store, configuration, provenance, signing_key, writer, issue)
@@ -1550,6 +1566,7 @@ def step(
             configuration=configuration,
             now=moment,
             fallback_attestation_sha256=fallback_attestation_sha256,
+            fallback_model=fallback_model,
         )
         if built is None:
             return state.Decision("noop", reason="transition evidence not conforming yet")
@@ -1607,6 +1624,8 @@ def step(
                 executor_stderr_category=executor_stderr_category,
                 executor_probe_category=executor_probe_category,
                 fallback_attestation_sha256=fallback_attestation_sha256,
+                executor_canary_refusal=executor_canary_refusal,
+                fallback_model=fallback_model,
                 new_nonce=new_nonce,
                 chain=False,
             )

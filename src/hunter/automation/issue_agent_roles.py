@@ -175,6 +175,8 @@ _STDERR_CATEGORIES: Final = (
     (b"connection refused", "NETWORK"),
     (b"connection reset", "NETWORK"),
     (b"network unreachable", "NETWORK"),
+    # The run's sole egress route refused the tunnel (Kilo CLI: "Proxy refused to open a tunnel: 403 Forbidden").
+    (b"proxy refused to open a tunnel", "NETWORK"),
     (b"provider unavailable", "PROVIDER_UNAVAILABLE"),
     (b"service unavailable", "PROVIDER_UNAVAILABLE"),
     (b"bad gateway", "PROVIDER_UNAVAILABLE"),
@@ -1018,6 +1020,8 @@ class ExecutorOutcome:
     #: ADR 0041 F2: reported only for a primary run that launched and exited non-zero. Closed categories only.
     stderr_category: str | None = None
     probe_category: str | None = None
+    #: ADR 0041 F8: the armed canary's gateway refusal evidence (counts and digest only), else ``None``.
+    canary_refusal: Mapping[str, Any] | None = None
 
 
 def require_governed_kilo_isolation(model_argv: Sequence[str], isolation: Isolation) -> None:
@@ -1109,6 +1113,13 @@ def run_executor(
 
     require_governed_kilo_isolation(config.model_argv, isolation)
     require_attempt_executor(config.model_argv, isolation, fallback=fallback)
+    # ADR 0041 F8: only the signed AUTHORIZED flag arms the canary, for this authorization's primary run only.
+    canary = not fallback and bound.get("fallback_canary") is True and bound.get("fallback") is not None
+    if canary:
+        arm = getattr(isolation, "arm_canary", None)
+        if arm is None or not _is_kilo_run(config.model_argv):
+            raise RoleRefused("EXECUTION_NOT_STARTED", "the armed canary runs only through the Kilo gateway")
+        arm()
 
     workspace, git_dir, home = workroot / "workspace", workroot / "trusted.git", workroot / "home"
     # ADR 0039 L4: a remediation executes on its parent PR branch at the exact bound head, not on main.
@@ -1164,6 +1175,7 @@ def run_executor(
     print("executor task contract: " + " ".join(f"{name}={value}" for name, value in contract.items()), flush=True)
     isolation.prepare(workspace, home)
     advisory: str | None = None
+    canary_probe: tuple[str, Mapping[str, Any] | None] | None = None
     try:
         status = isolation.run(
             model_argv,
@@ -1175,6 +1187,17 @@ def run_executor(
         )
         if status != 0:
             advisory = "PROVIDER_UNAVAILABLE"
+            if canary:
+                # The agent has exited; its gateway instance is still up, so the trusted probe meets the same refusal.
+                from hunter.automation.issue_agent_provider_probe import (
+                    KILO_CANARY_PROBE_URL,
+                    KILO_PROVIDER_HOST,
+                    probe_through_gateway,
+                )
+
+                canary_probe = isolation.observe_canary(  # type: ignore[attr-defined]
+                    lambda gateway: probe_through_gateway(KILO_CANARY_PROBE_URL, gateway=gateway), KILO_PROVIDER_HOST
+                )
     except subprocess.TimeoutExpired:
         advisory = "MODEL_TIMEOUT"
     finally:
@@ -1193,6 +1216,11 @@ def run_executor(
             + " ".join(f"{name}={value}" for name, value in counts.items()),
             flush=True,
         )
+        if canary:
+            hint = getattr(isolation, "last_stderr_category", None)
+            probe, refusal = canary_probe if canary_probe is not None else (None, None)
+            print(f"executor canary signal: stderr_category={hint} probe_category={probe}", flush=True)
+            return ExecutorOutcome(None, advisory, hint if isinstance(hint, str) else None, probe, refusal)
         if fallback or advisory != "PROVIDER_UNAVAILABLE" or config.provider_probe is None:
             return ExecutorOutcome(None, advisory)
         # ADR 0041 F2: the primary launched and exited non-zero. Every isolated process has stopped, so the trusted
