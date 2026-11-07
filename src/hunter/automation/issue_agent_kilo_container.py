@@ -34,6 +34,42 @@ _REFUSED = re.compile(r"^GATEWAY_REFUSED_HOST ([a-z0-9.-]{1,253})$")
 _DENIED = "GATEWAY_DENIED_CONNECT"
 
 
+_ANSI = re.compile(rb"\x1b\[[0-9;]*[A-Za-z]")
+#: HTTP statuses a provider failure may carry; any other number on an error line is never reported.
+_REPORTED_STATUSES = frozenset({400, 401, 402, 403, 404, 408, 409, 413, 422, 429, 500, 502, 503, 504, 529})
+_STATUS = re.compile(rb"(?<![0-9])([45][0-9]{2})(?![0-9])")
+_STACK_FRAME = re.compile(rb"^\s+at \S")
+
+
+def stderr_structure(sample: bytes) -> dict[str, str]:
+    """Issue #577: a content-free outline of the Kilo CLI's stderr, so a non-zero exit is attributable.
+
+    Only counts of the CLI's own line shapes are reported (tool calls ``→``/``←``, shell ``$``, ``DENIED``, Node
+    stack frames, ``Error`` lines) plus one allowlisted HTTP status found on an ``Error`` line. No text, path,
+    command, message or other number leaves this function. It is diagnostic only: it never feeds a ledger decision.
+    """
+
+    counts = {"tool_calls": 0, "shell": 0, "denied": 0, "error_lines": 0, "stack_frames": 0}
+    status = "none"
+    for raw in _ANSI.sub(b"", sample[:65536]).splitlines():
+        if _STACK_FRAME.match(raw):
+            counts["stack_frames"] += 1
+            continue
+        line = raw.strip()
+        if line.startswith(("\u2192 ".encode(), "\u2190 ".encode())):
+            counts["tool_calls"] += 1
+        elif line.startswith(b"$ "):
+            counts["shell"] += 1
+        elif line == b"DENIED":
+            counts["denied"] += 1
+        elif line.startswith(b"Error"):
+            counts["error_lines"] += 1
+            if status == "none":
+                found = next((int(m) for m in _STATUS.findall(line) if int(m) in _REPORTED_STATUSES), None)
+                status = str(found) if found is not None else "none"
+    return {**{name: str(value) for name, value in counts.items()}, "http_status": status}
+
+
 def gateway_refusals(log: str) -> tuple[list[str], int]:
     """The refused hosts, in order, and the count of any other denial, from one gateway instance's log."""
     hosts: list[str] = []
@@ -433,6 +469,12 @@ class KiloContainerIsolation:
             flush=True,
         )
         self.last_stderr_category = stderr_category(result.stderr[:65536])
+        if result.returncode != 0:
+            print(
+                "isolated Kilo stderr structure: "
+                + " ".join(f"{name}={value}" for name, value in stderr_structure(result.stderr).items()),
+                flush=True,
+            )
         print(
             "isolated Kilo container diagnostic: exit="
             + ("ZERO" if result.returncode == 0 else "NONZERO")

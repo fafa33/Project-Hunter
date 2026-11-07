@@ -90,6 +90,26 @@ def test_bind_never_admits_on_an_untrusted_hint_alone(repos: dict[str, Any], std
     assert ledger_state(repos).state == state.FAILED
 
 
+@pytest.mark.parametrize("probe", [None, "UNCLASSIFIED"])
+def test_issue_577_an_unclassified_primary_exit_is_terminal_never_a_fallback(
+    repos: dict[str, Any], probe: str | None
+) -> None:
+    # Run 42387251897: a keyless free-model primary exited non-zero with an UNCLASSIFIED hint and no trusted probe
+    # (F2 probes only with the model key). The generic advisory never earns the provisioned fallback.
+    fx.offer_and_admit(repos, admit=False)
+    decision = step(
+        repos,
+        primary_failed_world(),
+        configuration=FALLBACK_CONFIG,
+        executor_advisory_code="PROVIDER_UNAVAILABLE",
+        executor_stderr_category="UNCLASSIFIED",
+        executor_probe_category=probe,
+    )
+    assert decision.action == "fail" and decision.code == "EXECUTION_NOT_COMPLETED"
+    view = ledger_state(repos)
+    assert view.state == state.FAILED and state.FALLBACK_AUTHORIZED not in view.evidence
+
+
 @pytest.mark.parametrize("role", ["record-validation", "finalize"])
 def test_no_other_control_role_writes_the_admission(repos: dict[str, Any], role: str) -> None:
     fx.offer_and_admit(repos, admit=False)

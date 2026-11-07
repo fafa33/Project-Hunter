@@ -130,3 +130,67 @@ def test_secrets_are_never_accepted_from_argv() -> None:
     }
     # The only key-named flag carries the *name* of the provider's environment variable, never a value.
     assert {flag for flag in flags if any(word in flag for word in ("key", "token", "secret"))} == {"--model-key-name"}
+
+
+# --- Issue #577: a signed terminal FAILED is visible on the run, never reported as task completion -------------
+
+
+def test_a_terminal_failure_is_annotated_with_its_closed_code_only() -> None:
+    from hunter.automation import issue_agent_state as state
+
+    annotation = lifecycle.terminal_outcome_annotation(577, state.Decision("fail", code="EXECUTION_NOT_COMPLETED"))
+    assert annotation is not None
+    assert annotation.startswith("::error title=Issue agent FAILED::issue 577: FAILED EXECUTION_NOT_COMPLETED.")
+    assert "\n" not in annotation and "%" not in annotation
+
+
+@pytest.mark.parametrize("code", ["NOT_A_FAILURE_CODE", "EXECUTION_NOT_COMPLETED\n::warning::x", "", None])
+def test_a_code_outside_the_failed_vocabulary_is_never_echoed(code: str | None) -> None:
+    from hunter.automation import issue_agent_state as state
+
+    annotation = lifecycle.terminal_outcome_annotation(577, state.Decision("fail", code=code))
+    assert annotation is not None and "FAILED UNKNOWN." in annotation and "warning" not in annotation
+
+
+@pytest.mark.parametrize(
+    "decision",
+    [("noop", None, None), ("transition", "RESULT_BOUND", None), ("transition", "COMPLETED", None)],
+)
+def test_non_terminal_decisions_carry_no_failure_annotation(decision: tuple[str, str | None, str | None]) -> None:
+    from hunter.automation import issue_agent_state as state
+
+    action, target, code = decision
+    assert lifecycle.terminal_outcome_annotation(577, state.Decision(action, target_state=target, code=code)) is None
+
+
+@pytest.mark.parametrize(
+    "action,target,code,annotated,bound",
+    [
+        ("fail", None, "EXECUTION_NOT_COMPLETED", True, "false"),
+        ("transition", "RESULT_BOUND", None, False, "true"),
+    ],
+)
+def test_bind_step_annotates_a_terminal_failure_without_failing_the_job(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    action: str,
+    target: str | None,
+    code: str | None,
+    annotated: bool,
+    bound: str,
+) -> None:
+    from hunter.automation import issue_agent_control as control
+    from hunter.automation import issue_agent_state as state
+
+    outputs: dict[str, str] = {}
+    monkeypatch.setattr(lifecycle, "_writer", lambda *_: object())
+    monkeypatch.setattr(lifecycle, "_github", lambda *_: object())
+    monkeypatch.setattr(lifecycle, "_store", lambda *_, **__: object())
+    monkeypatch.setattr(lifecycle, "_ed25519", lambda *_: object())
+    monkeypatch.setattr(lifecycle, "_output", lambda **values: outputs.update(values))
+    monkeypatch.setattr(control, "step", lambda **_: state.Decision(action, target_state=target, code=code))
+    arguments = lifecycle.argparse.Namespace(role="bind", issue=577, advisory="PROVIDER_UNAVAILABLE", job="bind")
+    assert lifecycle.cmd_step(object(), arguments) == 0  # orchestration succeeded; the ledger holds the outcome
+    printed = capsys.readouterr().out
+    assert ("::error title=Issue agent FAILED::" in printed) is annotated
+    assert outputs == {"result_bound": bound, "fallback_authorized": "false"}
