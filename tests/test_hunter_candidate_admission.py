@@ -338,17 +338,21 @@ def test_ambiguous_mutation_still_draft_is_failure(monkeypatch):
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1
 
 
-def test_workflow_mints_app_token_with_pull_requests_write_only() -> None:
-    """The Hunter App installation 422s if any scope beyond pull-requests:write is requested."""
+def test_workflow_mints_app_token_with_exact_ready_mutation_scopes() -> None:
+    """The App token requests exactly what markPullRequestReadyForReview needs.
+
+    With pull-requests:write alone the mutation returned FORBIDDEN "Resource not
+    accessible by integration" (run 42514115065, PR #703); changing a PR's stage
+    also requires repository write, i.e. contents:write. Nothing else is requested:
+    admission reads stay on the job's GITHUB_TOKEN.
+    """
     workflow = (ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text(encoding="utf-8")
-    assert "permission-pull-requests: write" in workflow
-    for forbidden in (
-        "permission-contents:",
-        "permission-actions:",
-        "permission-checks:",
-        "permission-statuses:",
-    ):
-        assert forbidden not in workflow, f"App token must not request {forbidden!r}; installation rejects it with 422"
+    requested = {
+        line.strip().removeprefix("permission-").split(":", 1)[0]: line.split(":", 1)[1].strip()
+        for line in workflow.splitlines()
+        if line.strip().startswith("permission-")
+    }
+    assert requested == {"contents": "write", "pull-requests": "write"}
 
 
 def test_workflow_routes_reads_to_github_token_and_mutations_to_app_token() -> None:
