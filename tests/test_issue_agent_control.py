@@ -675,7 +675,13 @@ def completion_world(repos: dict[str, Any], signing_key: str, conclusion: str | 
     github, head = published_world(repos, signing_key)
     step(repos, github, role="finalize")
     github.routes[f"/repos/{rt.REPOSITORY}/pulls"] = [
-        {"number": 600, "node_id": "PR_x", "draft": True, "base": {"ref": "main"}, "head": {"ref": BRANCH, "sha": head}}
+        {
+            "number": 600,
+            "node_id": "PR_x",
+            "draft": True,
+            "base": {"ref": "main", "repo": {"id": 1}},
+            "head": {"ref": BRANCH, "sha": head, "repo": {"id": 1}},
+        }
     ]
     runs = (
         []
@@ -690,6 +696,8 @@ def completion_world(repos: dict[str, Any], signing_key: str, conclusion: str | 
                 "run_attempt": 1,
                 "status": "completed",
                 "conclusion": conclusion,
+                "repository": {"id": 1},
+                "head_repository": {"id": 1},
             }
         ]
     )
@@ -734,6 +742,72 @@ def test_a_non_draft_pr_never_completes(repos: dict[str, Any], signing_key: str)
     github, _ = completion_world(repos, signing_key, "success")
     github.routes[f"/repos/{rt.REPOSITORY}/pulls"][0]["draft"] = False
     assert step(repos, github, role="reconcile").action == "noop"
+
+
+def test_completion_refuses_preflight_run_with_foreign_repository_id(repos: dict[str, Any], signing_key: str) -> None:
+    github, _ = completion_world(repos, signing_key, "success")
+    github.routes[f"/repos/{rt.REPOSITORY}/actions/workflows/{control.PREFLIGHT_WORKFLOW_FILE}/runs"]["workflow_runs"][
+        0
+    ]["repository"] = {"id": 999}
+    assert step(repos, github, role="reconcile").action == "noop"
+    assert ledger_state(repos).state == state.PUBLISHED
+
+
+def test_completion_refuses_preflight_run_with_foreign_head_repository_id(
+    repos: dict[str, Any], signing_key: str
+) -> None:
+    github, _ = completion_world(repos, signing_key, "success")
+    github.routes[f"/repos/{rt.REPOSITORY}/actions/workflows/{control.PREFLIGHT_WORKFLOW_FILE}/runs"]["workflow_runs"][
+        0
+    ]["head_repository"] = {"id": 999}
+    assert step(repos, github, role="reconcile").action == "noop"
+    assert ledger_state(repos).state == state.PUBLISHED
+
+
+def test_completion_refuses_preflight_run_missing_repository_id(repos: dict[str, Any], signing_key: str) -> None:
+    github, _ = completion_world(repos, signing_key, "success")
+    github.routes[f"/repos/{rt.REPOSITORY}/actions/workflows/{control.PREFLIGHT_WORKFLOW_FILE}/runs"]["workflow_runs"][
+        0
+    ].pop("repository", None)
+    assert step(repos, github, role="reconcile").action == "noop"
+    assert ledger_state(repos).state == state.PUBLISHED
+
+
+def test_completion_refuses_preflight_run_missing_head_repository_id(repos: dict[str, Any], signing_key: str) -> None:
+    github, _ = completion_world(repos, signing_key, "success")
+    github.routes[f"/repos/{rt.REPOSITORY}/actions/workflows/{control.PREFLIGHT_WORKFLOW_FILE}/runs"]["workflow_runs"][
+        0
+    ].pop("head_repository", None)
+    assert step(repos, github, role="reconcile").action == "noop"
+    assert ledger_state(repos).state == state.PUBLISHED
+
+
+def test_completion_refuses_pr_with_foreign_head_repo_id(repos: dict[str, Any], signing_key: str) -> None:
+    github, _ = completion_world(repos, signing_key, "success")
+    github.routes[f"/repos/{rt.REPOSITORY}/pulls"][0]["head"]["repo"] = {"id": 999}
+    assert step(repos, github, role="reconcile").action == "noop"
+    assert ledger_state(repos).state == state.PUBLISHED
+
+
+def test_completion_refuses_pr_with_foreign_base_repo_id(repos: dict[str, Any], signing_key: str) -> None:
+    github, _ = completion_world(repos, signing_key, "success")
+    github.routes[f"/repos/{rt.REPOSITORY}/pulls"][0]["base"]["repo"] = {"id": 999}
+    assert step(repos, github, role="reconcile").action == "noop"
+    assert ledger_state(repos).state == state.PUBLISHED
+
+
+def test_completion_refuses_pr_missing_head_repo_id(repos: dict[str, Any], signing_key: str) -> None:
+    github, _ = completion_world(repos, signing_key, "success")
+    github.routes[f"/repos/{rt.REPOSITORY}/pulls"][0]["head"].pop("repo", None)
+    assert step(repos, github, role="reconcile").action == "noop"
+    assert ledger_state(repos).state == state.PUBLISHED
+
+
+def test_completion_refuses_pr_missing_base_repo_id(repos: dict[str, Any], signing_key: str) -> None:
+    github, _ = completion_world(repos, signing_key, "success")
+    github.routes[f"/repos/{rt.REPOSITORY}/pulls"][0]["base"].pop("repo", None)
+    assert step(repos, github, role="reconcile").action == "noop"
+    assert ledger_state(repos).state == state.PUBLISHED
 
 
 # --- REST client --------------------------------------------------------------------------------------
