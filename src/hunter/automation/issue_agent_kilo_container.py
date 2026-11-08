@@ -90,7 +90,70 @@ _SESSION_ERRORS: Final = frozenset(
     }
 )
 _FINISH_REASONS: Final = frozenset({"stop", "length", "tool-calls", "content-filter", "error", "other", "unknown"})
-_NO_SESSION: Final = {"error": "none", "status": "none", "retryable": "none", "finish": "none", "tool_errors": "0"}
+_NO_SESSION: Final = {
+    "error": "none",
+    "status": "none",
+    "retryable": "none",
+    "finish": "none",
+    "tool_errors": "0",
+    "cause": "none",
+}
+#: Issue #577: hosted runs 42486218343 and 42487085826 ended on ``APIError status=none retryable=true`` with stderr
+#: ``UNCLASSIFIED``, which cannot tell a rate limit from a dropped connection or an upstream model error. The recorded
+#: error's message and response body are matched against this fixed table (most specific first). Only the category
+#: leaves the reader -- never a byte of the message -- and an unmatched message is ``OTHER``, never a guess. Bare numbers
+#: are not markers: the HTTP status has its own allowlisted field, and digits inside a body prove nothing.
+_SESSION_CAUSE_BYTES: Final = 4096
+_SESSION_CAUSES: Final = (
+    # Hunter's own egress gateway refused the tunnel: never an upstream or credential failure.
+    ((b"proxy refused", b"open a tunnel"), "EGRESS_REFUSED"),
+    (
+        (b"context length", b"context window", b"maximum context", b"too many tokens", b"prompt is too long"),
+        "CONTEXT_LIMIT",
+    ),
+    ((b"rate limit", b"rate-limit", b"ratelimit", b"too many requests"), "RATE_LIMIT"),
+    ((b"quota", b"credit", b"balance", b"payment required"), "QUOTA"),
+    ((b"unauthorized", b"api key", b"api_key", b"authenticat", b"forbidden"), "AUTHENTICATION"),
+    ((b"no endpoints", b"model not found", b"not a valid model", b"model is not available"), "MODEL_UNAVAILABLE"),
+    ((b"timed out", b"timeout", b"etimedout", b"deadline"), "TIMEOUT"),
+    (
+        (
+            b"socket",
+            b"closed unexpectedly",
+            b"connection reset",
+            b"econnreset",
+            b"hang up",
+            b"terminated",
+            b"connection closed",
+            b"premature close",
+            b"unable to connect",
+            b"econnrefused",
+            b"proxy",
+        ),
+        "CONNECTION",
+    ),
+    (
+        (
+            b"overloaded",
+            b"unavailable",
+            b"bad gateway",
+            b"upstream",
+            b"provider returned error",
+            b"internal server error",
+            b"capacity",
+        ),
+        "UPSTREAM_ERROR",
+    ),
+)
+
+
+def _session_cause(*texts: object) -> str:
+    sample = b" ".join(
+        text.encode("utf-8", "replace")[:_SESSION_CAUSE_BYTES].lower() for text in texts if isinstance(text, str)
+    )
+    if not sample.strip():
+        return "none"
+    return next((code for markers, code in _SESSION_CAUSES if any(m in sample for m in markers)), "OTHER")
 
 
 def _private_copy(source: Path, target: Path) -> bool:
@@ -147,7 +210,11 @@ def kilo_session_outcome(home: Path) -> dict[str, str]:
                 connection.set_progress_handler(_query_budget, 1000)
                 row = connection.execute(
                     "SELECT json_extract(data, '$.error.name'), json_extract(data, '$.error.data.statusCode'),"
-                    " json_extract(data, '$.error.data.isRetryable'), json_extract(data, '$.finish')"
+                    " json_extract(data, '$.error.data.isRetryable'), json_extract(data, '$.finish'),"
+                    " CASE json_type(data, '$.error.data.message') WHEN 'text' THEN"
+                    f" substr(json_extract(data, '$.error.data.message'), 1, {_SESSION_CAUSE_BYTES}) END,"
+                    " CASE json_type(data, '$.error.data.responseBody') WHEN 'text' THEN"
+                    f" substr(json_extract(data, '$.error.data.responseBody'), 1, {_SESSION_CAUSE_BYTES}) END"
                     " FROM message WHERE json_extract(data, '$.role') = 'assistant'"
                     " ORDER BY time_created DESC, id DESC LIMIT 1"
                 ).fetchone()
@@ -163,13 +230,14 @@ def kilo_session_outcome(home: Path) -> dict[str, str]:
         return {**_NO_SESSION, "error": "UNREADABLE"}
     if row is None:
         return {**_NO_SESSION, "tool_errors": str(min(int(tool_errors), 999))}
-    name, status, retryable, finish = row
+    name, status, retryable, finish, message, body = row
     return {
         "error": "none" if name is None else name if name in _SESSION_ERRORS else "OTHER",
         "status": str(status) if type(status) is int and status in _REPORTED_STATUSES else "none",
         "retryable": {1: "true", 0: "false"}.get(retryable, "none") if type(retryable) is int else "none",
         "finish": "none" if finish is None else finish if finish in _FINISH_REASONS else "OTHER",
         "tool_errors": str(min(int(tool_errors), 999)) if type(tool_errors) is int else "none",
+        "cause": "none" if name is None else _session_cause(message, body),
     }
 
 
