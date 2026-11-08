@@ -388,3 +388,38 @@ def test_push_safety_gates_are_bounded_and_black_matches_trusted_contract(monkey
     assert observed["timeout"] == 180
     black = dict(observed["gates"])["Black"]
     assert black == ("black", "--check", "--diff", ".")
+
+
+# --- Issue #577: never push from a worktree macOS may purge --------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "root",
+    ["/private/tmp/hunter-issue390-codex", "/private/tmp", "/tmp/hunter"],
+)
+def test_a_darwin_worktree_under_a_purged_temporary_root_is_refused(root: str) -> None:
+    with pytest.raises(RuntimeError, match="periodically purges"):
+        hunter_pre_push._require_persistent_worktree(Path(root), platform="darwin")
+
+
+@pytest.mark.parametrize(
+    ("root", "platform"),
+    [
+        ("/Users/someone/hunter-wt-577", "darwin"),
+        ("/Users/someone/private/tmp-notes/repo", "darwin"),
+        ("/private/tmpfoo/repo", "darwin"),
+        ("/tmp/runner/work/Project-Hunter", "linux"),  # hosted Linux runners are unaffected
+    ],
+)
+def test_persistent_or_non_darwin_worktrees_are_accepted(root: str, platform: str) -> None:
+    hunter_pre_push._require_persistent_worktree(Path(root), platform=platform)
+
+
+def test_the_persistent_worktree_check_runs_before_any_other_push_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    order: list[str] = []
+    monkeypatch.setattr(hunter_pre_push, "_run_git", lambda *a: "/private/tmp/wt" if a[0] == "rev-parse" else "")
+    monkeypatch.setattr(hunter_pre_push.sys, "platform", "darwin")
+    monkeypatch.setattr(hunter_pre_push, "_require_clean_tree", lambda: order.append("clean"))
+    with pytest.raises(RuntimeError, match="periodically purges"):
+        hunter_pre_push.enforce_pre_push(["refs/heads/x " + "a" * 40 + " refs/heads/x " + "0" * 40 + "\n"])
+    assert order == []

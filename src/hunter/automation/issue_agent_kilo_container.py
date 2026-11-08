@@ -173,6 +173,56 @@ def kilo_session_outcome(home: Path) -> dict[str, str]:
     }
 
 
+#: Issue #577: the home is created ``0700`` by the runner and chowned to the model uid before the run, so on a Linux
+#: runner the trusted step cannot even search it (hosted run 42465838010 reported ``error=UNREADABLE`` for a store
+#: that existed). This fixed script runs in a one-shot container as root holding only ``CAP_DAC_READ_SEARCH``: it can
+#: read, never write. It never follows a link, accepts only bounded regular files, and frames the store and its
+#: write-ahead log on stdout. Exit 3: no store. Any other refusal: exit 4.
+_SESSION_STAGE_SCRIPT: Final = (
+    "import os,stat,sys\n"
+    "limit=int(sys.argv[1]);out=sys.stdout.buffer;cur='/h'\n"
+    "try:\n"
+    " for n in ('.local','share','kilo'):\n"
+    "  cur=os.path.join(cur,n)\n"
+    "  if not stat.S_ISDIR(os.lstat(cur).st_mode):sys.exit(4)\n"
+    "except FileNotFoundError:sys.exit(3)\n"
+    "except OSError:sys.exit(4)\n"
+    "def read(name,required):\n"
+    " try:fd=os.open(os.path.join(cur,name),os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)\n"
+    " except FileNotFoundError:\n"
+    "  if required:sys.exit(3)\n"
+    "  return b''\n"
+    " except OSError:sys.exit(4)\n"
+    " with os.fdopen(fd,'rb') as f:\n"
+    "  info=os.fstat(f.fileno())\n"
+    "  if not stat.S_ISREG(info.st_mode) or info.st_size>limit:sys.exit(4)\n"
+    "  data=f.read(limit+1)\n"
+    " if len(data)>limit:sys.exit(4)\n"
+    " return data\n"
+    "db=read('kilo.db',True);wal=read('kilo.db-wal',False)\n"
+    "for part in (db,wal):out.write(len(part).to_bytes(8,'big'));out.write(part)\n"
+)
+
+
+def _unframe_session_store(payload: bytes) -> tuple[bytes, bytes] | None:
+    """The store and its write-ahead log from the reader's exact framing, or ``None`` for anything else."""
+
+    parts: list[bytes] = []
+    offset = 0
+    for _ in range(2):
+        if len(payload) < offset + 8:
+            return None
+        size = int.from_bytes(payload[offset : offset + 8], "big")
+        offset += 8
+        if size > _SESSION_STORE_LIMIT or len(payload) < offset + size:
+            return None
+        parts.append(payload[offset : offset + size])
+        offset += size
+    if offset != len(payload) or not parts[0]:
+        return None
+    return parts[0], parts[1]
+
+
 def gateway_refusals(log: str) -> tuple[list[str], int]:
     """The refused hosts, in order, and the count of any other denial, from one gateway instance's log."""
     hosts: list[str] = []
@@ -580,7 +630,7 @@ class KiloContainerIsolation:
             )
             print(
                 "isolated Kilo session outcome: "
-                + " ".join(f"{name}={value}" for name, value in kilo_session_outcome(self.home).items()),
+                + " ".join(f"{name}={value}" for name, value in self.session_outcome().items()),
                 flush=True,
             )
         print(
@@ -591,6 +641,61 @@ class KiloContainerIsolation:
             flush=True,
         )
         return result.returncode
+
+    def session_outcome(self) -> dict[str, str]:
+        """Kilo's closed record of its last turn, read after the agent container exited (Issue #577).
+
+        The trusted host cannot search the model uid's private home on a Linux runner, so one read-only reader
+        container streams a bounded copy out; the host then parses it with :func:`kilo_session_outcome`. It is one
+        attempt, never a retry loop, never a second model run, and diagnostic only: an unavailable record is
+        ``UNREADABLE`` or ``ABSENT``, never a success.
+        """
+
+        if self.home is None:
+            return {**_NO_SESSION, "error": "ABSENT"}
+        try:
+            result = self._docker(
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--read-only",
+                "--user",
+                "0:0",
+                "--cap-drop",
+                "ALL",
+                "--cap-add",
+                "DAC_READ_SEARCH",
+                "--security-opt",
+                "no-new-privileges",
+                "--pids-limit",
+                "16",
+                "--memory",
+                "256m",
+                "--mount",
+                f"type=bind,src={self.home},dst=/h,readonly",
+                PYTHON_IMAGE,
+                "python",
+                "-I",
+                "-c",
+                _SESSION_STAGE_SCRIPT,
+                str(_SESSION_STORE_LIMIT),
+                timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired, RoleRefused):
+            return {**_NO_SESSION, "error": "UNREADABLE"}
+        if result.returncode == 3:
+            return {**_NO_SESSION, "error": "ABSENT"}
+        store = _unframe_session_store(result.stdout) if result.returncode == 0 else None
+        if store is None:
+            return {**_NO_SESSION, "error": "UNREADABLE"}
+        with tempfile.TemporaryDirectory(prefix="hunter-kilo-session-stage-") as staged:
+            directory = Path(staged).joinpath(*KILO_SESSION_STORE[:-1])
+            directory.mkdir(parents=True, mode=0o700)
+            (directory / KILO_SESSION_STORE[-1]).write_bytes(store[0])
+            if store[1]:
+                (directory / (KILO_SESSION_STORE[-1] + "-wal")).write_bytes(store[1])
+            return kilo_session_outcome(Path(staged))
 
     def stop(self) -> None:
         if not self.started:

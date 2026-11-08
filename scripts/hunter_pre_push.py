@@ -79,6 +79,22 @@ def _require_clean_tree() -> None:
         raise RuntimeError("working tree must be clean before push preflight")
 
 
+#: macOS periodically deletes old files under its temporary roots, silently corrupting a worktree kept there (Issue
+#: #577: a /private/tmp worktree lost 1,065 tracked files overnight). Work must live in a persistent directory.
+_EPHEMERAL_DARWIN_ROOTS = (Path("/private/tmp"), Path("/tmp"))
+
+
+def _require_persistent_worktree(repo_root: Path, platform: str = sys.platform) -> None:
+    if platform != "darwin":
+        return
+    resolved = repo_root.resolve()
+    if any(resolved == root or root in resolved.parents for root in _EPHEMERAL_DARWIN_ROOTS):
+        raise RuntimeError(
+            f"worktree {resolved} is under a macOS temporary directory that the OS periodically purges; "
+            "create the worktree in a persistent directory (for example ~/hunter-wt-<issue>) and push from there"
+        )
+
+
 def _require_exact_head(updates: list[tuple[str, str, str]], head_sha: str) -> None:
     branch_updates = [
         (remote_ref, local_sha) for _local_ref, local_sha, remote_ref in updates if remote_ref.startswith("refs/heads/")
@@ -463,6 +479,7 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
         return 0
 
     repo_root = Path(_run_git("rev-parse", "--show-toplevel")).resolve()
+    _require_persistent_worktree(repo_root)
     os.chdir(repo_root)
     before_head = _run_git("rev-parse", "HEAD")
     _require_clean_tree()
