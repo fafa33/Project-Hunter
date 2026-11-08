@@ -759,7 +759,12 @@ def test_completion_refuses_foreign_or_missing_preflight_repository_ids(
 ) -> None:
     github, _ = completion_world(repos, signing_key, "success")
     key = f"/repos/{rt.REPOSITORY}/actions/workflows/{control.PREFLIGHT_WORKFLOW_FILE}/runs"
-    github.routes[key]["workflow_runs"][0].update(tamper)
+    run = github.routes[key]["workflow_runs"][0]
+    if not tamper:
+        run.pop("repository", None)
+        run.pop("head_repository", None)
+    else:
+        run.update(tamper)
     assert step(repos, github, role="reconcile").action == "noop"
     assert ledger_state(repos).state == state.PUBLISHED
 
@@ -778,7 +783,12 @@ def test_completion_refuses_foreign_or_missing_pr_repository_ids(
     repos: dict[str, Any], signing_key: str, tamper: dict[str, object]
 ) -> None:
     github, _ = completion_world(repos, signing_key, "success")
-    github.routes[f"/repos/{rt.REPOSITORY}/pulls"][0].update(tamper)
+    pr = github.routes[f"/repos/{rt.REPOSITORY}/pulls"][0]
+    if not tamper:
+        pr["head"].pop("repo", None)
+        pr["base"].pop("repo", None)
+    else:
+        pr.update(tamper)
     assert step(repos, github, role="reconcile").action == "noop"
     assert ledger_state(repos).state == state.PUBLISHED
 
