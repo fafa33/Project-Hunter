@@ -84,8 +84,8 @@ def _require_clean_tree() -> None:
 _EPHEMERAL_DARWIN_ROOTS = (Path("/private/tmp"), Path("/tmp"))
 
 
-def _require_persistent_worktree(repo_root: Path, platform: str = sys.platform) -> None:
-    if platform != "darwin":
+def _require_persistent_worktree(repo_root: Path, platform: str | None = None) -> None:
+    if (sys.platform if platform is None else platform) != "darwin":
         return
     resolved = repo_root.resolve()
     if any(resolved == root or root in resolved.parents for root in _EPHEMERAL_DARWIN_ROOTS):
