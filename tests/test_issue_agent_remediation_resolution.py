@@ -99,6 +99,8 @@ class World:
                             "conclusion": self.preflight,
                             "run_number": 7,
                             "id": 555,
+                            "repository": {"id": 1},
+                            "head_repository": {"id": 1},
                         }
                     ]
                 },
