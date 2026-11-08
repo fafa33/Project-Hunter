@@ -10,6 +10,8 @@ import sys
 from importlib import import_module
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from unittest.mock import Mock, patch
 
@@ -77,6 +79,19 @@ def test_adversarial_command_payloads_are_denied():
             handle(conn)
             assert reply(conn)["exit"] == 126, command
         run.assert_not_called()
+
+
+@pytest.mark.parametrize("command", ["ls -la", "cat tests/test_sample.py", "rg -n error src"])
+def test_read_only_discovery_uses_broker_workspace_and_clean_environment(command):
+    conn = fake_conn(65534, json.dumps({"command": command}).encode())
+    with patch("scripts.issue_agent.real_broker_server.subprocess.run") as run:
+        run.return_value.returncode = 0
+        run.return_value.stdout = "ok"
+        run.return_value.stderr = ""
+        handle(conn)
+        assert reply(conn)["exit"] == 0
+        assert run.call_args.kwargs["cwd"] == "/workspace"
+        assert "GITHUB_TOKEN" not in run.call_args.kwargs["env"]
 
 
 def test_broker_subprocess_receives_sanitized_environment():

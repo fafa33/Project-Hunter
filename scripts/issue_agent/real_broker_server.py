@@ -43,7 +43,7 @@ MAX_WORKSPACE_ENTRIES = 50000
 WORKSPACE = "/workspace"
 TOOL_PATH = "/usr/local/bin:/usr/bin:/bin"
 MEMORY_LIMIT_BYTES = 2 * 1024**3  # address-space backstop; the container cgroup is the hard memory wall
-BROKER_TOOLS = {"python", "python3", "git"}
+BROKER_TOOLS = {"python", "python3", "git", "ls", "cat", "rg"}
 # Read-only task-scoped git: a private, broker-owned snapshot of the workspace at session start. No host
 # repository, credentials or remote is ever mounted; the agent can write neither the snapshot nor its config.
 GIT_DIR: str | None = None
