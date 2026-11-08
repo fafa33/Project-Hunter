@@ -520,3 +520,160 @@ def test_cache_directory_is_removed_even_when_the_command_times_out(monkeypatch)
     with patch(RUN, side_effect=boom):
         assert _send("python -m black --check .")["exit"] == 126
     assert seen and not os.path.exists(seen[0])
+
+
+# --- Issue #577: an idle broker keeps serving until its session deadline ---------------------------------------
+
+
+class _Server:
+    """Accept times out twice (an agent still reading), then one request arrives, then the deadline passes."""
+
+    def __init__(self, clock: list[float]) -> None:
+        self.clock, self.accepts, self.timeouts, self.closed = clock, 0, [], False
+
+    def bind(self, path: str) -> None:
+        pass
+
+    def listen(self, backlog: int) -> None:
+        pass
+
+    def settimeout(self, value: float) -> None:
+        self.timeouts.append(value)
+
+    def accept(self):  # type: ignore[no-untyped-def]
+        self.accepts += 1
+        if self.accepts <= 2:
+            self.clock[0] += 120
+            raise TimeoutError
+        if self.accepts == 3:
+            return _Conn(), None
+        self.clock[0] += 10_000
+        raise TimeoutError
+
+    def close(self) -> None:
+        self.closed = True
+
+
+class _Conn:
+    def __enter__(self):  # type: ignore[no-untyped-def]
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        pass
+
+
+def test_the_broker_survives_idle_accept_timeouts_until_its_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
+    clock = [1000.0]
+    server = _Server(clock)
+    handled: list[object] = []
+    monkeypatch.setattr(broker.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(broker.socket, "socket", lambda *a: server)
+    monkeypatch.setattr(broker.os, "geteuid", lambda: broker.BROKER_UID)
+    monkeypatch.setattr(broker.os, "chmod", lambda *a: None)
+    monkeypatch.setattr(broker, "init_git_snapshot", lambda: None)
+    monkeypatch.setattr(broker, "handle", lambda conn, budget: handled.append(conn))
+    broker.main()
+    # Two idle windows (240 s with no command) did not end the session: the late request was still served.
+    assert server.accepts == 4 and len(handled) == 1 and server.closed
+    assert all(timeout <= 120 for timeout in server.timeouts)
+
+
+# --- Issue #577: a refusal tells the agent why, in Hunter's own fixed words -------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command,reason",
+    [
+        ("cd x && python -m pytest -q", "compound or redirected shell command"),
+        ("python -m pytest -x tests", "unapproved flag"),
+        ("pwd", "command not allowlisted"),
+        ("cat /etc/passwd", "path outside task workspace"),
+    ],
+)
+def test_a_policy_refusal_names_its_fixed_reason_and_the_allowed_forms(command: str, reason: str) -> None:
+    conn = fake_conn(65534, json.dumps({"command": command}).encode())
+    with patch("scripts.issue_agent.real_broker_server.subprocess.run") as run:
+        handle(conn)
+        run.assert_not_called()
+    response = reply(conn)
+    lines = response["stderr"].splitlines()
+    assert response["exit"] == 126 and lines[0] == "DENIED"
+    assert lines[1] == f"reason: {reason}" and lines[2] == broker.ALLOWED_FORMS
+
+
+def test_nothing_the_agent_sent_is_echoed_in_a_refusal() -> None:
+    conn = fake_conn(65534, b'{"command":"python -m pytest SECRET-TOKEN-123 | head"}')
+    handle(conn)
+    assert "SECRET-TOKEN-123" not in json.dumps(reply(conn))
+
+
+@pytest.mark.parametrize(
+    "payload,uid",
+    [
+        (b'{"command":"python -m pytest -q"}', 65531),  # wrong peer: PermissionError
+        (b"x" * 4097, 65534),  # oversized: ValueError
+        (b'{"command":"python -m pytest -q","uid":1}', 65534),  # invalid request: ValueError
+    ],
+)
+def test_non_policy_refusals_stay_a_bare_denied(payload: bytes, uid: int) -> None:
+    conn = fake_conn(uid, payload)
+    handle(conn)
+    assert reply(conn)["stderr"] == "DENIED"
+
+
+def test_an_unlisted_reason_is_never_returned() -> None:
+    conn = fake_conn(65534, b'{"command":"python -m pytest -q"}')
+    with patch.object(broker, "parse_command", side_effect=broker.ShellDenied("unexpected text")):
+        handle(conn)
+    assert reply(conn)["stderr"] == "DENIED"
+
+
+def test_every_reason_the_broker_path_raises_is_a_listed_constant() -> None:
+    import ast
+
+    policy = Path(__file__).resolve().parents[1] / "src/hunter/automation/issue_agent_governed_shell.py"
+    sources = {
+        policy: {"parse_command"},
+        Path(broker.__file__): None,  # every function in the broker
+    }
+    raised: set[str] = set()
+    for path, functions in sources.items():
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.FunctionDef) and (functions is None or node.name in functions):
+                for inner in ast.walk(node):
+                    if (
+                        isinstance(inner, ast.Raise)
+                        and isinstance(inner.exc, ast.Call)
+                        and getattr(inner.exc.func, "id", None) == "ShellDenied"
+                    ):
+                        (argument,) = inner.exc.args
+                        assert isinstance(argument, ast.Constant), "a refusal reason must be a fixed string"
+                        raised.add(argument.value)
+    assert raised and raised <= broker.DENIAL_REASONS
+
+
+def test_the_trusted_diagnostics_still_count_a_reasoned_refusal() -> None:
+    from hunter.automation.issue_agent_kilo_container import stderr_structure
+
+    conn = fake_conn(65534, b'{"command":"pwd"}')
+    handle(conn)
+    assert stderr_structure(reply(conn)["stderr"].encode())["denied"] == "1"
+
+
+def test_the_broker_image_installs_every_declared_runtime_dependency_pinned_by_constraints() -> None:
+    # Issue #577: without them the agent's own focused tests could not even be imported inside the broker.
+    import re
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+    declared = {
+        re.split(r"[<>=!~\[ ;]", requirement, maxsplit=1)[0].lower()
+        for requirement in tomllib.loads((root / "pyproject.toml").read_text())["project"]["dependencies"]
+    }
+    dockerfile = (root / "scripts/issue_agent/Dockerfile.broker-canary").read_text()
+    install = next(block for block in dockerfile.split("RUN ") if block.startswith("pip install"))
+    assert "-c /opt/hunter/ci-constraints.txt" in install and "--only-binary=:all:" in install
+    words = {word.lower().split("==")[0] for word in install.replace("\\", " ").split()}
+    assert declared and declared <= words
+    constraints = (root / "requirements/ci-constraints.txt").read_text().lower()
+    assert all(re.search(rf"^{re.escape(name)}==", constraints, re.M) for name in declared)

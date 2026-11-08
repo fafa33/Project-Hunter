@@ -44,6 +44,36 @@ WORKSPACE = "/workspace"
 TOOL_PATH = "/usr/local/bin:/usr/bin:/bin"
 MEMORY_LIMIT_BYTES = 2 * 1024**3  # address-space backstop; the container cgroup is the hard memory wall
 BROKER_TOOLS = {"python", "python3", "git", "ls", "cat", "rg"}
+#: Every refusal reason the shared policy and this broker raise: only these fixed strings are ever returned.
+DENIAL_REASONS = frozenset(
+    {
+        "compound or redirected shell command",
+        "invalid command",
+        "command not allowlisted",
+        "unapproved ls flag",
+        "cat requires workspace-relative files",
+        "unapproved rg flag",
+        "rg requires a pattern",
+        "command budget exceeded",
+        "unapproved flag",
+        "path outside task workspace",
+        "shell expansion forbidden",
+        "tool not provided in broker",
+        "git subcommand not allowed",
+        "git snapshot unavailable",
+        "symlink in task workspace",
+        "workspace too large",
+    }
+)
+#: Issue #577: a bare ``DENIED`` taught the agent nothing, so it abandoned testing after a few natural attempts
+#: (``cd … &&``, ``-x``, ``2>&1 | head``) and shipped code its own tests reject. A refusal now carries the policy's
+#: fixed reason and these allowed forms. Both are Hunter's own constants; nothing the agent sent is echoed.
+ALLOWED_FORMS = (
+    "allowed commands (one per call, run from the workspace root, workspace-relative paths only; no cd, pipes, "
+    "redirection, chaining, globs or other flags): python -m pytest [-q|-v] <test paths or node ids>; "
+    "python -m ruff check <paths>; python -m black --check <paths>; git diff|status [--stat|--short|--porcelain|"
+    "--no-color]; ls [-a|-l|-la] [paths]; cat <files>; rg [-n|-l|-i|-F] <pattern> [paths]"
+)
 # Read-only task-scoped git: a private, broker-owned snapshot of the workspace at session start. No host
 # repository, credentials or remote is ever mounted; the agent can write neither the snapshot nor its config.
 GIT_DIR: str | None = None
@@ -244,6 +274,9 @@ def handle(conn: socket.socket, budget: Budget | None = None) -> None:
         json.JSONDecodeError,
     ) as exc:
         response = {"exit": 126, "stdout": "", "stderr": "DENIED"}
+        if type(exc) is ShellDenied and str(exc) in DENIAL_REASONS:
+            # The first line stays exactly ``DENIED`` (the trusted diagnostics count it).
+            response["stderr"] = f"DENIED\nreason: {exc}\n{ALLOWED_FORMS}\n"
         print("BROKER_DENIED:", type(exc).__name__, flush=True)
     conn.sendall(json.dumps(response).encode())
 
@@ -266,11 +299,15 @@ def main() -> None:
             remaining = budget.deadline - time.monotonic()
             if remaining <= 0:
                 break
+            # Issue #577: an idle wait is not the end of the session. A reasoning agent often reads for longer than
+            # any short idle window before its first command (hosted run 42496047567 and a local rehearsal: the
+            # broker had exited, so every later command failed with 126 and the agent shipped untested code). The
+            # session deadline and the request budget above bound the broker's lifetime; ``stop()`` removes it.
             server.settimeout(min(remaining, 120))
             try:
                 conn, _ = server.accept()
             except TimeoutError:
-                break
+                continue
             with conn:
                 handle(conn, budget)
     finally:

@@ -1535,3 +1535,64 @@ def test_the_failed_run_status_invocation_is_accepted_by_the_trusted_git_builder
     (workspace / "edited.txt").write_text("x")
     status = roles._git(git_dir, workspace, "status", "--porcelain", "-z", "--untracked-files=normal")
     assert [item for item in status.split(b"\0") if item] == [b"?? edited.txt"]
+
+
+# --- Issue #577: the trusted step formats the agent's Python before collection ----------------------------------
+
+
+class FormattingIsolation(RecordingIsolation):
+    """Records what the trusted step asks to format; "formats" by rewriting each file to a marker."""
+
+    def __init__(self, script: str = "", **kw: Any) -> None:
+        super().__init__(script, **kw)
+        self.formatted: list[list[str]] = []
+        self.workspace: Path | None = None
+
+    def run(self, argv: Sequence[str], *, cwd: Path, **kw: Any) -> int:
+        self.workspace = cwd
+        return super().run(argv, cwd=cwd, **kw)
+
+    def format_python(self, paths: Sequence[str]) -> str:
+        assert self.stopped == 1  # never while an isolated process could still write
+        self.formatted.append(list(paths))
+        for path in paths:
+            assert self.workspace is not None
+            (self.workspace / path).write_text("FORMATTED = True\n")
+        return "FORMATTED"
+
+
+def test_changed_python_is_formatted_after_the_model_stops_and_before_collection(
+    repos: dict[str, Any], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, envelope = authorize(repos)
+    collected: dict[str, str] = {}
+    original = roles.collect_result
+
+    def spy(workspace: Path, git_dir: Path, **kw: Any) -> bytes:
+        collected.update({p: (workspace / p).read_text() for p in ("pkg/new.py", "notes.md")})
+        return original(workspace, git_dir, **kw)
+
+    monkeypatch.setattr(roles, "collect_result", spy)
+    isolation = FormattingIsolation("mkdir -p pkg && printf 'x=1\\n' > pkg/new.py && printf 'n\\n' > notes.md")
+    outcome = execute(repos, ledger, envelope, isolation)
+    assert outcome.advisory_code is None and outcome.sealed_result
+    assert isolation.formatted == [["pkg/new.py"]]  # only changed Python, named by the trusted collector
+    assert collected == {"pkg/new.py": "FORMATTED = True\n", "notes.md": "n\n"}
+    assert "executor result formatting: python_files=1 outcome=FORMATTED" in capsys.readouterr().out
+
+
+def test_a_failed_model_run_is_never_formatted(repos: dict[str, Any]) -> None:
+    ledger, envelope = authorize(repos)
+    isolation = FormattingIsolation("mkdir -p pkg && printf 'x=1\\n' > pkg/new.py", fail=True)
+    outcome = execute(repos, ledger, envelope, isolation)
+    assert outcome.sealed_result is None and isolation.formatted == []
+
+
+def test_a_change_without_python_launches_no_formatter(
+    repos: dict[str, Any], capsys: pytest.CaptureFixture[str]
+) -> None:
+    ledger, envelope = authorize(repos)
+    isolation = FormattingIsolation(CANARY)
+    outcome = execute(repos, ledger, envelope, isolation)
+    assert outcome.sealed_result and isolation.formatted == []
+    assert "executor result formatting: python_files=0 outcome=SKIPPED" in capsys.readouterr().out

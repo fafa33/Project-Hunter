@@ -695,3 +695,116 @@ def test_the_reader_is_stateless_across_restart(tmp_path: Path) -> None:
     assert first == second and first["error"] == "APIError"
     fresh = KiloContainerIsolation(SCRIPTS)  # a restarted step that never prepared a home has nothing to read
     assert fresh.session_outcome()["error"] == "ABSENT"
+
+
+# --- Issue #577: the trusted step formats the agent's Python before collection ----------------------------------
+
+
+def _formatter(tmp_path: Path) -> tuple[KiloContainerIsolation, Path, list[tuple[str, ...]]]:
+    isolation = KiloContainerIsolation(Path(kilo_port.__file__).resolve().parents[3] / "scripts" / "issue_agent")
+    workspace = tmp_path / "workspace"
+    (workspace / "pkg").mkdir(parents=True)
+    isolation.workspace = workspace
+    calls: list[tuple[str, ...]] = []
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b"") -> subprocess.CompletedProcess[bytes]:
+        calls.append(args)
+        return subprocess.CompletedProcess(list(args), 0, b"", b"")
+
+    isolation._docker = fake  # type: ignore[method-assign]
+    return isolation, workspace, calls
+
+
+def test_the_formatter_runs_black_offline_read_only_as_the_agent_with_the_trusted_config(tmp_path: Path) -> None:
+    isolation, workspace, calls = _formatter(tmp_path)
+    (workspace / "pkg" / "m.py").write_text("x=1\n")
+    assert isolation.format_python(["pkg/m.py"]) == "FORMATTED"
+    (args,) = calls
+    for flag in (("--network", "none"), ("--user", "65534:65532"), ("--cap-drop", "ALL")):
+        assert args[args.index(flag[0]) + 1] == flag[1]
+    assert "--read-only" in args and kilo_port.BROKER_IMAGE in args
+    trusted = isolation.scripts.parents[1] / "pyproject.toml"
+    assert f"type=bind,src={trusted},dst=/opt/hunter-format/pyproject.toml,readonly" in args
+    tail = args[args.index(kilo_port.BROKER_IMAGE) + 1 :]
+    assert tail == (
+        "python",
+        "-I",
+        "-m",
+        "black",
+        "--config",
+        "/opt/hunter-format/pyproject.toml",
+        "--quiet",
+        "--",
+        "pkg/m.py",
+    )
+
+
+def test_only_regular_python_files_inside_the_workspace_are_passed(tmp_path: Path) -> None:
+    isolation, workspace, calls = _formatter(tmp_path)
+    (workspace / "pkg" / "m.py").write_text("x=1\n")
+    (workspace / "pkg" / "link.py").symlink_to("m.py")
+    (workspace / "linked").symlink_to(workspace / "pkg", target_is_directory=True)
+    (workspace / "README.md").write_text("x\n")
+    (tmp_path / "outside.py").write_text("x=1\n")
+    paths = ["pkg/m.py", "pkg/link.py", "linked/m.py", "README.md", "../outside.py", "-q.py", "/etc/x.py", "gone.py"]
+    assert isolation.format_python(paths) == "FORMATTED"
+    assert calls[0][-2:] == ("--", "pkg/m.py")
+
+
+@pytest.mark.parametrize("paths", [[], ["README.md"], ["pkg/link.py"]])
+def test_nothing_to_format_launches_nothing(tmp_path: Path, paths: list[str]) -> None:
+    isolation, workspace, calls = _formatter(tmp_path)
+    (workspace / "pkg" / "link.py").symlink_to(tmp_path)
+    assert isolation.format_python(paths) == "SKIPPED" and calls == []
+
+
+def test_the_formatter_never_runs_while_isolated_processes_are_up(tmp_path: Path) -> None:
+    isolation, workspace, calls = _formatter(tmp_path)
+    (workspace / "pkg" / "m.py").write_text("x=1\n")
+    isolation.started = True
+    assert isolation.format_python(["pkg/m.py"]) == "SKIPPED" and calls == []
+
+
+def test_a_formatter_failure_is_reported_never_raised(tmp_path: Path) -> None:
+    isolation, workspace, _ = _formatter(tmp_path)
+    (workspace / "pkg" / "m.py").write_text("def (\n")
+
+    def refuse(*args: str, timeout: float = 40, stdin: bytes = b"") -> subprocess.CompletedProcess[bytes]:
+        return subprocess.CompletedProcess(list(args), 123, b"", b"cannot parse")
+
+    isolation._docker = refuse  # type: ignore[method-assign]
+    assert isolation.format_python(["pkg/m.py"]) == "FAILED"
+
+
+def _hanging_formatter(tmp_path: Path, *, still_running: bool = False, rm_error: bool = False):  # type: ignore[no-untyped-def]
+    isolation, workspace, _ = _formatter(tmp_path)
+    (workspace / "pkg" / "m.py").write_text("x=1\n")
+    calls: list[tuple[str, ...]] = []
+
+    def docker(*args: str, timeout: float = 40, stdin: bytes = b"") -> subprocess.CompletedProcess[bytes]:
+        calls.append(args)
+        if args[0] == "run":
+            raise subprocess.TimeoutExpired(list(args), timeout)
+        if args[0] == "rm" and rm_error:
+            raise OSError("daemon unavailable")
+        exists = args[:2] == ("container", "inspect") and still_running
+        return subprocess.CompletedProcess(list(args), 0 if exists else 1, b"", b"")
+
+    isolation._docker = docker  # type: ignore[method-assign]
+    return isolation, calls
+
+
+def test_a_timed_out_formatter_is_removed_and_proven_gone_before_collection(tmp_path: Path) -> None:
+    # PR #702 review: killing the docker CLI leaves a --rm container running, which could race collection.
+    isolation, calls = _hanging_formatter(tmp_path)
+    assert isolation.format_python(["pkg/m.py"]) == "FAILED"
+    name = calls[0][calls[0].index("--name") + 1]
+    assert name == f"{isolation.agent}-format"
+    assert calls[1:] == [("rm", "-f", name), ("container", "inspect", name)]
+
+
+@pytest.mark.parametrize("kw", [{"still_running": True}, {"rm_error": True}])
+def test_a_formatter_that_cannot_be_proven_stopped_refuses_collection(tmp_path: Path, kw: dict) -> None:
+    isolation, _ = _hanging_formatter(tmp_path, **kw)
+    with pytest.raises(kilo_port.RoleRefused, match="could not be stopped"):
+        isolation.format_python(["pkg/m.py"])
