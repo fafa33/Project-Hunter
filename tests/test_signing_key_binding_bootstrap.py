@@ -19,6 +19,8 @@ Evidence for each pinned fingerprint:
   signing key.
 * ``fafa33`` Gateway: GitHub public SSH signing-key id 1252092,
   "Hunter Gateway signing", belongs to the same canonical owner principal.
+* ``fafa33`` Publisher S6: GitHub public SSH signing-key id 1221696,
+  "Hunter Issue Agent Publisher S6", verified on commit 892bd8c.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ TRUSTED_BINDINGS = {
     "fafa33": [
         "SHA256:Yee9tbonym7Jvs2UbjpudVIRkv3aF1tcFlK240pXuBo",
         "SHA256:SaZ+MnrI3u2Mi22KIiKn7r2CnMxZ6mJwNsjb//StB4k",
+        "SHA256:TOLON7zlcHkjUHyFabC6RQi+30Ood2TwxjwTWQj8dMk",
     ],
 }
 
