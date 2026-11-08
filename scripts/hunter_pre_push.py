@@ -23,9 +23,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -79,20 +80,35 @@ def _require_clean_tree() -> None:
         raise RuntimeError("working tree must be clean before push preflight")
 
 
-#: macOS periodically deletes old files under its temporary roots, silently corrupting a worktree kept there (Issue
-#: #577: a /private/tmp worktree lost 1,065 tracked files overnight). Work must live in a persistent directory.
-_EPHEMERAL_DARWIN_ROOTS = (Path("/private/tmp"), Path("/tmp"))
+#: macOS periodically deletes old files from its shared temporary directories, silently corrupting a worktree kept
+#: there (Issue #577: a worktree under the system temporary directory lost 1,065 tracked files overnight). A shared
+#: temporary directory is recognised by what makes it one -- world-writable with the sticky bit set -- rather than by
+#: a list of path spellings, so every alias (symlinked or not) of such a directory is covered.
+_SHARED_TEMPORARY_MODE = stat.S_IWOTH | stat.S_ISVTX
 
 
-def _require_persistent_worktree(repo_root: Path, platform: str | None = None) -> None:
+def _mode_of(path: Path) -> int:
+    return path.stat().st_mode
+
+
+def _require_persistent_worktree(
+    repo_root: Path, platform: str | None = None, mode_of: Callable[[Path], int] | None = None
+) -> None:
     if (sys.platform if platform is None else platform) != "darwin":
         return
+    mode_of = _mode_of if mode_of is None else mode_of
     resolved = repo_root.resolve()
-    if any(resolved == root or root in resolved.parents for root in _EPHEMERAL_DARWIN_ROOTS):
-        raise RuntimeError(
-            f"worktree {resolved} is under a macOS temporary directory that the OS periodically purges; "
-            "create the worktree in a persistent directory (for example ~/hunter-wt-<issue>) and push from there"
-        )
+    for directory in (resolved, *resolved.parents):
+        try:
+            mode = mode_of(directory)
+        except OSError as exc:
+            raise RuntimeError(f"cannot verify that worktree {resolved} is in a persistent directory: {exc}") from exc
+        if stat.S_ISDIR(mode) and mode & _SHARED_TEMPORARY_MODE == _SHARED_TEMPORARY_MODE:
+            raise RuntimeError(
+                f"worktree {resolved} is under the shared temporary directory {directory}, which macOS periodically "
+                "purges; create the worktree in a persistent directory (for example ~/hunter-wt-<issue>) and push "
+                "from there"
+            )
 
 
 def _require_exact_head(updates: list[tuple[str, str, str]], head_sha: str) -> None:

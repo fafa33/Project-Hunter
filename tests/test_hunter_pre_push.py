@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import stat
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -393,32 +395,102 @@ def test_push_safety_gates_are_bounded_and_black_matches_trusted_contract(monkey
 # --- Issue #577: never push from a worktree macOS may purge --------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "root",
-    ["/private/tmp/hunter-issue390-codex", "/private/tmp", "/tmp/hunter"],
-)
-def test_a_darwin_worktree_under_a_purged_temporary_root_is_refused(root: str) -> None:
+def _isolated_modes(base: Path) -> Callable[[Path], int]:
+    """Real modes inside ``base``; every host ancestor reads as an ordinary 0755 directory.
+
+    This keeps the tests independent of the host (a Linux runner's tmp_path itself sits under a sticky /tmp).
+    """
+
+    def mode_of(path: Path) -> int:
+        if path == base or base in path.parents:
+            return path.stat().st_mode
+        return stat.S_IFDIR | 0o755
+
+    return mode_of
+
+
+@pytest.fixture
+def layout(tmp_path: Path) -> tuple[Path, Path, Path]:
+    base = tmp_path.resolve()
+    shared = base / "shared"
+    shared.mkdir()
+    shared.chmod(0o1777)  # what macOS's system temporary directory is: world-writable + sticky
+    persistent = base / "home" / "hunter-wt-577"
+    persistent.mkdir(parents=True)
+    return base, shared, persistent
+
+
+@pytest.mark.parametrize("depth", [(), ("wt",), ("a", "b", "wt")])
+def test_a_darwin_worktree_under_a_shared_temporary_directory_is_refused(
+    layout: tuple[Path, Path, Path], depth: tuple[str, ...]
+) -> None:
+    base, shared, _ = layout
+    worktree = shared.joinpath(*depth)
+    worktree.mkdir(parents=True, exist_ok=True)
     with pytest.raises(RuntimeError, match="periodically purges"):
-        hunter_pre_push._require_persistent_worktree(Path(root), platform="darwin")
+        hunter_pre_push._require_persistent_worktree(worktree, platform="darwin", mode_of=_isolated_modes(base))
 
 
-@pytest.mark.parametrize(
-    ("root", "platform"),
-    [
-        ("/Users/someone/hunter-wt-577", "darwin"),
-        ("/Users/someone/private/tmp-notes/repo", "darwin"),
-        ("/private/tmpfoo/repo", "darwin"),
-        ("/tmp/runner/work/Project-Hunter", "linux"),  # hosted Linux runners are unaffected
-    ],
-)
-def test_persistent_or_non_darwin_worktrees_are_accepted(root: str, platform: str) -> None:
-    hunter_pre_push._require_persistent_worktree(Path(root), platform=platform)
+def test_a_persistent_darwin_worktree_is_accepted(layout: tuple[Path, Path, Path]) -> None:
+    base, _, persistent = layout
+    hunter_pre_push._require_persistent_worktree(persistent, platform="darwin", mode_of=_isolated_modes(base))
+
+
+@pytest.mark.parametrize("mode", [0o0777, 0o1755, 0o0755, 0o1700])
+def test_only_world_writable_and_sticky_together_mark_a_shared_temporary_directory(
+    layout: tuple[Path, Path, Path], mode: int
+) -> None:
+    base, _, _ = layout
+    neighbour = base / "neighbour"
+    neighbour.mkdir()
+    neighbour.chmod(mode)
+    hunter_pre_push._require_persistent_worktree(neighbour, platform="darwin", mode_of=_isolated_modes(base))
+
+
+def test_a_symlink_into_a_shared_temporary_directory_is_resolved_and_refused(layout: tuple[Path, Path, Path]) -> None:
+    base, shared, persistent = layout
+    (shared / "wt").mkdir()
+    alias = persistent.parent / "looks-persistent"
+    alias.symlink_to(shared / "wt", target_is_directory=True)
+    with pytest.raises(RuntimeError, match="shared temporary directory"):
+        hunter_pre_push._require_persistent_worktree(alias, platform="darwin", mode_of=_isolated_modes(base))
+
+
+def test_a_symlink_out_of_a_shared_temporary_directory_is_accepted(layout: tuple[Path, Path, Path]) -> None:
+    base, shared, persistent = layout
+    alias = shared / "points-home"
+    alias.symlink_to(persistent, target_is_directory=True)
+    hunter_pre_push._require_persistent_worktree(alias, platform="darwin", mode_of=_isolated_modes(base))
+
+
+def test_linux_and_other_platforms_are_unaffected(layout: tuple[Path, Path, Path]) -> None:
+    base, shared, _ = layout
+    for platform in ("linux", "win32"):
+        hunter_pre_push._require_persistent_worktree(shared, platform=platform, mode_of=_isolated_modes(base))
+
+
+def test_an_unverifiable_ancestor_fails_closed(layout: tuple[Path, Path, Path]) -> None:
+    _, _, persistent = layout
+
+    def unreadable(path: Path) -> int:
+        raise PermissionError("denied")
+
+    with pytest.raises(RuntimeError, match="cannot verify"):
+        hunter_pre_push._require_persistent_worktree(persistent, platform="darwin", mode_of=unreadable)
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="exercises the real macOS system temporary directory")
+def test_the_real_macos_system_temporary_directory_is_refused() -> None:
+    system_temporary = Path(os.path.realpath(os.sep + "tmp"))
+    with pytest.raises(RuntimeError, match="periodically purges"):
+        hunter_pre_push._require_persistent_worktree(system_temporary)
 
 
 def test_the_persistent_worktree_check_runs_before_any_other_push_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     order: list[str] = []
-    monkeypatch.setattr(hunter_pre_push, "_run_git", lambda *a: "/private/tmp/wt" if a[0] == "rev-parse" else "")
+    monkeypatch.setattr(hunter_pre_push, "_run_git", lambda *a: "/any/wt" if a[0] == "rev-parse" else "")
     monkeypatch.setattr(hunter_pre_push.sys, "platform", "darwin")
+    monkeypatch.setattr(hunter_pre_push, "_mode_of", lambda path: stat.S_IFDIR | 0o1777)
     monkeypatch.setattr(hunter_pre_push, "_require_clean_tree", lambda: order.append("clean"))
     with pytest.raises(RuntimeError, match="periodically purges"):
         hunter_pre_push.enforce_pre_push(["refs/heads/x " + "a" * 40 + " refs/heads/x " + "0" * 40 + "\n"])
