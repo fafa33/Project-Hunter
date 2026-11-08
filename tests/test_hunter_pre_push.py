@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
 from types import SimpleNamespace
@@ -388,3 +389,94 @@ def test_push_safety_gates_are_bounded_and_black_matches_trusted_contract(monkey
     assert observed["timeout"] == 180
     black = dict(observed["gates"])["Black"]
     assert black == ("black", "--check", "--diff", ".")
+
+
+@pytest.fixture(autouse=True)
+def _avoid_host_temp_in_mocked_push_tests(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Tests mock a repository under pytest's temporary directory; this is
+    # intentionally not a production worktree.
+    monkeypatch.setattr(hunter_pre_push, "_macos_temporary_roots", lambda: (Path("/private/tmp"),))
+
+
+# --- Issue #577: never push from a worktree macOS may purge --------------------------------------------------
+
+
+@pytest.fixture
+def layout(tmp_path: Path) -> tuple[Path, Path, Path]:
+    base = tmp_path.resolve()
+    shared = base / "shared"
+    shared.mkdir()
+    shared.chmod(0o1777)  # what macOS's system temporary directory is: world-writable + sticky
+    persistent = base / "home" / "hunter-wt-577"
+    persistent.mkdir(parents=True)
+    return base, shared, persistent
+
+
+@pytest.mark.parametrize("depth", [(), ("wt",), ("a", "b", "wt")])
+def test_a_darwin_worktree_under_a_shared_temporary_directory_is_refused(
+    layout: tuple[Path, Path, Path], depth: tuple[str, ...]
+) -> None:
+    base, shared, _ = layout
+    worktree = shared.joinpath(*depth)
+    worktree.mkdir(parents=True, exist_ok=True)
+    with pytest.raises(RuntimeError, match="purge-managed temporary directory"):
+        hunter_pre_push._require_persistent_worktree(worktree, platform="darwin", temporary_roots=(shared,))
+
+
+def test_a_persistent_darwin_worktree_is_accepted(layout: tuple[Path, Path, Path]) -> None:
+    base, shared, persistent = layout
+    hunter_pre_push._require_persistent_worktree(persistent, platform="darwin", temporary_roots=(shared,))
+
+
+def test_persistent_shared_sticky_directory_is_accepted(layout: tuple[Path, Path, Path]) -> None:
+    base, shared, _ = layout
+    persistent_shared = base / "persistent-shared"
+    persistent_shared.mkdir()
+    persistent_shared.chmod(0o1777)
+    hunter_pre_push._require_persistent_worktree(persistent_shared, platform="darwin", temporary_roots=(shared,))
+
+
+def test_a_symlink_into_a_shared_temporary_directory_is_resolved_and_refused(layout: tuple[Path, Path, Path]) -> None:
+    base, shared, persistent = layout
+    (shared / "wt").mkdir()
+    alias = persistent.parent / "looks-persistent"
+    alias.symlink_to(shared / "wt", target_is_directory=True)
+    with pytest.raises(RuntimeError, match="purge-managed temporary directory"):
+        hunter_pre_push._require_persistent_worktree(alias, platform="darwin", temporary_roots=(shared,))
+
+
+def test_a_symlink_out_of_a_shared_temporary_directory_is_accepted(layout: tuple[Path, Path, Path]) -> None:
+    base, shared, persistent = layout
+    alias = shared / "points-home"
+    alias.symlink_to(persistent, target_is_directory=True)
+    hunter_pre_push._require_persistent_worktree(alias, platform="darwin", temporary_roots=(shared,))
+
+
+def test_linux_and_other_platforms_are_unaffected(layout: tuple[Path, Path, Path]) -> None:
+    base, shared, _ = layout
+    for platform in ("linux", "win32"):
+        hunter_pre_push._require_persistent_worktree(shared, platform=platform, temporary_roots=(shared,))
+
+
+def test_unrelated_sticky_shared_directory_does_not_imply_purge(layout: tuple[Path, Path, Path]) -> None:
+    base, shared, persistent = layout
+    shared.chmod(0o1777)
+    hunter_pre_push._require_persistent_worktree(persistent, platform="darwin", temporary_roots=(shared,))
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="exercises the real macOS system temporary directory")
+def test_the_real_macos_system_temporary_directory_is_refused() -> None:
+    system_temporary = Path(os.path.realpath(os.sep + "tmp"))
+    with pytest.raises(RuntimeError, match="purge-managed temporary directory"):
+        hunter_pre_push._require_persistent_worktree(system_temporary, temporary_roots=(system_temporary,))
+
+
+def test_the_persistent_worktree_check_runs_before_any_other_push_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    order: list[str] = []
+    monkeypatch.setattr(hunter_pre_push, "_run_git", lambda *a: "/any/wt" if a[0] == "rev-parse" else "")
+    monkeypatch.setattr(hunter_pre_push.sys, "platform", "darwin")
+    monkeypatch.setattr(hunter_pre_push, "_macos_temporary_roots", lambda: (Path("/any"),))
+    monkeypatch.setattr(hunter_pre_push, "_require_clean_tree", lambda: order.append("clean"))
+    with pytest.raises(RuntimeError, match="purge-managed temporary directory"):
+        hunter_pre_push.enforce_pre_push(["refs/heads/x " + "a" * 40 + " refs/heads/x " + "0" * 40 + "\n"])
+    assert order == []

@@ -434,8 +434,7 @@ def test_only_a_non_zero_exit_prints_the_session_outcome(
     isolation = KiloContainerIsolation(SCRIPTS)
     isolation.workspace, isolation.home, isolation.started = workspace.resolve(), home.resolve(), True
 
-    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
-        return subprocess.CompletedProcess(args, returncode if args[0] == "run" else 0, b"", b"")
+    fake = _container_fake(home, agent_exit=returncode)
 
     with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
         isolation.run(
@@ -472,3 +471,227 @@ def test_untrusted_recursive_sqlite_view_has_bounded_query_budget(tmp_path: Path
     connection.commit()
     connection.close()
     assert kilo_port.kilo_session_outcome(tmp_path)["error"] == "UNREADABLE"
+
+
+# --- Issue #577 (run 42465838010): the store behind the model uid's private home is read by a reader container ---
+
+import os  # noqa: E402
+import sys  # noqa: E402
+
+
+def _run_reader_script(home: Path) -> subprocess.CompletedProcess[bytes]:
+    """The exact reader script, executed locally with its fixed mount point mapped to ``home``."""
+
+    script = kilo_port._SESSION_STAGE_SCRIPT.replace("cur='/h'", f"cur={str(home)!r}")
+    assert script != kilo_port._SESSION_STAGE_SCRIPT
+    return subprocess.run(
+        [sys.executable, "-I", "-c", script, str(kilo_port._SESSION_STORE_LIMIT)], capture_output=True, check=False
+    )
+
+
+def _is_reader(args: tuple[str, ...]) -> bool:
+    return args[0] == "run" and kilo_port.PYTHON_IMAGE in args and kilo_port._SESSION_STAGE_SCRIPT in args
+
+
+def _container_fake(
+    readable_home: Path, *, agent_exit: int, calls: list[tuple[str, ...]] | None = None, stderr: bytes = b""
+):
+    """Docker as the executor sees it: the agent container exits with ``agent_exit``; the reader container (a
+    privileged reader of the model uid's home) runs the real script against ``readable_home``."""
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        if calls is not None:
+            calls.append(args)
+        if _is_reader(args):
+            done = _run_reader_script(readable_home)
+            return subprocess.CompletedProcess(args, done.returncode, done.stdout, b"")
+        if args[0] == "run" and kilo_port.KILO_IMAGE in args:
+            return subprocess.CompletedProcess(args, agent_exit, b"", stderr)
+        return subprocess.CompletedProcess(args, 0, b"BROKER_GIT_SNAPSHOT: ready\n" if args[0] == "logs" else b"", b"")
+
+    return fake
+
+
+def _prepared(tmp_path: Path) -> tuple[KiloContainerIsolation, Path, Path]:
+    workspace, home = _roots(tmp_path)
+    isolation = KiloContainerIsolation(SCRIPTS)
+    isolation.workspace, isolation.home, isolation.started = workspace.resolve(), home.resolve(), True
+    return isolation, workspace, home
+
+
+def _run_agent(isolation: KiloContainerIsolation, workspace: Path) -> int:
+    return isolation.run(
+        ("kilo", "run"), cwd=workspace, public_env={"KILO_CONFIG_CONTENT": POLICY}, secret_env={}, stdin=b"", timeout=1
+    )
+
+
+def test_the_reader_container_is_offline_read_only_and_holds_only_the_read_search_capability(tmp_path: Path) -> None:
+    isolation, workspace, home = _prepared(tmp_path)
+    _session_store(home, {"role": "assistant", "finish": "stop"})
+    calls: list[tuple[str, ...]] = []
+    with patch.object(
+        KiloContainerIsolation, "_docker", staticmethod(_container_fake(home, agent_exit=0, calls=calls))
+    ):
+        isolation.session_outcome()
+    (reader,) = calls
+    assert _is_reader(reader)
+    joined = " ".join(reader)
+    assert "--network none" in joined and "--read-only" in reader and "--user 0:0" in joined
+    assert "--cap-drop ALL" in joined and "no-new-privileges" in joined
+    assert [reader[i + 1] for i, a in enumerate(reader) if a == "--cap-add"] == ["DAC_READ_SEARCH"]
+    assert [a for a in reader if a.startswith("type=")] == [f"type=bind,src={home.resolve()},dst=/h,readonly"]
+    assert "--env-file" not in reader and "/var/run/docker.sock" not in joined
+    assert kilo_port.PYTHON_IMAGE.startswith("python@sha256:")  # pinned by digest
+
+
+def test_a_completed_session_with_readable_evidence_is_reported(tmp_path: Path) -> None:
+    isolation, _, home = _prepared(tmp_path)
+    _session_store(home, {"role": "assistant", "finish": "stop"})
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(_container_fake(home, agent_exit=0))):
+        assert isolation.session_outcome() == {
+            "error": "none",
+            "status": "none",
+            "retryable": "none",
+            "finish": "stop",
+            "tool_errors": "0",
+        }
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_a_store_the_trusted_step_cannot_search_is_still_read_through_the_reader(tmp_path: Path) -> None:
+    """The hosted shape: the direct read is UNREADABLE (home not searchable), the reader container is not."""
+
+    isolation, _, home = _prepared(tmp_path)
+    readable = tmp_path / "as-seen-by-the-reader"
+    _session_store(readable, {"role": "assistant", "error": {"name": "APIError", "data": {"statusCode": 502}}})
+    _session_store(home, {"role": "assistant"})
+    home.chmod(0o000)
+    try:
+        assert kilo_port.kilo_session_outcome(home)["error"] == "UNREADABLE"  # run 42465838010's line
+        with patch.object(KiloContainerIsolation, "_docker", staticmethod(_container_fake(readable, agent_exit=1))):
+            outcome = isolation.session_outcome()
+    finally:
+        home.chmod(0o700)
+    assert outcome["error"] == "APIError" and outcome["status"] == "502"
+
+
+def test_a_genuinely_incomplete_session_stays_a_failed_execution(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, workspace, home = _prepared(tmp_path)
+    _session_store(home, {"role": "assistant"})  # the turn never finished
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(_container_fake(home, agent_exit=1))):
+        assert _run_agent(isolation, workspace) == 1  # the exit status, not the record, decides
+    out = capsys.readouterr().out
+    assert "isolated Kilo session outcome: error=none status=none retryable=none finish=none tool_errors=0" in out
+    assert "exit=NONZERO" in out
+
+
+def test_a_finished_record_never_turns_a_non_zero_exit_into_success(tmp_path: Path) -> None:
+    isolation, workspace, home = _prepared(tmp_path)
+    _session_store(home, {"role": "assistant", "finish": "stop"})
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(_container_fake(home, agent_exit=1))):
+        assert _run_agent(isolation, workspace) == 1
+
+
+def test_denied_tool_calls_are_counted_and_reported_with_the_session_record(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, workspace, home = _prepared(tmp_path)
+    _session_store(
+        home,
+        {"role": "assistant", "finish": "tool-calls"},
+        parts=({"type": "tool", "state": {"status": "error", "error": "denied: secret path"}},) * 2,
+    )
+    stderr = "\u2192 Read secret\nDENIED\n\u2192 Bash rm\nDENIED\n".encode()
+    with patch.object(
+        KiloContainerIsolation, "_docker", staticmethod(_container_fake(home, agent_exit=1, stderr=stderr))
+    ):
+        assert _run_agent(isolation, workspace) == 1
+    out = capsys.readouterr().out
+    assert "tool_calls=2 shell=0 denied=2" in out
+    assert "error=none status=none retryable=none finish=tool-calls tool_errors=2" in out
+    assert "secret path" not in out
+
+
+@pytest.mark.parametrize(
+    ("returncode", "stdout", "expected"),
+    [
+        (3, b"", "ABSENT"),
+        (4, b"", "UNREADABLE"),
+        (137, b"", "UNREADABLE"),
+        (0, b"", "UNREADABLE"),
+        (0, b"\x00" * 8 + b"\x00" * 8, "UNREADABLE"),  # an empty store is not a store
+        (0, (5).to_bytes(8, "big") + b"abc", "UNREADABLE"),  # truncated frame
+        (0, (3).to_bytes(8, "big") + b"abc" + (0).to_bytes(8, "big") + b"x", "UNREADABLE"),  # trailing bytes
+        (0, (2**40).to_bytes(8, "big"), "UNREADABLE"),  # beyond the bound
+        (0, (3).to_bytes(8, "big") + b"abc" + (0).to_bytes(8, "big"), "UNREADABLE"),  # not SQLite
+    ],
+)
+def test_missing_corrupt_or_malformed_reader_output_is_never_evidence(
+    tmp_path: Path, returncode: int, stdout: bytes, expected: str
+) -> None:
+    isolation, _, _ = _prepared(tmp_path)
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        return subprocess.CompletedProcess(args, returncode, stdout, b"")
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
+        assert isolation.session_outcome()["error"] == expected
+
+
+def test_the_real_reader_script_refuses_links_fifos_and_missing_stores(tmp_path: Path) -> None:
+    missing = tmp_path / "missing"
+    missing.mkdir()
+    assert _run_reader_script(missing).returncode == 3
+    store = _session_store(tmp_path / "real", {"role": "assistant"})
+    linked_dir = tmp_path / "linked-dir"
+    linked_dir.joinpath(".local", "share").mkdir(parents=True)
+    linked_dir.joinpath(".local", "share", "kilo").symlink_to(store.parent)
+    assert _run_reader_script(linked_dir).returncode == 4
+    linked_file = tmp_path / "linked-file"
+    linked_file.joinpath(*kilo_port.KILO_SESSION_STORE[:-1]).mkdir(parents=True)
+    linked_file.joinpath(*kilo_port.KILO_SESSION_STORE).symlink_to(store)
+    assert _run_reader_script(linked_file).returncode == 4
+    fifo = tmp_path / "fifo"
+    fifo.joinpath(*kilo_port.KILO_SESSION_STORE[:-1]).mkdir(parents=True)
+    os.mkfifo(fifo.joinpath(*kilo_port.KILO_SESSION_STORE))
+    assert _run_reader_script(fifo).returncode == 4
+    done = _run_reader_script(tmp_path / "real")
+    assert done.returncode == 0 and kilo_port._unframe_session_store(done.stdout) is not None
+
+
+def test_the_reader_runs_once_per_failed_turn_and_never_reruns_the_model(tmp_path: Path) -> None:
+    isolation, workspace, home = _prepared(tmp_path)
+    calls: list[tuple[str, ...]] = []
+
+    def failing_reader(*args: str, timeout: float = 40, stdin: bytes = b""):
+        calls.append(args)
+        if _is_reader(args):
+            raise subprocess.TimeoutExpired(args, timeout)
+        return subprocess.CompletedProcess(args, 1 if kilo_port.KILO_IMAGE in args else 0, b"", b"")
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(failing_reader)):
+        assert _run_agent(isolation, workspace) == 1
+    assert sum(kilo_port.KILO_IMAGE in call for call in calls) == 1
+    assert sum(_is_reader(call) for call in calls) == 1
+
+
+def test_a_successful_turn_never_starts_the_reader(tmp_path: Path) -> None:
+    isolation, workspace, home = _prepared(tmp_path)
+    calls: list[tuple[str, ...]] = []
+    with patch.object(
+        KiloContainerIsolation, "_docker", staticmethod(_container_fake(home, agent_exit=0, calls=calls))
+    ):
+        assert _run_agent(isolation, workspace) == 0
+    assert not any(_is_reader(call) for call in calls)
+
+
+def test_the_reader_is_stateless_across_restart(tmp_path: Path) -> None:
+    isolation, _, home = _prepared(tmp_path)
+    _session_store(home, {"role": "assistant", "error": {"name": "APIError", "data": {}}})
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(_container_fake(home, agent_exit=1))):
+        first, second = isolation.session_outcome(), isolation.session_outcome()
+    assert first == second and first["error"] == "APIError"
+    fresh = KiloContainerIsolation(SCRIPTS)  # a restarted step that never prepared a home has nothing to read
+    assert fresh.session_outcome()["error"] == "ABSENT"

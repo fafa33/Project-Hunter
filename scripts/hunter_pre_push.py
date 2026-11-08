@@ -25,6 +25,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -77,6 +78,40 @@ def _parse_updates(lines: Iterable[str]) -> list[tuple[str, str, str]]:
 def _require_clean_tree() -> None:
     if _run_git("status", "--porcelain=v1", "--untracked-files=normal"):
         raise RuntimeError("working tree must be clean before push preflight")
+
+
+#: Reject actual OS-managed temporary roots, not all world-writable sticky
+#: directories. Permissions alone do not imply macOS will purge a directory.
+def _macos_temporary_roots() -> tuple[Path, ...]:
+    roots = [Path(os.sep) / "private" / "tmp", Path(tempfile.gettempdir())]
+    # Darwin's per-user temporary root is independent of TMPDIR overrides.
+    try:
+        user_temp = os.confstr("CS_DARWIN_USER_TEMP_DIR")
+    except (AttributeError, OSError, ValueError):
+        user_temp = None
+    if user_temp:
+        roots.append(Path(user_temp))
+    return tuple(root.resolve() for root in roots)
+
+
+def _require_persistent_worktree(
+    repo_root: Path, platform: str | None = None, temporary_roots: tuple[Path, ...] | None = None
+) -> None:
+    if (sys.platform if platform is None else platform) != "darwin":
+        return
+    try:
+        resolved = repo_root.resolve()
+        roots = (
+            _macos_temporary_roots() if temporary_roots is None else tuple(root.resolve() for root in temporary_roots)
+        )
+    except OSError as exc:
+        raise RuntimeError(f"cannot verify that worktree {repo_root} is in a persistent directory: {exc}") from exc
+    for root in roots:
+        if resolved == root or root in resolved.parents:
+            raise RuntimeError(
+                f"worktree {resolved} is under the macOS purge-managed temporary directory {root}; "
+                "create the worktree in a persistent directory (for example ~/hunter-wt-<issue>) and push from there"
+            )
 
 
 def _require_exact_head(updates: list[tuple[str, str, str]], head_sha: str) -> None:
@@ -463,6 +498,7 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
         return 0
 
     repo_root = Path(_run_git("rev-parse", "--show-toplevel")).resolve()
+    _require_persistent_worktree(repo_root)
     os.chdir(repo_root)
     before_head = _run_git("rev-parse", "HEAD")
     _require_clean_tree()

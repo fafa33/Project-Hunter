@@ -20,6 +20,8 @@ Use the smallest correct change. Do not weaken tests or evidence requirements to
 
 While implementing, verify with focused work: the tests affected by the change plus the relevant lint and type checks. Do not run the full repository suite repeatedly, and never re-run it on an unchanged HEAD for reassurance.
 
+On macOS, keep worktrees in a persistent directory (for example `~/hunter-wt-<issue>`), never under `/tmp` or `/private/tmp`: the OS periodically purges old files there, and the pre-push hook refuses such a worktree.
+
 Before pushing an ordinary code-changing candidate, ensure the repository-owned hooks are enabled with `python scripts/install_hunter_git_hooks.py`. The `.githooks/pre-push` hook is the machine-enforced push boundary; push through it rather than rehearsing it by hand first. It requires a clean tree, binds the pushed branch SHA to the checked-out exact HEAD, validates writer provenance over the governed range and connector receipt freshness, runs the deterministic push-safety gates (Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy), and rechecks HEAD/tree state before authorizing network push. Agent prose or a remembered green run is never a substitute for this hook.
 
 The authoritative full repository proof is the hosted exact-head `Hunter / Pre-PR Preflight` run of:
