@@ -76,7 +76,11 @@ def test_every_layer_pins_the_same_provider_host() -> None:
 def test_the_canary_profile_is_the_kilo_profile_without_the_provider_host() -> None:
     kilo_hosts, kilo_listen = gateway.PROFILES["kilo"]
     canary_hosts, canary_listen = gateway.PROFILES["kilo-canary"]
-    assert canary_hosts == kilo_hosts - {HOST} and HOST in kilo_hosts and canary_listen == kilo_listen
+    assert canary_hosts == kilo_hosts - {HOST, gateway.KILO_LIVENESS_HOST} and HOST in kilo_hosts
+    assert canary_listen == kilo_listen
+    # Issue #577: the canary keeps exactly its previous hosts, so Kilo's offline probe still fails there and a
+    # simulated provider outage still reads as offline (never the liveness host that keeps a real stream alive).
+    assert canary_hosts == gateway.ALLOWED_HOSTS - {HOST}
     assert HOST not in gateway.PROFILES["codex"][0]  # the fallback never uses the canary profile
 
 

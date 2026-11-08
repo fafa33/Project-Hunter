@@ -17,12 +17,20 @@ MAX_HEADER = 4096
 #: The pinned Kilo provider host. ADR 0041 F8: the ``kilo-canary`` profile is the Kilo profile without it.
 KILO_PROVIDER_HOST = "ai-gateway.kilo.ai"
 ALLOWED_HOSTS = frozenset({KILO_PROVIDER_HOST, "models.dev"})
+#: Issue #577. Kilo 7.8.18's offline guard (``KiloSessionProcessor.offlineGuard``) probes connectivity whenever a
+#: model stream is silent for 10 s -- a reasoning model thinking before its first token. Its probe is a raw TCP dial
+#: to the provider (impossible from the internal network) and then ``HEAD https://kilo.ai`` (then example.com and
+#: cloudflare.com) through this proxy. With every probe refused, Kilo aborts the healthy stream as
+#: ``DisconnectedError`` and the headless run ends ``APIError "Network connection failed"`` (hosted runs 42486218343
+#: and 42487085826). Admitting the vendor's own apex for its liveness probe keeps the stream alive; no third party is
+#: admitted. The canary profile deliberately omits it, so a simulated provider outage still reads as offline.
+KILO_LIVENESS_HOST = "kilo.ai"
 #: ADR 0041 F5: the macOS Codex fallback gateway. ChatGPT-plan Codex signs in at auth.openai.com and runs against
 #: chatgpt.com. It listens on loopback only; the sandbox profile admits no other network destination.
 CODEX_ALLOWED_HOSTS = frozenset({"auth.openai.com", "chatgpt.com"})
 CODEX_LISTEN = ("127.0.0.1", 18443)
 PROFILES = {
-    "kilo": (ALLOWED_HOSTS, ("0.0.0.0", 8080)),  # noqa: S104
+    "kilo": (ALLOWED_HOSTS | {KILO_LIVENESS_HOST}, ("0.0.0.0", 8080)),  # noqa: S104
     # ADR 0041 F8: armed only by the signed AUTHORIZED.fallback_canary flag, for one primary run's gateway instance.
     "kilo-canary": (ALLOWED_HOSTS - {KILO_PROVIDER_HOST}, ("0.0.0.0", 8080)),  # noqa: S104
     "codex": (CODEX_ALLOWED_HOSTS, CODEX_LISTEN),
