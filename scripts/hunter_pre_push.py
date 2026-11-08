@@ -23,10 +23,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import stat
 import subprocess
 import sys
-from collections.abc import Callable, Iterable
+import tempfile
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -80,34 +80,37 @@ def _require_clean_tree() -> None:
         raise RuntimeError("working tree must be clean before push preflight")
 
 
-#: macOS periodically deletes old files from its shared temporary directories, silently corrupting a worktree kept
-#: there (Issue #577: a worktree under the system temporary directory lost 1,065 tracked files overnight). A shared
-#: temporary directory is recognised by what makes it one -- world-writable with the sticky bit set -- rather than by
-#: a list of path spellings, so every alias (symlinked or not) of such a directory is covered.
-_SHARED_TEMPORARY_MODE = stat.S_IWOTH | stat.S_ISVTX
-
-
-def _mode_of(path: Path) -> int:
-    return path.stat().st_mode
+#: Reject actual OS-managed temporary roots, not all world-writable sticky
+#: directories. Permissions alone do not imply macOS will purge a directory.
+def _macos_temporary_roots() -> tuple[Path, ...]:
+    roots = [Path(os.sep) / "private" / "tmp", Path(tempfile.gettempdir())]
+    # Darwin's per-user temporary root is independent of TMPDIR overrides.
+    try:
+        user_temp = os.confstr("CS_DARWIN_USER_TEMP_DIR")
+    except (AttributeError, OSError, ValueError):
+        user_temp = None
+    if user_temp:
+        roots.append(Path(user_temp))
+    return tuple(root.resolve() for root in roots)
 
 
 def _require_persistent_worktree(
-    repo_root: Path, platform: str | None = None, mode_of: Callable[[Path], int] | None = None
+    repo_root: Path, platform: str | None = None, temporary_roots: tuple[Path, ...] | None = None
 ) -> None:
     if (sys.platform if platform is None else platform) != "darwin":
         return
-    mode_of = _mode_of if mode_of is None else mode_of
-    resolved = repo_root.resolve()
-    for directory in (resolved, *resolved.parents):
-        try:
-            mode = mode_of(directory)
-        except OSError as exc:
-            raise RuntimeError(f"cannot verify that worktree {resolved} is in a persistent directory: {exc}") from exc
-        if stat.S_ISDIR(mode) and mode & _SHARED_TEMPORARY_MODE == _SHARED_TEMPORARY_MODE:
+    try:
+        resolved = repo_root.resolve()
+        roots = (
+            _macos_temporary_roots() if temporary_roots is None else tuple(root.resolve() for root in temporary_roots)
+        )
+    except OSError as exc:
+        raise RuntimeError(f"cannot verify that worktree {repo_root} is in a persistent directory: {exc}") from exc
+    for root in roots:
+        if resolved == root or root in resolved.parents:
             raise RuntimeError(
-                f"worktree {resolved} is under the shared temporary directory {directory}, which macOS periodically "
-                "purges; create the worktree in a persistent directory (for example ~/hunter-wt-<issue>) and push "
-                "from there"
+                f"worktree {resolved} is under the macOS purge-managed temporary directory {root}; "
+                "create the worktree in a persistent directory (for example ~/hunter-wt-<issue>) and push from there"
             )
 
 
