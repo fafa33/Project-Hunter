@@ -697,6 +697,80 @@ class KiloContainerIsolation:
                 (directory / (KILO_SESSION_STORE[-1] + "-wal")).write_bytes(store[1])
             return kilo_session_outcome(Path(staged))
 
+    def format_python(self, paths: Sequence[str]) -> str:
+        """Issue #577: apply the repository's pinned Black to the agent's changed Python files, before collection.
+
+        The broker mounts the workspace read-only (it also runs the agent's tests), so the agent can run
+        ``black --check`` but can never format; hosted run 42496047567 completed the task and was then refused by
+        candidate pre-push safety on Black alone. Only after every isolated process has stopped, a one-shot
+        container from the already-built broker image (``black==26.3.1``, the version ``ci-constraints.txt`` pins)
+        formats the listed files with the trusted control checkout's ``pyproject.toml``: no network, read-only root,
+        no capabilities, the agent's own uid. Black parses and rewrites; it never imports or runs the code. Only
+        regular ``.py`` files inside the workspace, named by the trusted collector, are passed. The validator still
+        checks every gate on the result, so this never turns a refusal into an admission.
+        """
+
+        if self.started or self.workspace is None:
+            return "SKIPPED"
+        config = self.scripts.parents[1] / "pyproject.toml"
+        root = self.workspace.resolve()
+        safe: list[str] = []
+        for path in paths:
+            if not path.endswith(".py") or path.startswith(("-", "/")) or "\0" in path or ".." in Path(path).parts:
+                continue
+            candidate = root / path
+            try:
+                # A regular file whose resolved path is exactly its workspace path: no link anywhere on the way.
+                if not stat.S_ISREG(os.lstat(candidate).st_mode) or candidate.resolve(strict=True) != candidate:
+                    continue
+            except OSError:
+                continue
+            safe.append(path)
+        if not safe or len(safe) > 500 or not config.is_file():
+            return "SKIPPED"
+        try:
+            result = self._docker(
+                "run",
+                "--rm",
+                "--network",
+                "none",
+                "--read-only",
+                "--user",
+                "65534:65532",
+                "--cap-drop",
+                "ALL",
+                "--security-opt",
+                "no-new-privileges",
+                "--pids-limit",
+                "32",
+                "--memory",
+                "512m",
+                "--tmpfs",
+                "/tmp:rw,nosuid,nodev,size=32m",
+                "--env",
+                "HOME=/tmp",
+                "--mount",
+                f"type=bind,src={root},dst=/workspace",
+                "--mount",
+                f"type=bind,src={config},dst=/opt/hunter-format/pyproject.toml,readonly",
+                "--workdir",
+                "/workspace",
+                BROKER_IMAGE,
+                "python",
+                "-I",
+                "-m",
+                "black",
+                "--config",
+                "/opt/hunter-format/pyproject.toml",
+                "--quiet",
+                "--",
+                *safe,
+                timeout=120,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return "FAILED"
+        return "FORMATTED" if result.returncode == 0 else "FAILED"
+
     def stop(self) -> None:
         if not self.started:
             return

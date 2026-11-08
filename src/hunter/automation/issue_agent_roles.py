@@ -1229,6 +1229,22 @@ def run_executor(
         probe = config.provider_probe()
         print(f"executor fallback signal: stderr_category={hint} probe_category={probe}", flush=True)
         return ExecutorOutcome(None, advisory, hint if isinstance(hint, str) else None, probe)
+    format_python = getattr(isolation, "format_python", None)
+    if callable(format_python) and _SHA40.fullmatch(bound["base_sha"]) is not None:
+        # Issue #577: the agent cannot run a formatter (its broker workspace is read-only), so the trusted step
+        # applies the repository's pinned Black to the changed Python files before the result is collected.
+        _git(git_dir, workspace, "add", "--all")
+        listing = _git(
+            git_dir, workspace, "diff", "--cached", "--no-renames", "--name-status", "-z", bound["base_sha"], "--"
+        ).split(b"\0")
+        entries = [item for item in listing if item]
+        python = [
+            raw.decode("utf-8", "replace")
+            for status, raw in zip(entries[::2], entries[1::2], strict=False)
+            if status in (b"A", b"M") and raw.endswith(b".py")
+        ]
+        verdict = format_python(python) if python else "SKIPPED"
+        print(f"executor result formatting: python_files={len(python)} outcome={verdict}", flush=True)
     try:
         document = collect_result(
             workspace,
