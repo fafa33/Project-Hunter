@@ -728,10 +728,13 @@ class KiloContainerIsolation:
             safe.append(path)
         if not safe or len(safe) > 500 or not config.is_file():
             return "SKIPPED"
+        formatter = f"{self.agent}-format"
         try:
             result = self._docker(
                 "run",
                 "--rm",
+                "--name",
+                formatter,
                 "--network",
                 "none",
                 "--read-only",
@@ -768,8 +771,21 @@ class KiloContainerIsolation:
                 timeout=120,
             )
         except (OSError, subprocess.TimeoutExpired):
+            # Killing the docker CLI does not stop the daemon-managed container (``--rm`` acts only on exit), so a
+            # timed-out Black could still be writing while the result is collected. Remove it, prove it is gone,
+            # and refuse rather than collect beside a formatter that may still be running.
+            self._remove_formatter(formatter)
             return "FAILED"
         return "FORMATTED" if result.returncode == 0 else "FAILED"
+
+    def _remove_formatter(self, name: str) -> None:
+        try:
+            self._docker("rm", "-f", name, timeout=30)
+            gone = self._docker("container", "inspect", name, timeout=15).returncode != 0
+        except (OSError, subprocess.TimeoutExpired):
+            gone = False
+        if not gone:
+            raise RoleRefused("EXECUTION_NOT_COMPLETED", "the result formatter could not be stopped")
 
     def stop(self) -> None:
         if not self.started:

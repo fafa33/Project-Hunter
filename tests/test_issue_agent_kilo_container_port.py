@@ -775,8 +775,36 @@ def test_a_formatter_failure_is_reported_never_raised(tmp_path: Path) -> None:
     isolation._docker = refuse  # type: ignore[method-assign]
     assert isolation.format_python(["pkg/m.py"]) == "FAILED"
 
-    def hang(*args: str, timeout: float = 40, stdin: bytes = b"") -> subprocess.CompletedProcess[bytes]:
-        raise subprocess.TimeoutExpired(list(args), timeout)
 
-    isolation._docker = hang  # type: ignore[method-assign]
+def _hanging_formatter(tmp_path: Path, *, still_running: bool = False, rm_error: bool = False):  # type: ignore[no-untyped-def]
+    isolation, workspace, _ = _formatter(tmp_path)
+    (workspace / "pkg" / "m.py").write_text("x=1\n")
+    calls: list[tuple[str, ...]] = []
+
+    def docker(*args: str, timeout: float = 40, stdin: bytes = b"") -> subprocess.CompletedProcess[bytes]:
+        calls.append(args)
+        if args[0] == "run":
+            raise subprocess.TimeoutExpired(list(args), timeout)
+        if args[0] == "rm" and rm_error:
+            raise OSError("daemon unavailable")
+        exists = args[:2] == ("container", "inspect") and still_running
+        return subprocess.CompletedProcess(list(args), 0 if exists else 1, b"", b"")
+
+    isolation._docker = docker  # type: ignore[method-assign]
+    return isolation, calls
+
+
+def test_a_timed_out_formatter_is_removed_and_proven_gone_before_collection(tmp_path: Path) -> None:
+    # PR #702 review: killing the docker CLI leaves a --rm container running, which could race collection.
+    isolation, calls = _hanging_formatter(tmp_path)
     assert isolation.format_python(["pkg/m.py"]) == "FAILED"
+    name = calls[0][calls[0].index("--name") + 1]
+    assert name == f"{isolation.agent}-format"
+    assert calls[1:] == [("rm", "-f", name), ("container", "inspect", name)]
+
+
+@pytest.mark.parametrize("kw", [{"still_running": True}, {"rm_error": True}])
+def test_a_formatter_that_cannot_be_proven_stopped_refuses_collection(tmp_path: Path, kw: dict) -> None:
+    isolation, _ = _hanging_formatter(tmp_path, **kw)
+    with pytest.raises(kilo_port.RoleRefused, match="could not be stopped"):
+        isolation.format_python(["pkg/m.py"])
