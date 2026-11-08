@@ -1133,6 +1133,8 @@ def _preflight(github: GitHub, configuration: Configuration, head_sha: str) -> t
             and run.get("event") == "push"
             and run.get("head_branch") is not None
             and run.get("run_attempt") == 1
+            and (run.get("repository") or {}).get("id") == configuration.repository_id
+            and (run.get("head_repository") or {}).get("id") == configuration.repository_id
         )
     ]
     if not runs:
@@ -1271,6 +1273,10 @@ def observe(
             if pr.get("draft") is True
             and (pr.get("base") or {}).get("ref") == "main"
             and (pr.get("head") or {}).get("sha") == head
+            and (pr.get("head") or {}).get("repo") is not None
+            and (pr.get("head") or {}).get("repo", {}).get("id") == configuration.repository_id
+            and (pr.get("base") or {}).get("repo") is not None
+            and (pr.get("base") or {}).get("repo", {}).get("id") == configuration.repository_id
         ]
         fields["open_draft_pr"] = conforming[0] if len(conforming) == 1 else None
         conclusion, preflight_run = _preflight(github, configuration, head)

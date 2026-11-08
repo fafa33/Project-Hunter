@@ -675,7 +675,13 @@ def completion_world(repos: dict[str, Any], signing_key: str, conclusion: str | 
     github, head = published_world(repos, signing_key)
     step(repos, github, role="finalize")
     github.routes[f"/repos/{rt.REPOSITORY}/pulls"] = [
-        {"number": 600, "node_id": "PR_x", "draft": True, "base": {"ref": "main"}, "head": {"ref": BRANCH, "sha": head}}
+        {
+            "number": 600,
+            "node_id": "PR_x",
+            "draft": True,
+            "base": {"ref": "main", "repo": {"id": 1}},
+            "head": {"ref": BRANCH, "sha": head, "repo": {"id": 1}},
+        }
     ]
     runs = (
         []
@@ -690,6 +696,8 @@ def completion_world(repos: dict[str, Any], signing_key: str, conclusion: str | 
                 "run_attempt": 1,
                 "status": "completed",
                 "conclusion": conclusion,
+                "repository": {"id": 1},
+                "head_repository": {"id": 1},
             }
         ]
     )
@@ -734,6 +742,45 @@ def test_a_non_draft_pr_never_completes(repos: dict[str, Any], signing_key: str)
     github, _ = completion_world(repos, signing_key, "success")
     github.routes[f"/repos/{rt.REPOSITORY}/pulls"][0]["draft"] = False
     assert step(repos, github, role="reconcile").action == "noop"
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        {"repository": {"id": 999}},
+        {"head_repository": {"id": 999}},
+        {"repository": {}},
+        {"head_repository": {}},
+        {},  # both missing
+    ],
+)
+def test_completion_refuses_foreign_or_missing_preflight_repository_ids(
+    repos: dict[str, Any], signing_key: str, tamper: dict[str, object]
+) -> None:
+    github, _ = completion_world(repos, signing_key, "success")
+    key = f"/repos/{rt.REPOSITORY}/actions/workflows/{control.PREFLIGHT_WORKFLOW_FILE}/runs"
+    github.routes[key]["workflow_runs"][0].update(tamper)
+    assert step(repos, github, role="reconcile").action == "noop"
+    assert ledger_state(repos).state == state.PUBLISHED
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        {"head": {"repo": {"id": 999}}},
+        {"base": {"repo": {"id": 999}}},
+        {"head": {"repo": {}}},
+        {"base": {"repo": {}}},
+        {},  # both missing
+    ],
+)
+def test_completion_refuses_foreign_or_missing_pr_repository_ids(
+    repos: dict[str, Any], signing_key: str, tamper: dict[str, object]
+) -> None:
+    github, _ = completion_world(repos, signing_key, "success")
+    github.routes[f"/repos/{rt.REPOSITORY}/pulls"][0].update(tamper)
+    assert step(repos, github, role="reconcile").action == "noop"
+    assert ledger_state(repos).state == state.PUBLISHED
 
 
 # --- REST client --------------------------------------------------------------------------------------
