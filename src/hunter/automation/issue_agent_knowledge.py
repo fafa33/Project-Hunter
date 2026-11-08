@@ -73,6 +73,7 @@ WRITER_ROLES: Final[Mapping[str, frozenset[str]]] = {
     "historical_evidence_assessed": frozenset({"knowledge-ingest"}),
     "thread_resolved": frozenset({"reconcile"}),
     "recurrence": frozenset({"reconcile"}),
+    "verified_e2e_outcome": frozenset({"candidate-pr-record", "reconcile"}),
 }
 
 _PROVENANCE = _object(
@@ -165,6 +166,18 @@ EVIDENCE_SCHEMAS: Final = {
         }
     ),
     "recurrence": _object({"family_id": _pattern(_FAMILY), "finding_id": SHA64}),
+    "verified_e2e_outcome": _object(
+        {
+            "issue_number": POSITIVE,
+            "pull_request_number": POSITIVE,
+            "authorization_id": state.AUTHORIZATION_ID,
+            "published_head_sha": SHA40,
+            "merge_commit_sha": SHA40,
+            "preflight_run_id": POSITIVE,
+            "preflight_conclusion": _exact("success"),
+            "completed_at": TIMESTAMP,
+        }
+    ),
 }
 _RECORD = _object(
     {
@@ -333,6 +346,7 @@ class KnowledgeView:
     findings: dict[str, Finding] = field(default_factory=dict)
     candidates: dict[str, dict[str, Any]] = field(default_factory=dict)
     recurrences: set[tuple[str, str]] = field(default_factory=set)
+    verified_e2e_outcomes: dict[str, dict[str, Any]] = field(default_factory=dict)
     keys: dict[tuple[str, str], str] = field(default_factory=dict)  # (kind, key) -> evidence digest
     head_record_digest: str | None = None
     next_seq: int = 0
@@ -366,6 +380,8 @@ def record_key(kind: str, evidence: Mapping[str, Any]) -> str:
         return sha256_hex(canonical_json({"finding_id": evidence["finding_id"], "attempt": evidence["attempt"]}))
     if kind == "recurrence":
         return sha256_hex(canonical_json({"family_id": evidence["family_id"], "finding_id": evidence["finding_id"]}))
+    if kind == "verified_e2e_outcome":
+        return str(evidence["authorization_id"])
     raise KnowledgeLedgerError(f"unknown kind {kind}")
 
 
@@ -489,6 +505,13 @@ def _fold(view: KnowledgeView, kind: str, evidence: dict[str, Any]) -> None:
             "recurrence of an unproven or differently mapped finding",
         )
         view.recurrences.add((evidence["family_id"], evidence["finding_id"]))
+        return
+    if kind == "verified_e2e_outcome":
+        _require(
+            evidence["authorization_id"] not in view.verified_e2e_outcomes,
+            "verified e2e outcome already recorded for this authorization",
+        )
+        view.verified_e2e_outcomes[evidence["authorization_id"]] = dict(evidence)
         return
     raise KnowledgeLedgerError(f"unknown kind {kind}")
 
@@ -681,6 +704,32 @@ def overlay_families(view: KnowledgeView) -> list[dict[str, Any]]:
     return entries
 
 
+def verified_e2e_outcome_write(
+    *,
+    issue_number: int,
+    pull_request_number: int,
+    authorization_id: str,
+    published_head_sha: str,
+    merge_commit_sha: str,
+    preflight_run_id: int,
+    completed_at: str,
+) -> Write:
+    """Create a write for a verified E2E outcome record (idempotent per authorization_id)."""
+    return Write(
+        "verified_e2e_outcome",
+        {
+            "issue_number": issue_number,
+            "pull_request_number": pull_request_number,
+            "authorization_id": authorization_id,
+            "published_head_sha": published_head_sha,
+            "merge_commit_sha": merge_commit_sha,
+            "preflight_run_id": preflight_run_id,
+            "preflight_conclusion": "success",
+            "completed_at": completed_at,
+        },
+    )
+
+
 __all__ = [
     "KNOWLEDGE_LEDGER_DOMAIN",
     "KNOWLEDGE_LEDGER_REF",
@@ -702,4 +751,5 @@ __all__ = [
     "overlay_families",
     "read",
     "record_key",
+    "verified_e2e_outcome_write",
 ]
