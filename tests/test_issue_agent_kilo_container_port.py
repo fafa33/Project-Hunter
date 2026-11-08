@@ -358,85 +358,8 @@ def test_the_last_assistant_turn_reports_its_closed_error_status_and_retryabilit
         ),
     )
     outcome = kilo_port.kilo_session_outcome(tmp_path)
-    assert outcome == {
-        "error": "APIError",
-        "status": "503",
-        "retryable": "true",
-        "finish": "none",
-        "tool_errors": "1",
-        "cause": "UPSTREAM_ERROR",
-    }
+    assert outcome == {"error": "APIError", "status": "503", "retryable": "true", "finish": "none", "tool_errors": "1"}
     assert "SECRET" not in json.dumps(outcome) and "oldString" not in json.dumps(outcome)
-
-
-def _api_error(**data: object) -> dict:
-    return {"role": "assistant", "error": {"name": "APIError", "data": {"isRetryable": True, **data}}}
-
-
-@pytest.mark.parametrize(
-    "data,cause",
-    [
-        # Bun's fetch when the tunnel drops mid-response: the shape runs 42486218343/42487085826 could not name.
-        (
-            {"message": "The socket connection was closed unexpectedly. For more information, pass `verbose: true`"},
-            "CONNECTION",
-        ),
-        ({"message": "Connection reset by server"}, "CONNECTION"),
-        ({"message": "terminated"}, "CONNECTION"),
-        ({"message": "Proxy refused to open a tunnel: 403 Forbidden"}, "EGRESS_REFUSED"),
-        ({"message": "Rate limit exceeded: free-models-per-min"}, "RATE_LIMIT"),
-        (
-            {"message": "Provider returned error", "responseBody": '{"error":{"message":"Too Many Requests"}}'},
-            "RATE_LIMIT",
-        ),
-        ({"message": "Insufficient credit balance"}, "QUOTA"),
-        ({"message": "Invalid API key provided"}, "AUTHENTICATION"),
-        ({"message": "This endpoint's maximum context length is 131072 tokens"}, "CONTEXT_LIMIT"),
-        ({"message": "No endpoints found for nvidia/model:free"}, "MODEL_UNAVAILABLE"),
-        ({"message": "The operation timed out."}, "TIMEOUT"),
-        ({"message": "Provider returned error", "responseBody": '{"error":"model overloaded"}'}, "UPSTREAM_ERROR"),
-        ({"message": "Provider returned error"}, "UPSTREAM_ERROR"),
-        ({"message": "something nobody anticipated sk-SECRET"}, "OTHER"),
-        ({"message": "request 4290 tokens 5030"}, "OTHER"),  # digits alone never name a cause
-        ({}, "none"),
-        ({"message": 429}, "none"),
-        ({"message": ["rate limit"]}, "none"),
-        ({"message": "   "}, "none"),
-    ],
-)
-def test_the_recorded_error_is_reduced_to_a_closed_cause(tmp_path: Path, data: dict, cause: str) -> None:
-    _session_store(tmp_path, _api_error(**data))
-    outcome = kilo_port.kilo_session_outcome(tmp_path)
-    assert outcome["cause"] == cause
-    rendered = json.dumps(outcome)
-    assert "SECRET" not in rendered and "socket" not in rendered and "nvidia" not in rendered
-
-
-def test_a_turn_without_an_error_has_no_cause_even_if_text_mentions_one(tmp_path: Path) -> None:
-    _session_store(tmp_path, {"role": "assistant", "finish": "stop", "text": "rate limit"})
-    assert kilo_port.kilo_session_outcome(tmp_path)["cause"] == "none"
-
-
-def test_only_a_bounded_prefix_of_the_message_is_examined(tmp_path: Path) -> None:
-    _session_store(tmp_path, _api_error(message="x" * 5000 + " rate limit"))
-    assert kilo_port.kilo_session_outcome(tmp_path)["cause"] == "OTHER"
-
-
-def test_every_reported_cause_is_from_the_closed_vocabulary() -> None:
-    vocabulary = {code for _, code in kilo_port._SESSION_CAUSES} | {"none", "OTHER"}
-    assert vocabulary == {
-        "EGRESS_REFUSED",
-        "CONTEXT_LIMIT",
-        "RATE_LIMIT",
-        "QUOTA",
-        "AUTHENTICATION",
-        "MODEL_UNAVAILABLE",
-        "TIMEOUT",
-        "CONNECTION",
-        "UPSTREAM_ERROR",
-        "none",
-        "OTHER",
-    }
 
 
 @pytest.mark.parametrize(
@@ -631,7 +554,6 @@ def test_a_completed_session_with_readable_evidence_is_reported(tmp_path: Path) 
             "retryable": "none",
             "finish": "stop",
             "tool_errors": "0",
-            "cause": "none",
         }
 
 
