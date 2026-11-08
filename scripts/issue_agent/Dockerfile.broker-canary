@@ -1,7 +1,11 @@
 FROM python:3.12-slim
-RUN pip install --no-cache-dir --only-binary=:all: pytest==9.0.3 ruff==0.15.21 black==26.3.1
+# Issue #577: the broker runs the agent's focused tests, which import Hunter's runtime dependencies. Install exactly
+# the project's declared [project].dependencies, pinned by the repository's own constraints, beside the tool pins.
+COPY requirements/ci-constraints.txt /opt/hunter/ci-constraints.txt
+RUN pip install --no-cache-dir --only-binary=:all: -c /opt/hunter/ci-constraints.txt \
+    pytest==9.0.3 ruff==0.15.21 black==26.3.1 cryptography pyyaml sqlalchemy
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git ripgrep \
+ && apt-get install -y --no-install-recommends git ripgrep openssh-client \
  && rm -rf /var/lib/apt/lists/*
 USER 65533:65532
 WORKDIR /workspace
