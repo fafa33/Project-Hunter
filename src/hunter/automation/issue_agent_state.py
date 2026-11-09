@@ -1537,8 +1537,16 @@ def advance(view: AuthorizationView, facts: Facts) -> Decision:
         return Decision("noop", reason="owning run still active")
     state = view.state
     branch = view.binding("execution_branch")
-    if state in {AUTHORIZED, FALLBACK_AUTHORIZED, RESULT_BOUND} and facts.remote_branch_head not in (None, UNKNOWN):
-        return Decision("freeze", code="STATE_ROLLBACK_SUSPECTED", reason=f"{branch} exists before VALIDATED")
+    if state in {AUTHORIZED, FALLBACK_AUTHORIZED, RESULT_BOUND}:
+        bound = view.evidence[AUTHORIZED]
+        lineage = bound.get("remediation") is not None or bound.get("preflight_recovery") is not None
+        if lineage and facts.remote_branch_head is UNKNOWN:
+            return Decision("noop", reason="lineage branch head unknown")
+        if facts.remote_branch_head not in (None, UNKNOWN):
+            # ADR 0039 L4/L9: a signed remediation/recovery reuses the existing lineage branch.
+            # Only its exact authorized base head is admissible; any movement remains a freeze.
+            if not (lineage and facts.remote_branch_head == bound["base_sha"]):
+                return Decision("freeze", code="STATE_ROLLBACK_SUSPECTED", reason=f"{branch} exists before VALIDATED")
     if state in {AUTHORIZED, FALLBACK_AUTHORIZED, RESULT_BOUND, VALIDATED} and facts.open_draft_pr not in (
         None,
         UNKNOWN,

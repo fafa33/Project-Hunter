@@ -715,3 +715,25 @@ def test_the_recovery_compiles_through_the_unchanged_spm_task_request() -> None:
     )
     request = issue_agent_task_request(authorization)
     assert FAILED_TEST in str(request)
+
+
+@pytest.mark.parametrize("stage", [state.AUTHORIZED, state.RESULT_BOUND])
+def test_recovery_bind_accepts_only_exact_signed_lineage_head(stage: str, failed: tuple[rt.Ledger, str]) -> None:
+    ledger, head = failed
+    evidence, _, _ = recovery_evidence(RECOVERY, head)
+    ledger.write(RECOVERY, state.AUTHORIZED, evidence, "authorize")
+    view = ledger.view.authorizations[RECOVERY]
+    view.state = stage
+    facts = state.Facts(stage_run_active=False, remote_branch_head=head)
+    assert state.advance(view, facts).action != "freeze"
+    decision = state.advance(view, state.Facts(stage_run_active=False, remote_branch_head="f" * 40))
+    assert (decision.action, decision.code) == ("freeze", "STATE_ROLLBACK_SUSPECTED")
+    assert state.advance(view, state.Facts(stage_run_active=False, remote_branch_head=state.UNKNOWN)).action == "noop"
+
+
+def test_initial_issue_bind_still_freezes_on_preexisting_branch(failed: tuple[rt.Ledger, str]) -> None:
+    ledger, head = failed
+    view = ledger.view.authorizations[PARENT]
+    view.state = state.AUTHORIZED
+    decision = state.advance(view, state.Facts(stage_run_active=False, remote_branch_head=head))
+    assert (decision.action, decision.code) == ("freeze", "STATE_ROLLBACK_SUSPECTED")
