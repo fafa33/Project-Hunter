@@ -949,3 +949,85 @@ def test_stop_prints_the_timed_trace_and_the_session_outline(
         f"isolated broker session: executed=1 denied=none last_line_at=+7s deadline={kilo_port.BROKER_DEADLINE_SECONDS}s"
         in out
     )
+
+
+def _tunnel_line(reason: str, *, host: str = "ai-gateway.kilo.ai", silent: int = 60) -> str:
+    return f"GATEWAY_TUNNEL_CLOSED host={host} reason={reason} open_s=75 silent_s={silent} up_bytes=900 down_bytes=0\n"
+
+
+def test_gateway_tunnels_report_each_idle_cut_on_the_model_clock() -> None:
+    log = (
+        _at(1)
+        + _tunnel_line("eof", host="kilo.ai", silent=0)
+        + _at(130)
+        + _tunnel_line("idle")
+        + _at(400)
+        + _tunnel_line("idle")
+        + _at(410)
+        + _tunnel_line("error", silent=3)
+    )
+    origin = kilo_port._broker_stamp(_T)[0]
+    assert kilo_port.gateway_tunnel_summary(log, origin=origin) == {
+        "closed": "4",
+        "idle": "2",
+        "eof": "1",
+        "error": "1",
+        "longest_silent_s": "60",
+        "idle_at": "ai-gateway.kilo.ai@+130s,ai-gateway.kilo.ai@+400s",
+    }
+
+
+def test_gateway_tunnels_without_timestamps_still_count_and_never_invent_a_time() -> None:
+    summary = kilo_port.gateway_tunnel_summary(_tunnel_line("idle") + _tunnel_line("eof", silent=0))
+    assert summary["idle"] == "1" and summary["eof"] == "1" and summary["idle_at"] == "ai-gateway.kilo.ai@?"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "noise " + _tunnel_line("idle"),  # mid-line marker
+        _tunnel_line("idle").replace("reason=idle", "reason=stalled"),  # outside the closed vocabulary
+        _tunnel_line("idle").rstrip("\n") + " extra=1\n",  # trailing field
+        _tunnel_line("idle", host="UPPER.example"),  # outside the host grammar
+        "2026-11-09T15:18:00Z junk " + _tunnel_line("idle"),  # forged stamp prefix
+    ],
+)
+def test_a_forged_or_partial_tunnel_line_is_never_counted(line: str) -> None:
+    summary = kilo_port.gateway_tunnel_summary(line)
+    assert summary["closed"] == "0" and summary["idle_at"] == "none"
+
+
+def test_tunnel_lines_are_not_canary_refusals() -> None:
+    hosts, other = kilo_port.gateway_refusals(_tunnel_line("idle") + _tunnel_line("eof"))
+    assert hosts == [] and other == 0
+
+
+def test_the_broker_session_end_is_reported_on_the_model_clock() -> None:
+    log = _at(10) + "BROKER_GIT_SNAPSHOT: ready\n" + _at(665) + "BROKER_DENIED: BudgetExhausted\n"
+    origin = kilo_port._broker_stamp(_at(20))[0]
+    assert kilo_port.broker_session_summary(log)["last_line_at"] == "+655s"  # former broker-relative clock
+    assert kilo_port.broker_session_summary(log, origin=origin)["last_line_at"] == "+645s"
+
+
+def test_stop_prints_how_every_tunnel_ended_before_the_gateway_is_removed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, _, _ = _prepared(tmp_path)
+    isolation.model_started_at = kilo_port._broker_stamp(_T)[0]
+    calls: list[tuple[str, ...]] = []
+    gateway_log = _at(130) + _tunnel_line("idle") + _at(200) + _tunnel_line("eof", silent=0)
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        calls.append(args)
+        if args[:3] == ("logs", "--timestamps", isolation.gateway):
+            return subprocess.CompletedProcess(args, 0, gateway_log.encode(), b"")
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
+        isolation.stop()
+    out = capsys.readouterr().out
+    assert (
+        "isolated gateway tunnels: closed=2 idle=1 eof=1 error=0 longest_silent_s=60 "
+        "idle_at=ai-gateway.kilo.ai@+130s idle_limit=60s"
+    ) in out
+    assert calls.index(("logs", "--timestamps", isolation.gateway)) < calls.index(("rm", "-f", isolation.gateway))

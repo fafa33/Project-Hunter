@@ -339,28 +339,76 @@ def parse_broker_trace(log: str) -> list[dict[str, object]]:
     return trace
 
 
-def broker_session_summary(log: str) -> dict[str, str]:
+def broker_session_summary(log: str, *, origin: float | None = None) -> dict[str, str]:
     """Issue #718: the broker session's closed outline: refusals by type and when its last line was written.
 
     A broker past its session deadline exits and every later agent command fails, so the time of its last line,
-    against the model's own wall clock, shows whether a model timeout was spent with or without tools.
+    against the model's own wall clock, shows whether a model timeout was spent with or without tools. With
+    ``origin`` (the model start) that time is on the model's clock, else on the broker's first line.
     """
 
-    origin: float | None = None
+    first: float | None = None
     last: float | None = None
     denied: dict[str, int] = {}
     for line in log[:262144].splitlines():
         when, body = _broker_stamp(line)
         if when is not None:
-            origin = when if origin is None else origin
+            first = when if first is None else first
             last = when
         match = _BROKER_DENIED.match(body)
         if match is not None:
             kind = match.group(1) if match.group(1) in _BROKER_DENIAL_TYPES else "OTHER"
             denied[kind] = min(denied.get(kind, 0) + 1, 999)
+    base = origin if origin is not None else first
     return {
         "denied": ",".join(f"{kind}:{count}" for kind, count in sorted(denied.items())) or "none",
-        "last_line_at": "none" if origin is None or last is None else f"+{int(last - origin)}s",
+        "last_line_at": "none" if base is None or last is None else f"+{int(last - base)}s",
+    }
+
+
+#: Issue #718: the gateway's content-free tunnel close line (``model_egress_gateway.TUNNEL_CLOSED_MARKER``).
+_GATEWAY_TUNNEL = re.compile(
+    r"GATEWAY_TUNNEL_CLOSED host=([a-z0-9.-]{1,253}) reason=(idle|eof|error) open_s=(\d{1,7}) silent_s=(\d{1,7}) "
+    r"up_bytes=(\d{1,15}) down_bytes=(\d{1,15})$"
+)
+#: The gateway's idle cut (``model_egress_gateway.TUNNEL_IDLE_SECONDS``), reported beside the counts.
+GATEWAY_TUNNEL_IDLE_SECONDS: Final = 60
+_IDLE_REPORT_LIMIT = 16
+
+
+def gateway_tunnel_summary(log: str, *, origin: float | None = None) -> dict[str, str]:
+    """Issue #718: how every tunnel through this run's gateway ended, counts and times only.
+
+    A provider stream silent for longer than the gateway's idle limit is cut and Kilo re-sends the whole request, so
+    each ``idle`` closure on the provider host is model budget lost without any other trace. Times are seconds from
+    ``origin`` (the model start) when given, else from the gateway's first line. A line counts only when it is the
+    whole line after an optional ``docker logs --timestamps`` stamp; no host outside the gateway's own fixed marker
+    grammar, and nothing a tunnel carried, is ever reported.
+    """
+
+    first: float | None = None
+    counts = {"idle": 0, "eof": 0, "error": 0}
+    longest_silent = 0
+    idle_at: list[str] = []
+    for line in log[:262144].splitlines():
+        when, body = _broker_stamp(line)
+        if when is not None and first is None:
+            first = when
+        match = _GATEWAY_TUNNEL.fullmatch(body.strip())
+        if match is None:
+            continue
+        host, reason, silent = match.group(1), match.group(2), int(match.group(4))
+        counts[reason] += 1
+        longest_silent = max(longest_silent, silent)
+        if reason == "idle" and len(idle_at) < _IDLE_REPORT_LIMIT:
+            base = origin if origin is not None else first
+            at = "?" if when is None or base is None else f"+{int(when - base)}s"
+            idle_at.append(f"{host}@{at}")
+    return {
+        "closed": str(sum(counts.values())),
+        **{name: str(value) for name, value in counts.items()},
+        "longest_silent_s": str(longest_silent),
+        "idle_at": ",".join(idle_at) or "none",
     }
 
 
@@ -380,6 +428,7 @@ class KiloContainerIsolation:
         self.home: Path | None = None
         self.started = False
         self.trace: list[dict[str, object]] = []
+        self.model_started_at: float | None = None
         #: ADR 0041 F2: the closed stderr category of the last isolated run (an untrusted hint, never content).
         self.last_stderr_category: str | None = None
         #: ADR 0041 F8: set only by ``arm_canary`` from the signed ``AUTHORIZED.fallback_canary`` flag.
@@ -679,6 +728,7 @@ class KiloContainerIsolation:
                 KILO_IMAGE,
                 *mapped[1:],
             ]
+            self.model_started_at = time.time()
             try:
                 result = self._docker(*command, timeout=timeout, stdin=stdin)
             except subprocess.TimeoutExpired as expired:
@@ -918,10 +968,23 @@ class KiloContainerIsolation:
                     f"tree={str(entry['tree'])[:12]} stdout_bytes={entry['stdout_bytes']}{timing}",
                     flush=True,
                 )
-            summary = broker_session_summary(text)
+            summary = broker_session_summary(text, origin=self.model_started_at)
             print(
                 f"isolated broker session: executed={len(self.trace)} denied={summary['denied']} "
                 f"last_line_at={summary['last_line_at']} deadline={BROKER_DEADLINE_SECONDS}s",
+                flush=True,
+            )
+        except (OSError, subprocess.TimeoutExpired, RoleRefused):
+            pass
+        try:  # Issue #718: how each model tunnel ended, read before the gateway is removed
+            logs = self._docker("logs", "--timestamps", self.gateway, timeout=15)
+            tunnels = gateway_tunnel_summary(
+                (logs.stdout + logs.stderr).decode("utf-8", errors="replace"), origin=self.model_started_at
+            )
+            print(
+                "isolated gateway tunnels: "
+                + " ".join(f"{name}={value}" for name, value in tunnels.items())
+                + f" idle_limit={GATEWAY_TUNNEL_IDLE_SECONDS}s",
                 flush=True,
             )
         except (OSError, subprocess.TimeoutExpired, RoleRefused):
