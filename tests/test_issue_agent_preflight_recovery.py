@@ -737,3 +737,68 @@ def test_initial_issue_bind_still_freezes_on_preexisting_branch(failed: tuple[rt
     view.state = state.AUTHORIZED
     decision = state.advance(view, state.Facts(stage_run_active=False, remote_branch_head=head))
     assert (decision.action, decision.code) == ("freeze", "STATE_ROLLBACK_SUSPECTED")
+
+
+def test_unstarted_signed_recovery_can_claim_next_bounded_attempt(failed: tuple[rt.Ledger, str]) -> None:
+    ledger, head = failed
+    evidence, _, _ = recovery_evidence(RECOVERY, head)
+    ledger.write(RECOVERY, state.AUTHORIZED, evidence, "authorize")
+    ledger.write(
+        RECOVERY, state.FAILED, {"code": "EXECUTION_NOT_STARTED", "failed_from_state": state.AUTHORIZED}, "bind"
+    )
+    view = ledger.view
+    assert (
+        state.preflight_recovery_refusal(
+            view, parent_authorization_id=RECOVERY, branch=rt.BRANCH, bound_head_sha=head, attempt=2
+        )
+        is None
+    )
+    assert (
+        state.preflight_recovery_refusal(
+            view, parent_authorization_id=RECOVERY, branch=rt.BRANCH, bound_head_sha="f" * 40, attempt=2
+        )
+        is not None
+    )
+    assert (
+        state.preflight_recovery_refusal(
+            view, parent_authorization_id=RECOVERY, branch=rt.BRANCH, bound_head_sha=head, attempt=3
+        )
+        is not None
+    )
+    next_evidence, _, _ = recovery_evidence(
+        "hunter-issue-agent-authorization:" + "e" * 64, head, parent=RECOVERY, attempt=2
+    )
+    ledger.write("hunter-issue-agent-authorization:" + "e" * 64, state.AUTHORIZED, next_evidence, "authorize")
+    assert ledger.view.active == "hunter-issue-agent-authorization:" + "e" * 64
+
+
+def test_started_recovery_cannot_be_reauthorized_as_unstarted(failed: tuple[rt.Ledger, str]) -> None:
+    ledger, head = failed
+    evidence, _, _ = recovery_evidence(RECOVERY, head)
+    ledger.write(RECOVERY, state.AUTHORIZED, evidence, "authorize")
+    ledger.write(
+        RECOVERY, state.FAILED, {"code": "EXECUTION_NOT_STARTED", "failed_from_state": state.AUTHORIZED}, "bind"
+    )
+    view = ledger.view
+    view.authorizations[RECOVERY].evidence[state.RESULT_BOUND] = {"artifact_id": 1}
+    assert (
+        state.preflight_recovery_refusal(
+            view, parent_authorization_id=RECOVERY, branch=rt.BRANCH, bound_head_sha=head, attempt=2
+        )
+        is not None
+    )
+
+
+def test_controller_reauthorizes_one_unstarted_recovery_only_at_exact_head(failed: tuple[rt.Ledger, str]) -> None:
+    ledger, head = failed
+    evidence, _, _ = recovery_evidence(RECOVERY, head)
+    ledger.write(RECOVERY, state.AUTHORIZED, evidence, "authorize")
+    ledger.write(
+        RECOVERY, state.FAILED, {"code": "EXECUTION_NOT_STARTED", "failed_from_state": state.AUTHORIZED}, "bind"
+    )
+    candidate = _eligible(GitHubFacts(head), ledger.view)
+    assert isinstance(candidate, control.PreflightRecoveryCandidate)
+    assert (candidate.parent_authorization_id, candidate.attempt, candidate.bound_head_sha) == (RECOVERY, 2, head)
+    facts = GitHubFacts(head)
+    facts.routes[f"/repos/{rt.REPOSITORY}/git/ref/heads/{rt.BRANCH}"] = {"object": {"sha": "f" * 40}}
+    assert _eligible(facts, ledger.view) is None

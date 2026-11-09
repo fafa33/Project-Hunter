@@ -1015,17 +1015,34 @@ def preflight_recovery_refusal(
     if parent.binding("execution_branch") != branch:
         return "a recovery runs only on its parent authorization's branch"
     failure = parent.evidence.get(FAILED)
-    if (
-        parent.state != FAILED
-        or failure is None
-        or failure.get("code") != PREFLIGHT_RECOVERY_TRIGGER
-        or failure.get("failed_from_state") != PUBLISHED
-    ):
-        return "the recovery parent did not fail its exact-head Pre-PR Preflight from PUBLISHED"
+    original_preflight_failure = (
+        failure is not None
+        and failure.get("code") == PREFLIGHT_RECOVERY_TRIGGER
+        and failure.get("failed_from_state") == PUBLISHED
+    )
+    interrupted_recovery = (
+        failure is not None
+        and failure.get("code") == "EXECUTION_NOT_STARTED"
+        and failure.get("failed_from_state") == AUTHORIZED
+        and parent.evidence[AUTHORIZED].get("preflight_recovery") is not None
+        and PUBLISHED not in parent.evidence
+        and RESULT_BOUND not in parent.evidence
+    )
+    if parent.state != FAILED or not (original_preflight_failure or interrupted_recovery):
+        return "the recovery parent did not fail its exact-head Pre-PR Preflight from PUBLISHED or an authorized recovery before execution"
     if parent.evidence[AUTHORIZED].get("remediation") is not None:
         return "a finding remediation is not recovered by a preflight recovery"
-    if (parent.evidence.get(PUBLISHED) or {}).get("head_sha") != bound_head_sha:
-        return "the bound head is not the head the parent published"
+    previous_head = (
+        parent.evidence[AUTHORIZED]["preflight_recovery"]["bound_head_sha"]
+        if interrupted_recovery
+        else (parent.evidence.get(PUBLISHED) or {}).get("head_sha")
+    )
+    if previous_head != bound_head_sha or (interrupted_recovery and parent.binding("base_sha") != bound_head_sha):
+        return (
+            "the bound head is not the parent's exact authorized lineage head"
+            if interrupted_recovery
+            else "the bound head is not the head the parent published"
+        )
     lineage = [
         identity for identity in view.claimed if view.authorizations[identity].binding("execution_branch") == branch
     ]
