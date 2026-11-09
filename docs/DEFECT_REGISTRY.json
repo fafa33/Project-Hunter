@@ -1162,6 +1162,16 @@
       "guard": "The read bound is a named constant (CODEX_TARBALL_MAX_BYTES) that only caps memory; authenticity stays with the pinned registry integrity and binary SHA-256. A regression binds the bound to the measured size of the pinned official archive, and an edge test proves the bound is exact (at-bound accepted, one byte over refused). A hardening bound on a pinned input must be tested against the real pinned artifact, not only synthetic fixtures.",
       "test": "tests/test_provision_codex_fallback_host.py::test_the_read_bound_admits_the_pinned_official_archive; tests/test_provision_codex_fallback_host.py::test_the_read_bound_is_exact_at_its_edge",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-131",
+      "class": "workflow-dependent-job-implicitly-skipped-after-status-aware-need-succeeds",
+      "source": "Issue #705 signed preflight recoveries 2fd0f835 (run 42592380835) and 6733fa50 (run 42616541445) on main 1c12885/27dd899: on the workflow_dispatch remediation path scope-admission is skipped, authorize runs under always() and succeeds, but execute (needs: authorize, no if) took GitHub's implicit success() over the whole dependency chain and was skipped; bind then terminalized EXECUTION_NOT_STARTED and both bounded recovery attempts were consumed without the model ever running",
+      "classification": "systemic",
+      "guard_boundary": "static workflow guard at the push/preflight boundary, before any dispatch path depends on the job graph",
+      "guard": "A job whose direct need runs after a possibly skipped ancestor (its if uses always() or !cancelled()) must declare its own status function, because the implicit success() is evaluated over the transitive chain. The guard parses every workflow's job graph (not prose) and carries paired fixtures; execute now runs on always() && needs.authorize.result == 'success' (the form bind uses), and the lifecycle-continuity evaluator models the implicit success() over the transitive chain instead of the direct needs only, which is why it never caught this skip. String literals are masked before status functions are detected. A controller conclusion of success is not task execution: the signed ledger outcome must be inspected after every dispatch.",
+      "test": "tests/test_issue_agent_workflows.py::test_no_job_is_implicitly_skipped_after_its_need_succeeds; tests/test_issue_agent_fallback_lifecycle_continuity.py::test_the_signed_remediation_dispatch_reaches_the_executor; tests/test_issue_agent_workflows.py::test_implicit_skip_guard_fixtures; tests/test_issue_agent_workflows.py::test_the_signed_dispatch_reaches_the_executor",
+      "status": "guarded"
     }
   ],
   "families": [

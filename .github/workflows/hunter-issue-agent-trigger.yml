@@ -214,6 +214,11 @@ jobs:
   execute:
     name: execute
     needs: authorize
+    # authorize runs under always() because its own need (scope-admission) is skipped on the signed remediation and
+    # preflight-recovery dispatch. Without an explicit status function GitHub applies the implicit success() over
+    # the whole dependency chain and skips execute even though authorize succeeded, so the model never runs and the
+    # lifecycle terminalizes EXECUTION_NOT_STARTED (Issue #705 attempts 2fd0f835, 6733fa50).
+    if: always() && needs.authorize.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: hunter-issue-agent-executor

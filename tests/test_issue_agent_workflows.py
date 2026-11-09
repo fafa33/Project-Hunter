@@ -164,6 +164,84 @@ def queued_concurrency(workflow: Mapping[str, Any]) -> bool:
     )
 
 
+_STATUS_FUNCTION = re.compile(r"\b(?:always|cancelled|failure|success)\(\s*\)")
+_RUNS_AFTER_SKIP = re.compile(r"\balways\(\s*\)|!\s*cancelled\(\s*\)")
+
+
+_STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
+
+
+def _code(expression: object) -> str:
+    """The expression with its string literals blanked, so a quoted 'always()' is never read as a call."""
+
+    return _STRING_LITERAL.sub("''", str(expression or ""))
+
+
+def _needs(job: Mapping[str, Any]) -> list[str]:
+    needs = job.get("needs") or []
+    return [needs] if isinstance(needs, str) else [str(need) for need in needs]
+
+
+def implicitly_skipped_dependents(workflow: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """Jobs GitHub silently skips although their direct need succeeded.
+
+    A job without a status function in its ``if`` gets the implicit ``success()``, which GitHub evaluates over the
+    whole dependency chain. When a direct need itself runs after a skipped ancestor (its ``if`` uses ``always()``
+    or ``!cancelled()``), that need can succeed while the dependent is still skipped. The dependent must then
+    state its own status function.
+    """
+
+    jobs = workflow.get("jobs") or {}
+    found: list[tuple[str, str]] = []
+    for job_id, job in jobs.items():
+        if _STATUS_FUNCTION.search(_code(job.get("if"))):
+            continue
+        for need in _needs(job):
+            upstream = jobs.get(need) or {}
+            if _needs(upstream) and _RUNS_AFTER_SKIP.search(_code(upstream.get("if"))):
+                found.append((str(job_id), need))
+    return found
+
+
+def _chain(dependent_if: str | None, *, upstream_if: str = "always() && needs.a.result != 'failure'") -> dict[str, Any]:
+    dependent: dict[str, Any] = {"needs": "b"}
+    if dependent_if is not None:
+        dependent["if"] = dependent_if
+    return {
+        "jobs": {"a": {"if": "github.event_name == 'issues'"}, "b": {"needs": "a", "if": upstream_if}, "c": dependent}
+    }
+
+
+@pytest.mark.parametrize(
+    ("dependent_if", "upstream_if", "flagged"),
+    [
+        (None, "always() && needs.a.result != 'failure'", True),
+        ("needs.b.result == 'success'", "always()", True),  # a result check is not a status function
+        ("${{ !cancelled() && needs.b.result == 'success' }}", "always()", False),
+        ("always() && needs.b.result == 'success'", "!cancelled()", False),
+        (None, "github.event_name == 'issues'", False),  # the need is itself skipped with its ancestor
+        (None, "'always()' == 'x'", False),  # a quoted name is not a call: the need is skipped with its ancestor
+        ("needs.b.result == 'success' && 'always()' != ''", "always()", True),  # quoted name is not a call
+        ("needs.b.result == 'it''s always()' || always()", "always()", False),  # escaped quote, then a real call
+    ],
+)
+def test_implicit_skip_guard_fixtures(dependent_if: str | None, upstream_if: str, flagged: bool) -> None:
+    assert bool(implicitly_skipped_dependents(_chain(dependent_if, upstream_if=upstream_if))) is flagged
+
+
+@pytest.mark.parametrize("name", sorted(path.name for path in WORKFLOWS.glob("*.yml")))
+def test_no_job_is_implicitly_skipped_after_its_need_succeeds(name: str) -> None:
+    """PRH-131: execute was skipped on the signed recovery dispatch although authorize succeeded."""
+
+    assert implicitly_skipped_dependents(load(name)) == []
+
+
+def test_the_signed_dispatch_reaches_the_executor() -> None:
+    execute = load(LIFECYCLE)["jobs"]["execute"]
+    assert _needs(execute) == ["authorize"]
+    assert "needs.authorize.result == 'success'" in str(execute["if"])
+
+
 # --- the governed workflows ------------------------------------------------------------------------
 
 
