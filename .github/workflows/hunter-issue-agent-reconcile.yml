@@ -60,6 +60,7 @@ jobs:
       contents: write
       actions: write
       pull-requests: read
+      issues: write # Owner-approved #706: terminal recovery-budget notification only
     steps:
       - name: Checkout trusted main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

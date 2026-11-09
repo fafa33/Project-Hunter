@@ -743,6 +743,65 @@ def cmd_knowledge_context_check(configuration: control.Configuration, arguments:
     return 0
 
 
+def _notify_recovery_budget_exhausted(
+    github: control.GitHubRest, configuration: control.Configuration, view: state.LedgerView, issue: int
+) -> None:
+    """Notify the owner once for a terminal, ledger-proven recovery budget exhaustion.
+
+    The reconciler is serialized. On ambiguous reads/writes it fails closed and the next
+    reconciliation re-reads the existing comment before attempting a write. No log text,
+    model output, or secrets enter the comment.
+    """
+
+    if not view.claimed:
+        return
+    parent = view.authorizations[view.claimed[-1]]
+    failure = parent.evidence.get(state.FAILED)
+    if (
+        parent.state != state.FAILED
+        or not isinstance(failure, Mapping)
+        or failure.get("code") != state.PREFLIGHT_RECOVERY_TRIGGER
+        or failure.get("failed_from_state") != state.PUBLISHED
+    ):
+        return
+    branch = str(parent.binding("execution_branch"))
+    if len(state.preflight_recoveries(view, branch)) < state.MAX_PREFLIGHT_RECOVERY_ATTEMPTS:
+        return
+    head = str((parent.evidence.get(state.PUBLISHED) or {}).get("head_sha") or "")
+    marker = f"<!-- hunter-preflight-recovery-exhausted:{parent.authorization_id} -->"
+    base = f"/repos/{configuration.repository}/issues/{issue}/comments"
+    # Complete bounded pagination; an incomplete history is not permission to post.
+    for page in range(1, 101):
+        comments = control.definitive(github.get(f"{base}?per_page=100&page={page}"))
+        if not isinstance(comments, list):
+            raise control.FactsUnavailable("Issue comment history is not observable")
+        if any(
+            isinstance(item, Mapping)
+            and isinstance(item.get("user"), Mapping)
+            and item["user"].get("login") == "github-actions[bot]"
+            and marker in str(item.get("body", ""))
+            for item in comments
+        ):
+            return
+        if len(comments) < 100:
+            break
+    else:
+        raise control.FactsUnavailable("Issue comment history exceeds notification inspection bound")
+    body = (
+        f"{marker}\n"
+        "Hunter autonomous Pre-PR recovery is BLOCKED: the approved repair budget "
+        f"({state.MAX_PREFLIGHT_RECOVERY_ATTEMPTS} attempts) is exhausted.\n\n"
+        f"Issue: #{issue}\nBranch: `{branch}`\nExact failed HEAD: `{head}`\n"
+        f"Last failed authorization: `{parent.authorization_id}`\n"
+        "Owner action: inspect the signed Issue lifecycle and authoritative Preflight evidence; "
+        "approve a new bounded remediation scope only after root-cause review. "
+        "No further automatic recovery or PR creation is authorized by this notice."
+    )
+    posted = control.definitive(github.reply(base, {"body": body}))
+    if not isinstance(posted, Mapping) or not isinstance(posted.get("id"), int):
+        raise control.FactsUnavailable("Issue notification publication was not confirmed")
+
+
 def _recover_failed_preflight(
     configuration: control.Configuration,
     github: control.GitHubRest,
@@ -764,6 +823,8 @@ def _recover_failed_preflight(
         print(f"issue {issue}: no eligible remediation")
         return False
     if isinstance(found, control.PreflightFailureClass):
+        if found.reason == "RECOVERY_BUDGET_EXHAUSTED":
+            _notify_recovery_budget_exhausted(github, configuration, ledger_view, issue)
         print(f"issue {issue}: failed candidate stays terminal (BLOCKED): {found.kind}: {found.reason}")
         return False
     live = control.definitive(github.get(f"/repos/{configuration.repository}/issues/{issue}"))
