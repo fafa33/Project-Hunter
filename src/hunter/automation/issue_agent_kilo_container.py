@@ -91,7 +91,58 @@ _SESSION_ERRORS: Final = frozenset(
     }
 )
 _FINISH_REASONS: Final = frozenset({"stop", "length", "tool-calls", "content-filter", "error", "other", "unknown"})
-_NO_SESSION: Final = {"error": "none", "status": "none", "retryable": "none", "finish": "none", "tool_errors": "0"}
+#: Issue #718: the per-turn timing outline, when the store has no assistant turn or no readable timing.
+_NO_TIMING: Final = {
+    "turns": "0",
+    "turns_without_content": "0",
+    "first_content_max_s": "none",
+    "last_progress_s": "none",
+    "tokens_out": "none",
+}
+_NO_SESSION: Final = {
+    "error": "none",
+    "status": "none",
+    "retryable": "none",
+    "finish": "none",
+    "tool_errors": "0",
+    **_NO_TIMING,
+}
+#: Kilo's assistant turns and their parts, timed by the store's own ``time_created`` milliseconds. Integers only.
+_TIMING_QUERY: Final = (
+    "SELECT count(*), sum(first IS NULL), max(first - created), max(last) - (SELECT min(time_created) FROM message),"
+    " sum(iif(json_type(data, '$.tokens.output') = 'integer', json_extract(data, '$.tokens.output'), 0)"
+    " + iif(json_type(data, '$.tokens.reasoning') = 'integer', json_extract(data, '$.tokens.reasoning'), 0))"
+    " FROM (SELECT m.time_created AS created, m.data AS data, min(p.time_created) AS first,"
+    " max(p.time_created) AS last FROM message m LEFT JOIN part p ON p.message_id = m.id"
+    " WHERE json_extract(m.data, '$.role') = 'assistant' GROUP BY m.id)"
+)
+
+
+def _session_timing(connection: sqlite3.Connection) -> dict[str, str]:
+    """Issue #718: whether the model's turns ever produced content, and when it last made progress.
+
+    A turn with no part is a request that never delivered anything Kilo recorded (the hosted #705 timeouts and a
+    local rehearsal of the same free route both left the budget unexplained). Only integer seconds and counts leave
+    this function, never a part or message; a store without the timing columns reads as ``none``.
+    """
+
+    def seconds(value: object) -> str:
+        return str(max(0, min(int(value) // 1000, 99999))) if type(value) is int else "none"
+
+    try:
+        row = connection.execute(_TIMING_QUERY).fetchone()
+    except sqlite3.Error:
+        return dict(_NO_TIMING)
+    if row is None or type(row[0]) is not int or row[0] == 0:
+        return dict(_NO_TIMING)
+    turns, empty, first_max, last, tokens = row
+    return {
+        "turns": str(min(turns, 999)),
+        "turns_without_content": str(min(empty, 999)) if type(empty) is int else "none",
+        "first_content_max_s": seconds(first_max),
+        "last_progress_s": seconds(last),
+        "tokens_out": str(max(0, min(tokens, 10**9))) if type(tokens) is int else "none",
+    }
 
 
 def _private_copy(source: Path, target: Path) -> bool:
@@ -156,6 +207,7 @@ def kilo_session_outcome(home: Path) -> dict[str, str]:
                     "SELECT count(*) FROM part WHERE json_extract(data, '$.type') = 'tool'"
                     " AND json_extract(data, '$.state.status') = 'error'"
                 ).fetchone()
+                timing = _session_timing(connection)
             finally:
                 connection.close()
     except FileNotFoundError:
@@ -163,7 +215,7 @@ def kilo_session_outcome(home: Path) -> dict[str, str]:
     except (OSError, sqlite3.Error, ValueError):
         return {**_NO_SESSION, "error": "UNREADABLE"}
     if row is None:
-        return {**_NO_SESSION, "tool_errors": str(min(int(tool_errors), 999))}
+        return {**_NO_SESSION, "tool_errors": str(min(int(tool_errors), 999)), **timing}
     name, status, retryable, finish = row
     return {
         "error": "none" if name is None else name if name in _SESSION_ERRORS else "OTHER",
@@ -171,6 +223,7 @@ def kilo_session_outcome(home: Path) -> dict[str, str]:
         "retryable": {1: "true", 0: "false"}.get(retryable, "none") if type(retryable) is int else "none",
         "finish": "none" if finish is None else finish if finish in _FINISH_REASONS else "OTHER",
         "tool_errors": str(min(int(tool_errors), 999)) if type(tool_errors) is int else "none",
+        **timing,
     }
 
 
@@ -374,13 +427,16 @@ _GATEWAY_TUNNEL = re.compile(
 #: The gateway's idle cut (``model_egress_gateway.TUNNEL_IDLE_SECONDS``), reported beside the counts.
 GATEWAY_TUNNEL_IDLE_SECONDS: Final = 60
 _IDLE_REPORT_LIMIT = 16
+_HOST_REPORT_LIMIT = 8
 
 
 def gateway_tunnel_summary(log: str, *, origin: float | None = None) -> dict[str, str]:
     """Issue #718: how every tunnel through this run's gateway ended, counts and times only.
 
     A provider stream silent for longer than the gateway's idle limit is cut and Kilo re-sends the whole request, so
-    each ``idle`` closure on the provider host is model budget lost without any other trace. Times are seconds from
+    each ``idle`` closure on the provider host is model budget lost without any other trace; an idle closure of a
+    pooled connection with no request in flight (``models.dev``) is not. Per host, the tunnel count, the longest
+    open time and the bytes received separate a stream that delivered from repeated empty requests. Times are seconds from
     ``origin`` (the model start) when given, else from the gateway's first line. A line counts only when it is the
     whole line after an optional ``docker logs --timestamps`` stamp; no host outside the gateway's own fixed marker
     grammar, and nothing a tunnel carried, is ever reported.
@@ -390,6 +446,7 @@ def gateway_tunnel_summary(log: str, *, origin: float | None = None) -> dict[str
     counts = {"idle": 0, "eof": 0, "error": 0}
     longest_silent = 0
     idle_at: list[str] = []
+    per_host: dict[str, list[int]] = {}  # host -> [tunnels, longest open seconds, bytes received]
     for line in log[:262144].splitlines():
         when, body = _broker_stamp(line)
         if when is not None and first is None:
@@ -399,6 +456,11 @@ def gateway_tunnel_summary(log: str, *, origin: float | None = None) -> dict[str
             continue
         host, reason, silent = match.group(1), match.group(2), int(match.group(4))
         counts[reason] += 1
+        if host in per_host or len(per_host) < _HOST_REPORT_LIMIT:
+            entry = per_host.setdefault(host, [0, 0, 0])
+            entry[0] += 1
+            entry[1] = max(entry[1], int(match.group(3)))
+            entry[2] = min(entry[2] + int(match.group(6)), 10**15)
         longest_silent = max(longest_silent, silent)
         if reason == "idle" and len(idle_at) < _IDLE_REPORT_LIMIT:
             base = origin if origin is not None else first
@@ -409,6 +471,11 @@ def gateway_tunnel_summary(log: str, *, origin: float | None = None) -> dict[str
         **{name: str(value) for name, value in counts.items()},
         "longest_silent_s": str(longest_silent),
         "idle_at": ",".join(idle_at) or "none",
+        "hosts": ",".join(
+            f"{host}:n={n}/max_open_s={longest}/down_bytes={down}"
+            for host, (n, longest, down) in sorted(per_host.items())
+        )
+        or "none",
     }
 
 

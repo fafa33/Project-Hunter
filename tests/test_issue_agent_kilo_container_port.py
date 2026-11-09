@@ -358,7 +358,13 @@ def test_the_last_assistant_turn_reports_its_closed_error_status_and_retryabilit
         ),
     )
     outcome = kilo_port.kilo_session_outcome(tmp_path)
-    assert outcome == {"error": "APIError", "status": "503", "retryable": "true", "finish": "none", "tool_errors": "1"}
+    assert {key: outcome[key] for key in ("error", "status", "retryable", "finish", "tool_errors")} == {
+        "error": "APIError",
+        "status": "503",
+        "retryable": "true",
+        "finish": "none",
+        "tool_errors": "1",
+    }
     assert "SECRET" not in json.dumps(outcome) and "oldString" not in json.dumps(outcome)
 
 
@@ -554,6 +560,11 @@ def test_a_completed_session_with_readable_evidence_is_reported(tmp_path: Path) 
             "retryable": "none",
             "finish": "stop",
             "tool_errors": "0",
+            "turns": "1",
+            "turns_without_content": "1",
+            "first_content_max_s": "none",
+            "last_progress_s": "none",
+            "tokens_out": "0",
         }
 
 
@@ -974,6 +985,7 @@ def test_gateway_tunnels_report_each_idle_cut_on_the_model_clock() -> None:
         "error": "1",
         "longest_silent_s": "60",
         "idle_at": "ai-gateway.kilo.ai@+130s,ai-gateway.kilo.ai@+400s",
+        "hosts": "ai-gateway.kilo.ai:n=3/max_open_s=75/down_bytes=0,kilo.ai:n=1/max_open_s=75/down_bytes=0",
     }
 
 
@@ -994,7 +1006,7 @@ def test_gateway_tunnels_without_timestamps_still_count_and_never_invent_a_time(
 )
 def test_a_forged_or_partial_tunnel_line_is_never_counted(line: str) -> None:
     summary = kilo_port.gateway_tunnel_summary(line)
-    assert summary["closed"] == "0" and summary["idle_at"] == "none"
+    assert summary["closed"] == "0" and summary["idle_at"] == "none" and summary["hosts"] == "none"
 
 
 def test_tunnel_lines_are_not_canary_refusals() -> None:
@@ -1028,6 +1040,81 @@ def test_stop_prints_how_every_tunnel_ended_before_the_gateway_is_removed(
     out = capsys.readouterr().out
     assert (
         "isolated gateway tunnels: closed=2 idle=1 eof=1 error=0 longest_silent_s=60 "
-        "idle_at=ai-gateway.kilo.ai@+130s idle_limit=60s"
+        "idle_at=ai-gateway.kilo.ai@+130s hosts=ai-gateway.kilo.ai:n=2/max_open_s=75/down_bytes=0 idle_limit=60s"
     ) in out
     assert calls.index(("logs", "--timestamps", isolation.gateway)) < calls.index(("rm", "-f", isolation.gateway))
+
+
+def test_the_host_breakdown_is_bounded_and_separates_delivery_from_empty_requests() -> None:
+    lines = "".join(_tunnel_line("eof", host=f"h{i}.example", silent=0) for i in range(12))
+    lines += (
+        "GATEWAY_TUNNEL_CLOSED host=ai-gateway.kilo.ai reason=eof open_s=40 silent_s=0 up_bytes=9 down_bytes=5000\n"
+    )
+    hosts = kilo_port.gateway_tunnel_summary(lines)["hosts"].split(",")
+    assert len(hosts) == 8 and "ai-gateway.kilo.ai" not in ",".join(hosts)  # bounded: later hosts are not listed
+    assert kilo_port.gateway_tunnel_summary(lines)["closed"] == "13"  # but every tunnel is still counted
+
+
+# Issue #718: a local rehearsal of the #705 free route through the real isolation left one assistant turn created at
+# +5 s with no part and no token for 235 s, while the provider tunnel stayed open. The executor's reader reported only
+# ``finish=none``; it now reports whether each turn ever delivered content and when the model last made progress.
+
+
+def _timed_store(home: Path, messages: list[tuple[str, int, dict]], parts: list[tuple[str, int, dict]]) -> None:
+    store_dir = home.joinpath(*kilo_port.KILO_SESSION_STORE[:-1])
+    store_dir.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(store_dir / kilo_port.KILO_SESSION_STORE[-1])
+    connection.execute("CREATE TABLE message (id text, session_id text, time_created integer, data text)")
+    connection.execute("CREATE TABLE part (id text, message_id text, session_id text, time_created integer, data text)")
+    for mid, created, data in messages:
+        connection.execute("INSERT INTO message VALUES (?, 's', ?, ?)", (mid, created, json.dumps(data)))
+    for index, (mid, created, data) in enumerate(parts):
+        connection.execute("INSERT INTO part VALUES (?, ?, 's', ?, ?)", (f"p{index}", mid, created, json.dumps(data)))
+    connection.commit()
+    connection.close()
+
+
+def test_a_turn_that_never_delivered_content_is_reported_with_the_last_progress(tmp_path: Path) -> None:
+    _timed_store(
+        tmp_path,
+        [
+            ("u", 0, {"role": "user"}),
+            ("a1", 5_000, {"role": "assistant", "finish": "tool-calls", "tokens": {"output": 40, "reasoning": 300}}),
+            ("a2", 95_000, {"role": "assistant", "tokens": {"output": 0, "reasoning": 0}}),
+        ],
+        [
+            ("u", 0, {"type": "text", "text": "TASK sk-SECRET"}),
+            ("a1", 50_000, {"type": "reasoning", "text": "thinking about sk-SECRET"}),
+            ("a1", 90_000, {"type": "tool", "state": {"status": "completed"}}),
+        ],
+    )
+    outcome = kilo_port.kilo_session_outcome(tmp_path)
+    assert {key: outcome[key] for key in kilo_port._NO_TIMING} == {
+        "turns": "2",
+        "turns_without_content": "1",  # a2: created at +95 s, nothing ever arrived
+        "first_content_max_s": "45",  # a1 waited 45 s for its first content
+        "last_progress_s": "90",
+        "tokens_out": "340",
+    }
+    assert "SECRET" not in json.dumps(outcome) and "thinking" not in json.dumps(outcome)
+
+
+@pytest.mark.parametrize(
+    "tokens",
+    [{"output": "9999"}, {"output": 1.5}, {"reasoning": "x"}, "nonsense"],
+)
+def test_non_integer_token_counts_never_leave_the_reader_as_text(tmp_path: Path, tokens: object) -> None:
+    _timed_store(tmp_path, [("a", 0, {"role": "assistant", "tokens": tokens})], [])
+    value = kilo_port.kilo_session_outcome(tmp_path)["tokens_out"]
+    assert value == "none" or value.isdigit()
+    assert value not in {"9999", "1.5"}
+
+
+def test_a_store_without_assistant_turns_reports_no_timing(tmp_path: Path) -> None:
+    _timed_store(tmp_path, [("u", 0, {"role": "user"})], [])
+    outcome = kilo_port.kilo_session_outcome(tmp_path)
+    assert {key: outcome[key] for key in kilo_port._NO_TIMING} == kilo_port._NO_TIMING
+
+
+def test_every_unreadable_outcome_keeps_the_same_closed_shape(tmp_path: Path) -> None:
+    assert set(kilo_port.kilo_session_outcome(tmp_path)) == set(kilo_port._NO_SESSION)
