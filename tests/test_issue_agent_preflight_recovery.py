@@ -101,8 +101,8 @@ def test_a_spoofed_second_failure_marker_fails_closed() -> None:
 
 
 def test_the_reason_is_one_bounded_printable_line() -> None:
-    hostile = LOG.replace("KeyError: 'finding_id'\n", "x" * 500 + "\x1b[31m‮\n", 1).replace(
-        f"{FAILED_TEST} - KeyError: 'finding_id'", f"{FAILED_TEST} - {'y' * 500}\x07‮"
+    hostile = LOG.replace("KeyError: 'finding_id'\n", "x" * 500 + "\x1b[31m\u202e\n", 1).replace(
+        f"{FAILED_TEST} - KeyError: 'finding_id'", f"{FAILED_TEST} - {'y' * 500}\x07\u202e"
     )
     [item] = control.classify_preflight_log(hostile).failed_tests
     assert item["reason"] == "y" * 200
@@ -221,10 +221,11 @@ def test_the_identity_is_a_pure_function_of_the_failure() -> None:
             _issue(), repository=rt.REPOSITORY, owner_login="fafa33", remediation=group
         ).authorization_id
 
-    assert identity() == identity()  # a duplicate pass recomputes the same claim (scenario B)
-    assert identity() != identity(run_id=RUN_ID + 1)
-    assert identity() != identity(bound_head_sha="d" * 40)
-    assert identity() != identity(attempt=2)
+    first, replay = identity(), identity()
+    assert first == replay  # a duplicate pass recomputes the same claim (scenario B)
+    assert first != identity(run_id=RUN_ID + 1)
+    assert first != identity(bound_head_sha="d" * 40)
+    assert first != identity(attempt=2)
 
 
 def test_the_task_text_carries_only_the_bounded_failure_facts() -> None:
