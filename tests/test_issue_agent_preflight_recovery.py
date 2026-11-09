@@ -37,6 +37,7 @@ SECOND = "hunter-issue-agent-authorization:" + "e" * 64
 THIRD = "hunter-issue-agent-authorization:" + "f" * 64
 FAILED_TEST = "tests/test_guard.py::test_guard_rejects_the_second_call"
 RUN_ID, JOB_ID = 42532987615, 128891101082
+AUTHORIZE_RUN_ID = 100  # the shared harness binds every authorization to run 100
 FAILED_EVIDENCE = {"code": "CANDIDATE_PREFLIGHT_FAILED", "failed_from_state": "PUBLISHED"}
 
 #: The shape of the real hosted failure that stranded Issue #705 (run 42532987615), timestamps included.
@@ -162,7 +163,7 @@ def test_the_group_is_closed_and_bound_to_the_exact_failure() -> None:
     [
         lambda g: g.update(extra=1),
         lambda g: g.update(pull_request_number=1),  # the two shapes never mix
-        lambda g: g.update(attempt=3),  # outside the approved budget
+        lambda g: g.update(attempt=6),  # outside the approved budget (2 executed + 3 unstarted)
         lambda g: g.update(attempt=0),
         lambda g: g.update(bound_head_sha="C" * 40),
         lambda g: g.update(branch=f"issue-521-{'a' * 16}"),  # another Issue's branch
@@ -465,15 +466,15 @@ def test_the_budget_allows_two_attempts_per_lineage_and_then_stops(failed: tuple
     _fail_recovery_at_preflight(ledger, SECOND, "5" * 40)
     assert (
         _refusal(ledger.view, parent_authorization_id=SECOND, bound_head_sha="5" * 40, attempt=3)
-        == "the recovery attempt budget of this lineage is exhausted"
+        == "the recovery execution budget of this lineage is exhausted"
     )
     third, _, _ = recovery_evidence(THIRD, "5" * 40, parent=SECOND, attempt=3)
     with pytest.raises(state.LedgerCorruptError, match="budget of this lineage is exhausted"):
         ledger.write(THIRD, state.AUTHORIZED, third, "authorize")
     over_budget = copy.deepcopy(remediation.preflight_recovery_group(_candidate(), issue_number=ISSUE))
-    over_budget["attempt"] = 3
+    over_budget["attempt"] = state.MAX_PREFLIGHT_RECOVERY_AUTHORIZATIONS + 1
     with pytest.raises(IssueAgentAuthorizationError, match="outside the approved budget"):
-        validate_remediation_group(over_budget, issue_number=ISSUE)  # the signed group cannot name attempt 3
+        validate_remediation_group(over_budget, issue_number=ISSUE)  # the signed group cannot name attempt 6
 
 
 def test_a_preflight_recovery_and_a_finding_remediation_never_mix(failed: tuple[rt.Ledger, str]) -> None:
@@ -532,6 +533,27 @@ class GitHubFacts:
         }
         self.log = LOG
         self.dispatched: list[Mapping[str, str]] = []
+        self.authorizing_run(AUTHORIZE_RUN_ID)
+
+    def authorizing_run(self, run_id: int, *, execute: str = "skipped", attempts: int = 1, **run: Any) -> None:
+        """Issue #716: the lifecycle run that authorized a recovery, with its execute job's conclusion."""
+
+        base = f"/repos/{rt.REPOSITORY}/actions/runs/{run_id}"
+        self.routes[base] = {
+            "id": run_id,
+            "path": control.LIFECYCLE_WORKFLOW,
+            "repository": {"id": 1},
+            "status": "completed",
+            "run_attempt": attempts,
+        } | run
+        for attempt in range(1, attempts + 1):
+            jobs = [
+                {"name": "authorize", "status": "completed", "conclusion": "success"},
+                {"name": "execute", "status": "completed", "conclusion": execute},
+                {"name": "execute-fallback", "status": "completed", "conclusion": "skipped"},
+                {"name": "bind", "status": "completed", "conclusion": "success"},
+            ]
+            self.routes[f"{base}/attempts/{attempt}/jobs?per_page=100"] = {"total_count": len(jobs), "jobs": jobs}
 
     def get(self, path: str) -> control.Read:
         if path in self.routes:
@@ -802,3 +824,191 @@ def test_controller_reauthorizes_one_unstarted_recovery_only_at_exact_head(faile
     facts = GitHubFacts(head)
     facts.routes[f"/repos/{rt.REPOSITORY}/git/ref/heads/{rt.BRANCH}"] = {"object": {"sha": "f" * 40}}
     assert _eligible(facts, ledger.view) is None
+
+
+# --- Issue #716: unstarted recoveries do not spend the execution budget, but stay finite ----------------------
+
+_NOT_STARTED = {"code": "EXECUTION_NOT_STARTED", "failed_from_state": state.AUTHORIZED}
+
+
+def _identity(n: int) -> str:
+    return "hunter-issue-agent-authorization:" + format(n, "x") * 64
+
+
+def _unstarted_recoveries(ledger: rt.Ledger, head: str, count: int) -> list[str]:
+    """``count`` signed recoveries in a row, each skipped before execution (the #705 shape)."""
+
+    identities, parent = [], PARENT
+    for attempt in range(1, count + 1):
+        identity = _identity(attempt)
+        evidence, _, _ = recovery_evidence(identity, head, parent=parent, attempt=attempt)
+        ledger.write(identity, state.AUTHORIZED, evidence, "authorize")
+        ledger.write(identity, state.FAILED, dict(_NOT_STARTED), "bind")
+        identities.append(identity)
+        parent = identity
+    return identities
+
+
+def test_the_705_history_of_two_unstarted_recoveries_admits_one_more_execution(
+    failed: tuple[rt.Ledger, str],
+) -> None:
+    """Scenarios 1, 2, 11, 12: both historical attempts stay on the ledger, untouched, and attempt 3 executes."""
+
+    ledger, head = failed
+    first, second = _unstarted_recoveries(ledger, head, 2)
+    before = [dict(record) for record in ledger.view.authorizations[first].records]
+    candidate = _eligible(GitHubFacts(head), ledger.view)
+    assert isinstance(candidate, control.PreflightRecoveryCandidate)
+    assert (candidate.parent_authorization_id, candidate.attempt, candidate.bound_head_sha) == (second, 3, head)
+    third, _, _ = recovery_evidence(_identity(3), head, parent=second, attempt=3)
+    ledger.write(_identity(3), state.AUTHORIZED, third, "authorize")
+    view = ledger.view
+    assert view.active == _identity(3)
+    assert [item.authorization_id for item in state.preflight_recoveries(view, rt.BRANCH)] == [
+        first,
+        second,
+        _identity(3),
+    ]
+    assert view.authorizations[first].records == before  # the signed history is read, never rewritten
+
+
+@pytest.mark.parametrize("conclusion", ["success", "failure", "cancelled", None])
+def test_a_recovery_whose_execute_job_started_is_never_treated_as_unstarted(
+    failed: tuple[rt.Ledger, str], conclusion: str | None
+) -> None:
+    """Scenario 3: the same signed EXECUTION_NOT_STARTED, but the executor job actually ran (or still runs)."""
+
+    ledger, head = failed
+    _unstarted_recoveries(ledger, head, 1)
+    facts = GitHubFacts(head)
+    facts.authorizing_run(AUTHORIZE_RUN_ID, execute=conclusion)  # type: ignore[arg-type]
+    assert _eligible(facts, ledger.view) == control.PreflightFailureClass(
+        "unknown", reason="execution of the interrupted recovery cannot be ruled out"
+    )
+
+
+@pytest.mark.parametrize(
+    "corrupt",
+    [
+        lambda routes, base: routes[base].update(path=".github/workflows/other.yml"),
+        lambda routes, base: routes[base].update(repository={"id": 2}),
+        lambda routes, base: routes[base].update(status="in_progress"),
+        lambda routes, base: routes[base].update(id=7),
+        lambda routes, base: routes[f"{base}/attempts/1/jobs?per_page=100"].update(total_count=40),
+        lambda routes, base: routes[f"{base}/attempts/1/jobs?per_page=100"]["jobs"].pop(1),
+        lambda routes, base: routes[f"{base}/attempts/1/jobs?per_page=100"]["jobs"].append(
+            {"name": "execute", "status": "completed", "conclusion": "skipped"}
+        ),
+    ],
+    ids=[
+        "foreign-workflow",
+        "foreign-repository",
+        "run-not-completed",
+        "wrong-run",
+        "partial-listing",
+        "no-execute-job",
+        "duplicate-execute-job",
+    ],
+)
+def test_ambiguous_or_foreign_execution_evidence_fails_closed(failed: tuple[rt.Ledger, str], corrupt: Any) -> None:
+    """Scenarios 4 and 9: evidence that does not prove a skipped executor counts as execution."""
+
+    ledger, head = failed
+    _unstarted_recoveries(ledger, head, 1)
+    facts = GitHubFacts(head)
+    corrupt(facts.routes, f"/repos/{rt.REPOSITORY}/actions/runs/{AUTHORIZE_RUN_ID}")
+    assert _eligible(facts, ledger.view) == control.PreflightFailureClass(
+        "unknown", reason="execution of the interrupted recovery cannot be ruled out"
+    )
+
+
+def test_a_later_run_attempt_that_executed_is_execution(failed: tuple[rt.Ledger, str]) -> None:
+    ledger, head = failed
+    _unstarted_recoveries(ledger, head, 1)
+    facts = GitHubFacts(head)
+    facts.authorizing_run(AUTHORIZE_RUN_ID, attempts=2)
+    jobs = facts.routes[f"/repos/{rt.REPOSITORY}/actions/runs/{AUTHORIZE_RUN_ID}/attempts/2/jobs?per_page=100"]
+    jobs["jobs"][1]["conclusion"] = "failure"
+    assert isinstance(_eligible(facts, ledger.view), control.PreflightFailureClass)
+
+
+def test_an_unreadable_authorizing_run_is_never_a_yes(failed: tuple[rt.Ledger, str]) -> None:
+    ledger, head = failed
+    _unstarted_recoveries(ledger, head, 1)
+    facts = GitHubFacts(head)
+    del facts.routes[f"/repos/{rt.REPOSITORY}/actions/runs/{AUTHORIZE_RUN_ID}/attempts/1/jobs?per_page=100"]
+    with pytest.raises(control.FactsUnavailable):
+        _eligible(facts, ledger.view)
+
+
+def test_repeated_infrastructure_failure_stops_at_the_unstarted_budget(failed: tuple[rt.Ledger, str]) -> None:
+    """Scenarios 7 and 10: proven-unstarted recoveries are finite on their own; the ledger refuses the next."""
+
+    ledger, head = failed
+    last = _unstarted_recoveries(ledger, head, state.MAX_UNSTARTED_PREFLIGHT_RECOVERIES)[-1]
+    assert _eligible(GitHubFacts(head), ledger.view) == control.PreflightFailureClass(
+        "unknown", reason="RECOVERY_BUDGET_EXHAUSTED"
+    )
+    attempt = state.MAX_UNSTARTED_PREFLIGHT_RECOVERIES + 1
+    evidence, _, _ = recovery_evidence(_identity(attempt), head, parent=last, attempt=attempt)
+    with pytest.raises(state.LedgerCorruptError, match="unstarted-recovery budget of this lineage is exhausted"):
+        ledger.write(_identity(attempt), state.AUTHORIZED, evidence, "authorize")
+
+
+def test_genuine_executions_spend_the_execution_budget_whatever_was_unstarted(
+    failed: tuple[rt.Ledger, str],
+) -> None:
+    """An executed recovery between unstarted ones still counts: two executions exhaust the lineage."""
+
+    ledger, head = failed
+    [unstarted] = _unstarted_recoveries(ledger, head, 1)
+    parent, current = unstarted, head
+    for attempt, published in ((2, "4" * 40), (3, "5" * 40)):
+        evidence, _, _ = recovery_evidence(_identity(attempt), current, parent=parent, attempt=attempt)
+        ledger.write(_identity(attempt), state.AUTHORIZED, evidence, "authorize")
+        _fail_recovery_at_preflight(ledger, _identity(attempt), published)
+        parent, current = _identity(attempt), published
+    assert _eligible(GitHubFacts(current), ledger.view) == control.PreflightFailureClass(
+        "unknown", reason="RECOVERY_BUDGET_EXHAUSTED"
+    )
+    evidence, _, _ = recovery_evidence(_identity(4), current, parent=parent, attempt=4)
+    with pytest.raises(state.LedgerCorruptError, match="recovery execution budget of this lineage is exhausted"):
+        ledger.write(_identity(4), state.AUTHORIZED, evidence, "authorize")
+
+
+def test_a_ledger_unstarted_recovery_disproved_by_its_run_spends_the_execution_budget(
+    failed: tuple[rt.Ledger, str],
+) -> None:
+    """The controller is stricter than the ledger: a run that executed turns an 'unstarted' record into an execution."""
+
+    ledger, head = failed
+    [unstarted] = _unstarted_recoveries(ledger, head, 1)
+    evidence, _, _ = recovery_evidence(_identity(2), head, parent=unstarted, attempt=2)
+    ledger.write(_identity(2), state.AUTHORIZED, evidence, "authorize")
+    _fail_recovery_at_preflight(ledger, _identity(2), "4" * 40)
+    view = ledger.view
+    assert state.preflight_recovery_budget_refusal(state.preflight_recoveries(view, rt.BRANCH)) is None
+    facts = GitHubFacts("4" * 40)
+    facts.authorizing_run(AUTHORIZE_RUN_ID, execute="failure")
+    assert _eligible(facts, view) == control.PreflightFailureClass("unknown", reason="RECOVERY_BUDGET_EXHAUSTED")
+
+
+def test_the_ledger_never_counts_other_lifecycle_evidence_as_unstarted(failed: tuple[rt.Ledger, str]) -> None:
+    ledger, head = failed
+    [unstarted] = _unstarted_recoveries(ledger, head, 1)
+    item = ledger.view.authorizations[unstarted]
+    assert state.recovery_unstarted_on_ledger(item)
+    for extra in (state.RESULT_BOUND, state.FALLBACK_AUTHORIZED, state.VALIDATED, state.PUBLISHED):
+        changed = copy.deepcopy(item)
+        changed.evidence[extra] = {}
+        assert not state.recovery_unstarted_on_ledger(changed)
+    other = copy.deepcopy(item)
+    other.evidence[state.FAILED] = {"code": "EXECUTOR_FAILED", "failed_from_state": state.AUTHORIZED}
+    assert not state.recovery_unstarted_on_ledger(other)
+
+
+def test_the_ordinal_bounds_agree() -> None:
+    from hunter.automation import issue_agent_execution as execution
+
+    assert execution.MAX_PREFLIGHT_RECOVERY_ATTEMPTS == state.MAX_PREFLIGHT_RECOVERY_ATTEMPTS == 2
+    assert execution.MAX_PREFLIGHT_RECOVERY_AUTHORIZATIONS == state.MAX_PREFLIGHT_RECOVERY_AUTHORIZATIONS == 5

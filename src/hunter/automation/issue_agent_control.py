@@ -1052,6 +1052,51 @@ class PreflightRecoveryCandidate:
     failed_tests: tuple[Mapping[str, str], ...]
 
 
+#: The lifecycle jobs that run a model. A recovery never reached execution only if every one of them was skipped.
+EXECUTION_JOB_NAMES: Final = frozenset({"execute", "execute-fallback"})
+
+
+def execution_never_scheduled(github: GitHub, configuration: Configuration, item: state.AuthorizationView) -> bool:
+    """Issue #716: whether the run that authorized ``item`` provably never started an execution job.
+
+    The run is the one the signed AUTHORIZED record binds (``authorize_run_id``). It must be this repository's
+    completed lifecycle run, and in every one of its attempts the complete job listing must hold exactly one
+    ``execute`` job, and every execution job must be completed and skipped. Anything else is ``False`` (the
+    recovery counts as executed); an unreadable fact raises :class:`FactsUnavailable`.
+    """
+
+    run_id = item.evidence[state.AUTHORIZED].get("authorize_run_id")
+    if type(run_id) is not int or run_id < 1:
+        return False
+    base = f"/repos/{configuration.repository}/actions/runs/{run_id}"
+    run = definitive(github.get(base))
+    if not isinstance(run, Mapping):
+        raise FactsUnavailable("the authorizing run is not observable")
+    attempts = run.get("run_attempt")
+    if (
+        run.get("id") != run_id
+        or run.get("path") != LIFECYCLE_WORKFLOW
+        or (run.get("repository") or {}).get("id") != configuration.repository_id
+        or run.get("status") != "completed"
+        or type(attempts) is not int
+        or not 1 <= attempts <= 100
+    ):
+        return False
+    for attempt in range(1, attempts + 1):
+        listing = definitive(github.get(f"{base}/attempts/{attempt}/jobs?per_page=100"))
+        jobs = listing.get("jobs") if isinstance(listing, Mapping) else None
+        if not isinstance(jobs, list) or not isinstance(listing, Mapping):
+            raise FactsUnavailable("the authorizing run's jobs are not observable")
+        if listing.get("total_count") != len(jobs):
+            return False  # an incomplete listing cannot prove an absence
+        executions = [job for job in jobs if isinstance(job, Mapping) and job.get("name") in EXECUTION_JOB_NAMES]
+        if [job.get("name") for job in executions].count("execute") != 1:
+            return False
+        if any(job.get("status") != "completed" or job.get("conclusion") != "skipped" for job in executions):
+            return False
+    return True
+
+
 def eligible_preflight_recovery(
     github: GitHub,
     configuration: Configuration,
@@ -1072,14 +1117,7 @@ def eligible_preflight_recovery(
         return None
     parent = view.authorizations[view.claimed[-1]]
     failure = parent.evidence.get(state.FAILED)
-    interrupted = (
-        failure is not None
-        and failure.get("code") == "EXECUTION_NOT_STARTED"
-        and failure.get("failed_from_state") == state.AUTHORIZED
-        and parent.evidence[state.AUTHORIZED].get("preflight_recovery") is not None
-        and state.RESULT_BOUND not in parent.evidence
-        and state.PUBLISHED not in parent.evidence
-    )
+    interrupted = state.recovery_unstarted_on_ledger(parent)
     if (
         parent.state != state.FAILED
         or failure is None
@@ -1101,8 +1139,18 @@ def eligible_preflight_recovery(
     )
     if interrupted and parent.binding("base_sha") != head:
         return None
-    attempt = len(state.preflight_recoveries(view, branch)) + 1
-    if attempt > state.MAX_PREFLIGHT_RECOVERY_ATTEMPTS:
+    done = state.preflight_recoveries(view, branch)
+    attempt = len(done) + 1
+    # Issue #716: only a recovery whose ledger AND authorizing run both prove it never reached execution is spared
+    # the execution budget; anything less counts as executed. An unreadable run is FactsUnavailable, never a guess.
+    proven = {
+        item.authorization_id
+        for item in done
+        if state.recovery_unstarted_on_ledger(item) and execution_never_scheduled(github, configuration, item)
+    }
+    if interrupted and parent.authorization_id not in proven:
+        return PreflightFailureClass("unknown", reason="execution of the interrupted recovery cannot be ruled out")
+    if state.preflight_recovery_budget_refusal(done, unstarted=lambda item: item.authorization_id in proven):
         return PreflightFailureClass("unknown", reason="RECOVERY_BUDGET_EXHAUSTED")
     ref = definitive(github.get(f"/repos/{configuration.repository}/git/ref/heads/{branch}"))
     current = (ref.get("object") or {}).get("sha") if isinstance(ref, Mapping) else None

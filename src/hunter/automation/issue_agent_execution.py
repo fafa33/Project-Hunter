@@ -142,6 +142,9 @@ _FINDING_CLAIM_RE = re.compile(r"[\x20-\x7e]{1,280}")
 #: pytest node ids observed in the authoritative job and the reason is one bounded printable line; both are
 #: public log facts, and both reach the model only inside the untrusted task text.
 MAX_PREFLIGHT_RECOVERY_ATTEMPTS: Final = 2
+#: Issue #716: recoveries proven never to have reached execution do not spend the execution budget but have their
+#: own (3), so an attempt ordinal of one lineage is bounded by the sum. Equal to the ledger's bound by test.
+MAX_PREFLIGHT_RECOVERY_AUTHORIZATIONS: Final = 5
 MAX_PREFLIGHT_FAILED_TESTS: Final = 16
 #: The ledger's own test-id vocabulary (``issue_agent_state._TEST_ID``); a test pins the two equal.
 PREFLIGHT_TEST_ID_RE: Final = re.compile(r"tests/[A-Za-z0-9_./-]{1,200}\.py::[A-Za-z0-9_\[\]-]{1,200}")
@@ -645,7 +648,7 @@ def _validate_preflight_recovery_group(remediation: dict[str, Any], *, issue_num
     if match is None or int(match.group(1)) != issue_number:
         raise IssueAgentAuthorizationError("preflight recovery branch is not an Issue-agent branch of this Issue")
     attempt = remediation["attempt"]
-    if type(attempt) is not int or not 1 <= attempt <= MAX_PREFLIGHT_RECOVERY_ATTEMPTS:
+    if type(attempt) is not int or not 1 <= attempt <= MAX_PREFLIGHT_RECOVERY_AUTHORIZATIONS:
         raise IssueAgentAuthorizationError("preflight recovery attempt is outside the approved budget")
     if not isinstance(remediation["bound_head_sha"], str) or not _COMMIT_SHA_RE.fullmatch(
         remediation["bound_head_sha"]
