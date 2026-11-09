@@ -15,3 +15,16 @@ def test_hosted_executor_has_time_for_terminal_advisory() -> None:
     workflow = Path(".github/workflows/hunter-issue-agent-trigger.yml").read_text()
     execute = workflow.split("\n  execute:\n", 1)[1].split("\n  bind:\n", 1)[0]
     assert "timeout-minutes: 20" in execute
+
+
+def test_signed_automated_remediation_admitted_without_owner_actor() -> None:
+    """#708: trusted bot dispatch must reach signature verification, not skip authorize."""
+    workflow = Path(".github/workflows/hunter-issue-agent-trigger.yml").read_text()
+    authorize = workflow.split("\n  authorize:\n", 1)[1].split("\n  bind:\n", 1)[0]
+    assert "inputs.remediation_authorization != ''" in authorize
+    assert "github.actor == 'github-actions[bot]'" in authorize
+    assert "github.actor == github.repository_owner" in authorize
+    assert "github.ref == 'refs/heads/main'" in authorize
+    assert "needs.scope-admission.outputs.eligible == 'true'" in authorize
+    assert "issuer signature verifies" in authorize
+    assert "python scripts/hunter_issue_agent_lifecycle.py" in authorize
