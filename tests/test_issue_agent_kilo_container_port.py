@@ -205,7 +205,7 @@ def test_stop_collects_broker_trace_before_removal(tmp_path: Path) -> None:
     with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
         isolation.stop()
     assert len(isolation.trace) == 1
-    assert calls.index(("logs", isolation.broker)) < calls.index(("rm", "-f", isolation.broker))
+    assert calls.index(("logs", "--timestamps", isolation.broker)) < calls.index(("rm", "-f", isolation.broker))
 
 
 def test_agent_is_not_started_until_the_broker_snapshot_is_ready(tmp_path: Path) -> None:
@@ -864,3 +864,88 @@ def test_a_timeout_without_any_output_or_store_is_still_reported_and_still_a_tim
     out = capsys.readouterr().out
     assert "isolated Kilo timeout diagnostic: stdout_bytes=0 stderr_bytes=0" in out
     assert "isolated Kilo session outcome: error=ABSENT" in out
+
+
+# --- Issue #718: the broker trace carries Docker's timestamps, so turn time and the broker's end are measurable ---
+
+_T = "2026-11-09T15:18:00.000000000Z "
+
+
+def _at(seconds: int) -> str:
+    minute, second = divmod(seconds, 60)
+    return f"2026-11-09T15:{18 + minute:02d}:{second:02d}.500000000Z "
+
+
+def test_a_timestamped_trace_reports_when_each_command_ran_and_for_how_long() -> None:
+    tree = "a" * 64
+    log = (
+        _T
+        + "BROKER_GIT_SNAPSHOT: ready\n"
+        + _at(40)
+        + "BROKER_RECEIVED: 'python -m pytest -q'\n"
+        + _at(70)
+        + f"BROKER_EXECUTED: ['python', '-m', 'pytest', '-q'] EXIT: 1 TREE: {tree} STDOUT_BYTES: 9\n"
+        + _at(100)
+        + "BROKER_RECEIVED: 'cat /etc/passwd'\n"
+        + _at(100)
+        + "BROKER_DENIED: ShellDenied\n"
+        + _at(130)
+        + f"BROKER_EXECUTED: ['ls'] EXIT: 0 TREE: {tree} STDOUT_BYTES: 3\n"
+        + _at(660)
+        + "BROKER_DENIED: BudgetExhausted\n"
+        + _at(661)
+        + "BROKER_DENIED: SomethingInjected\n"
+    )
+    trace = kilo_port.parse_broker_trace(log)
+    assert [(t["seq"], t["at"], t["dur"]) for t in trace] == [(1, 70, 30), (2, 130, None)]
+    assert kilo_port.broker_session_summary(log) == {
+        "denied": "BudgetExhausted:1,OTHER:1,ShellDenied:1",
+        "last_line_at": "+661s",
+    }
+
+
+def test_an_untimestamped_log_keeps_the_former_trace_and_reports_no_timing() -> None:
+    line = f"BROKER_EXECUTED: ['ls'] EXIT: 0 TREE: {'b' * 64} STDOUT_BYTES: 3\n"
+    [entry] = kilo_port.parse_broker_trace("BROKER_RECEIVED: 'ls'\n" + line)
+    assert entry["at"] is None and entry["dur"] is None and entry["cmd"] == "ls"
+    assert kilo_port.broker_session_summary(line) == {"denied": "none", "last_line_at": "none"}
+
+
+def test_a_forged_timestamp_or_mid_line_marker_never_creates_an_entry() -> None:
+    tree = "c" * 64
+    log = (
+        "2026-13-99T99:99:99Z BROKER_EXECUTED: ['ls'] EXIT: 0 TREE: "
+        + tree
+        + " STDOUT_BYTES: 1\n"
+        + _T
+        + "noise BROKER_EXECUTED: ['ls'] EXIT: 0 TREE: "
+        + tree
+        + " STDOUT_BYTES: 1\n"
+    )
+    assert kilo_port.parse_broker_trace(log) == []
+
+
+def test_stop_prints_the_timed_trace_and_the_session_outline(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, _, _ = _prepared(tmp_path)
+    log = (
+        _T
+        + "BROKER_GIT_SNAPSHOT: ready\n"
+        + _at(5)
+        + "BROKER_RECEIVED: 'ls'\n"
+        + _at(7)
+        + f"BROKER_EXECUTED: ['ls'] EXIT: 0 TREE: {'d' * 64} STDOUT_BYTES: 3\n"
+    )
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        return subprocess.CompletedProcess(args, 0, log.encode() if args[0] == "logs" else b"", b"")
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
+        isolation.stop()
+    out = capsys.readouterr().out
+    assert "isolated broker trace: seq=1 cmd='ls' exit=0 tree=dddddddddddd stdout_bytes=3 at=+7s dur=2s" in out
+    assert (
+        f"isolated broker session: executed=1 denied=none last_line_at=+7s deadline={kilo_port.BROKER_DEADLINE_SECONDS}s"
+        in out
+    )

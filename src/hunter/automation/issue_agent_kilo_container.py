@@ -19,6 +19,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlunsplit
@@ -262,10 +263,62 @@ def canary_refusal_evidence(
 _TRACE = re.compile(r"BROKER_EXECUTED: (\[[^\n]*?\]) EXIT: (-?\d+) TREE: ([0-9a-f]{64}) STDOUT_BYTES: (\d+)")
 
 
+#: ``docker logs --timestamps`` prefixes every line with Docker's own RFC 3339 receive time (Issue #718).
+_STAMP = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z ")
+_RECEIVED = re.compile(r"BROKER_RECEIVED: ")
+_DENIED = re.compile(r"BROKER_DENIED: ([A-Za-z]{1,40})$")
+#: The only refusal types the broker raises (``real_broker_server.handle``); anything else is reported as OTHER.
+_DENIAL_TYPES = frozenset(
+    {
+        "ShellDenied",
+        "BudgetExhausted",
+        "PermissionError",
+        "TimeoutExpired",
+        "ValueError",
+        "TypeError",
+        "UnicodeDecodeError",
+        "UnicodeEncodeError",
+        "OSError",
+        "FileNotFoundError",
+        "JSONDecodeError",
+    }
+)
+
+
+def _stamp(line: str) -> tuple[float | None, str]:
+    match = _STAMP.match(line)
+    if match is None:
+        return None, line
+    try:
+        whole = datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=UTC).timestamp()
+    except ValueError:
+        return None, line
+    return whole + float("0." + (match.group(2) or "0")), line[match.end() :]
+
+
 def parse_broker_trace(log: str) -> list[dict[str, object]]:
-    """Closed-vocabulary execution trace from the broker log; never includes command output."""
+    """Closed-vocabulary execution trace from the broker log; never includes command output.
+
+    Issue #718: when the log carries Docker's timestamps, each command also reports ``at`` (whole seconds since
+    the broker's first line) and ``dur`` (whole seconds from its ``BROKER_RECEIVED`` line), so the time between
+    commands, which is the model's own turn time, is measurable. Both are ``None`` without timestamps.
+    """
     trace: list[dict[str, object]] = []
-    for match in _TRACE.finditer(log[:262144]):
+    origin: float | None = None
+    received: float | None = None
+    for line in log[:262144].splitlines():
+        when, body = _stamp(line)
+        if when is not None and origin is None:
+            origin = when
+        if _RECEIVED.match(body):
+            received = when
+            continue
+        if _DENIED.match(body):
+            received = None  # a refused command never executed: its receive time belongs to no trace entry
+            continue
+        match = _TRACE.match(body)
+        if match is None:
+            continue
         try:
             argv = ast.literal_eval(match.group(1))
         except (ValueError, SyntaxError):
@@ -278,9 +331,37 @@ def parse_broker_trace(log: str) -> list[dict[str, object]]:
                     "exit": int(match.group(2)),
                     "tree": match.group(3),
                     "stdout_bytes": int(match.group(4)),
+                    "at": None if when is None or origin is None else int(when - origin),
+                    "dur": None if when is None or received is None else max(0, int(when - received)),
                 }
             )
+        received = None
     return trace
+
+
+def broker_session_summary(log: str) -> dict[str, str]:
+    """Issue #718: the broker session's closed outline: refusals by type and when its last line was written.
+
+    A broker past its session deadline exits and every later agent command fails, so the time of its last line,
+    against the model's own wall clock, shows whether a model timeout was spent with or without tools.
+    """
+
+    origin: float | None = None
+    last: float | None = None
+    denied: dict[str, int] = {}
+    for line in log[:262144].splitlines():
+        when, body = _stamp(line)
+        if when is not None:
+            origin = when if origin is None else origin
+            last = when
+        match = _DENIED.match(body)
+        if match is not None:
+            kind = match.group(1) if match.group(1) in _DENIAL_TYPES else "OTHER"
+            denied[kind] = min(denied.get(kind, 0) + 1, 999)
+    return {
+        "denied": ",".join(f"{kind}:{count}" for kind, count in sorted(denied.items())) or "none",
+        "last_line_at": "none" if origin is None or last is None else f"+{int(last - origin)}s",
+    }
 
 
 class KiloContainerIsolation:
@@ -827,14 +908,22 @@ class KiloContainerIsolation:
         if not self.started:
             return
         try:  # evidence of what the broker actually executed, read before the container is removed
-            logs = self._docker("logs", self.broker, timeout=15)
-            self.trace = parse_broker_trace((logs.stdout + logs.stderr).decode("utf-8", errors="replace"))
+            logs = self._docker("logs", "--timestamps", self.broker, timeout=15)
+            text = (logs.stdout + logs.stderr).decode("utf-8", errors="replace")
+            self.trace = parse_broker_trace(text)
             for entry in self.trace:
+                timing = "" if entry["at"] is None else f" at=+{entry['at']}s dur={entry['dur']}s"
                 print(
                     f"isolated broker trace: seq={entry['seq']} cmd={entry['cmd']!r} exit={entry['exit']} "
-                    f"tree={str(entry['tree'])[:12]} stdout_bytes={entry['stdout_bytes']}",
+                    f"tree={str(entry['tree'])[:12]} stdout_bytes={entry['stdout_bytes']}{timing}",
                     flush=True,
                 )
+            summary = broker_session_summary(text)
+            print(
+                f"isolated broker session: executed={len(self.trace)} denied={summary['denied']} "
+                f"last_line_at={summary['last_line_at']} deadline={BROKER_DEADLINE_SECONDS}s",
+                flush=True,
+            )
         except (OSError, subprocess.TimeoutExpired, RoleRefused):
             pass
         for args in (
