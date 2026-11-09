@@ -12,6 +12,7 @@ import re
 import select
 import socket
 import socketserver
+import time
 
 MAX_HEADER = 4096
 #: The pinned Kilo provider host. ADR 0041 F8: the ``kilo-canary`` profile is the Kilo profile without it.
@@ -37,6 +38,13 @@ PROFILES = {
 }
 #: One content-free line per well-formed CONNECT refused only because its host is outside the profile.
 REFUSED_HOST_MARKER = "GATEWAY_REFUSED_HOST"
+#: Issue #718: an established tunnel with no byte in either direction for this long is closed. A provider stream
+#: that is silent for longer (a reasoning model before its first token) is cut, and Kilo 7.8.18 re-sends the whole
+#: request with backoff, so a silent cut costs the model budget without any other trace.
+TUNNEL_IDLE_SECONDS = 60
+#: Issue #718: one content-free line per closed tunnel -- the allowlisted host, why it closed, how long it was open,
+#: how long it had been silent and the byte counts in each direction. No payload byte is ever read for logging.
+TUNNEL_CLOSED_MARKER = "GATEWAY_TUNNEL_CLOSED"
 _HOSTNAME = re.compile(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")
 
 
@@ -76,6 +84,38 @@ def public_addresses(host: str) -> list[tuple]:
     return result
 
 
+def _relay(client: socket.socket, upstream: socket.socket, host: str) -> None:
+    """Relay one established tunnel until EOF, error or idle timeout; report only how it ended."""
+    opened = last = time.monotonic()
+    sent = received = 0
+    reason = "error"
+    try:
+        while True:
+            readable, _, _ = select.select([client, upstream], [], [], TUNNEL_IDLE_SECONDS)
+            if not readable:
+                reason = "idle"
+                return
+            for source in readable:
+                data = source.recv(16384)
+                if not data:
+                    reason = "eof"
+                    return
+                (upstream if source is client else client).sendall(data)
+                last = time.monotonic()
+                if source is client:
+                    sent += len(data)
+                else:
+                    received += len(data)
+    finally:
+        now = time.monotonic()
+        print(
+            TUNNEL_CLOSED_MARKER,
+            f"host={host} reason={reason} open_s={int(now - opened)} silent_s={int(now - last)} "
+            f"up_bytes={sent} down_bytes={received}",
+            flush=True,
+        )
+
+
 class Handler(socketserver.BaseRequestHandler):
     allowed: frozenset[str] = ALLOWED_HOSTS
 
@@ -106,15 +146,7 @@ class Handler(socketserver.BaseRequestHandler):
                         self.request.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
                         self.request.settimeout(None)
                         upstream.settimeout(None)
-                        while True:
-                            readable, _, _ = select.select([self.request, upstream], [], [], 60)
-                            if not readable:
-                                return
-                            for source in readable:
-                                data = source.recv(16384)
-                                if not data:
-                                    return
-                                (upstream if source is self.request else self.request).sendall(data)
+                        _relay(self.request, upstream, target[0])
                         return
                 except (OSError, TimeoutError):
                     continue

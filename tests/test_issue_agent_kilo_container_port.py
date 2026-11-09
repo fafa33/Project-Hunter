@@ -205,7 +205,7 @@ def test_stop_collects_broker_trace_before_removal(tmp_path: Path) -> None:
     with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
         isolation.stop()
     assert len(isolation.trace) == 1
-    assert calls.index(("logs", isolation.broker)) < calls.index(("rm", "-f", isolation.broker))
+    assert calls.index(("logs", "--timestamps", isolation.broker)) < calls.index(("rm", "-f", isolation.broker))
 
 
 def test_agent_is_not_started_until_the_broker_snapshot_is_ready(tmp_path: Path) -> None:
@@ -358,7 +358,13 @@ def test_the_last_assistant_turn_reports_its_closed_error_status_and_retryabilit
         ),
     )
     outcome = kilo_port.kilo_session_outcome(tmp_path)
-    assert outcome == {"error": "APIError", "status": "503", "retryable": "true", "finish": "none", "tool_errors": "1"}
+    assert {key: outcome[key] for key in ("error", "status", "retryable", "finish", "tool_errors")} == {
+        "error": "APIError",
+        "status": "503",
+        "retryable": "true",
+        "finish": "none",
+        "tool_errors": "1",
+    }
     assert "SECRET" not in json.dumps(outcome) and "oldString" not in json.dumps(outcome)
 
 
@@ -554,6 +560,11 @@ def test_a_completed_session_with_readable_evidence_is_reported(tmp_path: Path) 
             "retryable": "none",
             "finish": "stop",
             "tool_errors": "0",
+            "turns": "1",
+            "turns_without_content": "1",
+            "first_content_max_s": "none",
+            "last_progress_s": "none",
+            "tokens_out": "0",
         }
 
 
@@ -808,3 +819,302 @@ def test_a_formatter_that_cannot_be_proven_stopped_refuses_collection(tmp_path: 
     isolation, _ = _hanging_formatter(tmp_path, **kw)
     with pytest.raises(kilo_port.RoleRefused, match="could not be stopped"):
         isolation.format_python(["pkg/m.py"])
+
+
+# --- Issue #718: a model timeout reports the same closed diagnostics a non-zero exit does ---------------------
+
+
+def test_a_model_timeout_reports_its_stderr_outline_and_session_outcome(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, workspace, home = _prepared(tmp_path)
+    _session_store(
+        home, {"role": "assistant", "error": {"name": "APIError", "data": {"statusCode": 429, "isRetryable": True}}}
+    )
+    calls: list[tuple[str, ...]] = []
+    reader = _container_fake(home, agent_exit=0, calls=calls)
+    partial = "\u2192 bash ls\n\u2190 bash ls\nError: 429 Too Many Requests SECRET-PROMPT-TEXT\n".encode()
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        if args[0] == "run" and kilo_port.KILO_IMAGE in args:
+            calls.append(args)
+            raise subprocess.TimeoutExpired("docker", timeout, output=b"partial model text", stderr=partial)
+        return reader(*args, timeout=timeout, stdin=stdin)
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run_agent(isolation, workspace)
+    out = capsys.readouterr().out
+    assert "isolated Kilo timeout diagnostic: stdout_bytes=18 stderr_bytes=" in out
+    assert "stderr_category=RATE_LIMIT" in out
+    assert "isolated Kilo stderr structure: " in out and "status=429" in out
+    assert "isolated Kilo session outcome: error=APIError status=429 retryable=true" in out
+    assert "SECRET-PROMPT-TEXT" not in out and "partial model text" not in out and "bash ls" not in out
+    # The agent is stopped before its store is read, and nothing feeds a fallback or canary decision.
+    agent_run = next(i for i, args in enumerate(calls) if args[0] == "run" and kilo_port.KILO_IMAGE in args)
+    removal = calls.index(("rm", "-f", isolation.agent))
+    assert agent_run < removal < next(i for i, args in enumerate(calls) if _is_reader(args))
+    assert isolation.last_stderr_category is None
+
+
+def test_a_timeout_without_any_output_or_store_is_still_reported_and_still_a_timeout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, workspace, home = _prepared(tmp_path)
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        if args[0] == "run" and kilo_port.KILO_IMAGE in args:
+            raise subprocess.TimeoutExpired("docker", timeout)
+        if args[0] == "rm":
+            raise OSError("docker went away")  # a failed stop never masks the timeout
+        return _container_fake(home, agent_exit=0)(*args, timeout=timeout, stdin=stdin)
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run_agent(isolation, workspace)
+    out = capsys.readouterr().out
+    assert "isolated Kilo timeout diagnostic: stdout_bytes=0 stderr_bytes=0" in out
+    assert "isolated Kilo session outcome: error=ABSENT" in out
+
+
+# --- Issue #718: the broker trace carries Docker's timestamps, so turn time and the broker's end are measurable ---
+
+_T = "2026-11-09T15:18:00.000000000Z "
+
+
+def _at(seconds: int) -> str:
+    minute, second = divmod(seconds, 60)
+    return f"2026-11-09T15:{18 + minute:02d}:{second:02d}.500000000Z "
+
+
+def test_a_timestamped_trace_reports_when_each_command_ran_and_for_how_long() -> None:
+    tree = "a" * 64
+    log = (
+        _T
+        + "BROKER_GIT_SNAPSHOT: ready\n"
+        + _at(40)
+        + "BROKER_RECEIVED: 'python -m pytest -q'\n"
+        + _at(70)
+        + f"BROKER_EXECUTED: ['python', '-m', 'pytest', '-q'] EXIT: 1 TREE: {tree} STDOUT_BYTES: 9\n"
+        + _at(100)
+        + "BROKER_RECEIVED: 'cat /etc/passwd'\n"
+        + _at(100)
+        + "BROKER_DENIED: ShellDenied\n"
+        + _at(130)
+        + f"BROKER_EXECUTED: ['ls'] EXIT: 0 TREE: {tree} STDOUT_BYTES: 3\n"
+        + _at(660)
+        + "BROKER_DENIED: BudgetExhausted\n"
+        + _at(661)
+        + "BROKER_DENIED: SomethingInjected\n"
+    )
+    trace = kilo_port.parse_broker_trace(log)
+    assert [(t["seq"], t["at"], t["dur"]) for t in trace] == [(1, 70, 30), (2, 130, None)]
+    assert kilo_port.broker_session_summary(log) == {
+        "denied": "BudgetExhausted:1,OTHER:1,ShellDenied:1",
+        "last_line_at": "+661s",
+    }
+
+
+def test_an_untimestamped_log_keeps_the_former_trace_and_reports_no_timing() -> None:
+    line = f"BROKER_EXECUTED: ['ls'] EXIT: 0 TREE: {'b' * 64} STDOUT_BYTES: 3\n"
+    [entry] = kilo_port.parse_broker_trace("BROKER_RECEIVED: 'ls'\n" + line)
+    assert entry["at"] is None and entry["dur"] is None and entry["cmd"] == "ls"
+    assert kilo_port.broker_session_summary(line) == {"denied": "none", "last_line_at": "none"}
+
+
+def test_a_forged_timestamp_or_mid_line_marker_never_creates_an_entry() -> None:
+    tree = "c" * 64
+    log = (
+        "2026-13-99T99:99:99Z BROKER_EXECUTED: ['ls'] EXIT: 0 TREE: "
+        + tree
+        + " STDOUT_BYTES: 1\n"
+        + _T
+        + "noise BROKER_EXECUTED: ['ls'] EXIT: 0 TREE: "
+        + tree
+        + " STDOUT_BYTES: 1\n"
+    )
+    assert kilo_port.parse_broker_trace(log) == []
+
+
+def test_stop_prints_the_timed_trace_and_the_session_outline(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, _, _ = _prepared(tmp_path)
+    log = (
+        _T
+        + "BROKER_GIT_SNAPSHOT: ready\n"
+        + _at(5)
+        + "BROKER_RECEIVED: 'ls'\n"
+        + _at(7)
+        + f"BROKER_EXECUTED: ['ls'] EXIT: 0 TREE: {'d' * 64} STDOUT_BYTES: 3\n"
+    )
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        return subprocess.CompletedProcess(args, 0, log.encode() if args[0] == "logs" else b"", b"")
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
+        isolation.stop()
+    out = capsys.readouterr().out
+    assert "isolated broker trace: seq=1 cmd='ls' exit=0 tree=dddddddddddd stdout_bytes=3 at=+7s dur=2s" in out
+    assert (
+        f"isolated broker session: executed=1 denied=none last_line_at=+7s deadline={kilo_port.BROKER_DEADLINE_SECONDS}s"
+        in out
+    )
+
+
+def _tunnel_line(reason: str, *, host: str = "ai-gateway.kilo.ai", silent: int = 60) -> str:
+    return f"GATEWAY_TUNNEL_CLOSED host={host} reason={reason} open_s=75 silent_s={silent} up_bytes=900 down_bytes=0\n"
+
+
+def test_gateway_tunnels_report_each_idle_cut_on_the_model_clock() -> None:
+    log = (
+        _at(1)
+        + _tunnel_line("eof", host="kilo.ai", silent=0)
+        + _at(130)
+        + _tunnel_line("idle")
+        + _at(400)
+        + _tunnel_line("idle")
+        + _at(410)
+        + _tunnel_line("error", silent=3)
+    )
+    origin = kilo_port._broker_stamp(_T)[0]
+    assert kilo_port.gateway_tunnel_summary(log, origin=origin) == {
+        "closed": "4",
+        "idle": "2",
+        "eof": "1",
+        "error": "1",
+        "longest_silent_s": "60",
+        "idle_at": "ai-gateway.kilo.ai@+130s,ai-gateway.kilo.ai@+400s",
+        "hosts": "ai-gateway.kilo.ai:n=3/max_open_s=75/down_bytes=0,kilo.ai:n=1/max_open_s=75/down_bytes=0",
+    }
+
+
+def test_gateway_tunnels_without_timestamps_still_count_and_never_invent_a_time() -> None:
+    summary = kilo_port.gateway_tunnel_summary(_tunnel_line("idle") + _tunnel_line("eof", silent=0))
+    assert summary["idle"] == "1" and summary["eof"] == "1" and summary["idle_at"] == "ai-gateway.kilo.ai@?"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "noise " + _tunnel_line("idle"),  # mid-line marker
+        _tunnel_line("idle").replace("reason=idle", "reason=stalled"),  # outside the closed vocabulary
+        _tunnel_line("idle").rstrip("\n") + " extra=1\n",  # trailing field
+        _tunnel_line("idle", host="UPPER.example"),  # outside the host grammar
+        "2026-11-09T15:18:00Z junk " + _tunnel_line("idle"),  # forged stamp prefix
+    ],
+)
+def test_a_forged_or_partial_tunnel_line_is_never_counted(line: str) -> None:
+    summary = kilo_port.gateway_tunnel_summary(line)
+    assert summary["closed"] == "0" and summary["idle_at"] == "none" and summary["hosts"] == "none"
+
+
+def test_tunnel_lines_are_not_canary_refusals() -> None:
+    hosts, other = kilo_port.gateway_refusals(_tunnel_line("idle") + _tunnel_line("eof"))
+    assert hosts == [] and other == 0
+
+
+def test_the_broker_session_end_is_reported_on_the_model_clock() -> None:
+    log = _at(10) + "BROKER_GIT_SNAPSHOT: ready\n" + _at(665) + "BROKER_DENIED: BudgetExhausted\n"
+    origin = kilo_port._broker_stamp(_at(20))[0]
+    assert kilo_port.broker_session_summary(log)["last_line_at"] == "+655s"  # former broker-relative clock
+    assert kilo_port.broker_session_summary(log, origin=origin)["last_line_at"] == "+645s"
+
+
+def test_stop_prints_how_every_tunnel_ended_before_the_gateway_is_removed(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, _, _ = _prepared(tmp_path)
+    isolation.model_started_at = kilo_port._broker_stamp(_T)[0]
+    calls: list[tuple[str, ...]] = []
+    gateway_log = _at(130) + _tunnel_line("idle") + _at(200) + _tunnel_line("eof", silent=0)
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        calls.append(args)
+        if args[:3] == ("logs", "--timestamps", isolation.gateway):
+            return subprocess.CompletedProcess(args, 0, gateway_log.encode(), b"")
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
+        isolation.stop()
+    out = capsys.readouterr().out
+    assert (
+        "isolated gateway tunnels: closed=2 idle=1 eof=1 error=0 longest_silent_s=60 "
+        "idle_at=ai-gateway.kilo.ai@+130s hosts=ai-gateway.kilo.ai:n=2/max_open_s=75/down_bytes=0 idle_limit=60s"
+    ) in out
+    assert calls.index(("logs", "--timestamps", isolation.gateway)) < calls.index(("rm", "-f", isolation.gateway))
+
+
+def test_the_host_breakdown_is_bounded_and_separates_delivery_from_empty_requests() -> None:
+    lines = "".join(_tunnel_line("eof", host=f"h{i}.example", silent=0) for i in range(12))
+    lines += (
+        "GATEWAY_TUNNEL_CLOSED host=ai-gateway.kilo.ai reason=eof open_s=40 silent_s=0 up_bytes=9 down_bytes=5000\n"
+    )
+    hosts = kilo_port.gateway_tunnel_summary(lines)["hosts"].split(",")
+    assert len(hosts) == 8 and "ai-gateway.kilo.ai" not in ",".join(hosts)  # bounded: later hosts are not listed
+    assert kilo_port.gateway_tunnel_summary(lines)["closed"] == "13"  # but every tunnel is still counted
+
+
+# Issue #718: a local rehearsal of the #705 free route through the real isolation left one assistant turn created at
+# +5 s with no part and no token for 235 s, while the provider tunnel stayed open. The executor's reader reported only
+# ``finish=none``; it now reports whether each turn ever delivered content and when the model last made progress.
+
+
+def _timed_store(home: Path, messages: list[tuple[str, int, dict]], parts: list[tuple[str, int, dict]]) -> None:
+    store_dir = home.joinpath(*kilo_port.KILO_SESSION_STORE[:-1])
+    store_dir.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(store_dir / kilo_port.KILO_SESSION_STORE[-1])
+    connection.execute("CREATE TABLE message (id text, session_id text, time_created integer, data text)")
+    connection.execute("CREATE TABLE part (id text, message_id text, session_id text, time_created integer, data text)")
+    for mid, created, data in messages:
+        connection.execute("INSERT INTO message VALUES (?, 's', ?, ?)", (mid, created, json.dumps(data)))
+    for index, (mid, created, data) in enumerate(parts):
+        connection.execute("INSERT INTO part VALUES (?, ?, 's', ?, ?)", (f"p{index}", mid, created, json.dumps(data)))
+    connection.commit()
+    connection.close()
+
+
+def test_a_turn_that_never_delivered_content_is_reported_with_the_last_progress(tmp_path: Path) -> None:
+    _timed_store(
+        tmp_path,
+        [
+            ("u", 0, {"role": "user"}),
+            ("a1", 5_000, {"role": "assistant", "finish": "tool-calls", "tokens": {"output": 40, "reasoning": 300}}),
+            ("a2", 95_000, {"role": "assistant", "tokens": {"output": 0, "reasoning": 0}}),
+        ],
+        [
+            ("u", 0, {"type": "text", "text": "TASK sk-SECRET"}),
+            ("a1", 50_000, {"type": "reasoning", "text": "thinking about sk-SECRET"}),
+            ("a1", 90_000, {"type": "tool", "state": {"status": "completed"}}),
+        ],
+    )
+    outcome = kilo_port.kilo_session_outcome(tmp_path)
+    assert {key: outcome[key] for key in kilo_port._NO_TIMING} == {
+        "turns": "2",
+        "turns_without_content": "1",  # a2: created at +95 s, nothing ever arrived
+        "first_content_max_s": "45",  # a1 waited 45 s for its first content
+        "last_progress_s": "90",
+        "tokens_out": "340",
+    }
+    assert "SECRET" not in json.dumps(outcome) and "thinking" not in json.dumps(outcome)
+
+
+@pytest.mark.parametrize(
+    "tokens",
+    [{"output": "9999"}, {"output": 1.5}, {"reasoning": "x"}, "nonsense"],
+)
+def test_non_integer_token_counts_never_leave_the_reader_as_text(tmp_path: Path, tokens: object) -> None:
+    _timed_store(tmp_path, [("a", 0, {"role": "assistant", "tokens": tokens})], [])
+    value = kilo_port.kilo_session_outcome(tmp_path)["tokens_out"]
+    assert value == "none" or value.isdigit()
+    assert value not in {"9999", "1.5"}
+
+
+def test_a_store_without_assistant_turns_reports_no_timing(tmp_path: Path) -> None:
+    _timed_store(tmp_path, [("u", 0, {"role": "user"})], [])
+    outcome = kilo_port.kilo_session_outcome(tmp_path)
+    assert {key: outcome[key] for key in kilo_port._NO_TIMING} == kilo_port._NO_TIMING
+
+
+def test_every_unreadable_outcome_keeps_the_same_closed_shape(tmp_path: Path) -> None:
+    assert set(kilo_port.kilo_session_outcome(tmp_path)) == set(kilo_port._NO_SESSION)

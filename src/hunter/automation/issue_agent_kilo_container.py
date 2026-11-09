@@ -19,6 +19,7 @@ import tempfile
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 from urllib.parse import urlunsplit
@@ -90,7 +91,58 @@ _SESSION_ERRORS: Final = frozenset(
     }
 )
 _FINISH_REASONS: Final = frozenset({"stop", "length", "tool-calls", "content-filter", "error", "other", "unknown"})
-_NO_SESSION: Final = {"error": "none", "status": "none", "retryable": "none", "finish": "none", "tool_errors": "0"}
+#: Issue #718: the per-turn timing outline, when the store has no assistant turn or no readable timing.
+_NO_TIMING: Final = {
+    "turns": "0",
+    "turns_without_content": "0",
+    "first_content_max_s": "none",
+    "last_progress_s": "none",
+    "tokens_out": "none",
+}
+_NO_SESSION: Final = {
+    "error": "none",
+    "status": "none",
+    "retryable": "none",
+    "finish": "none",
+    "tool_errors": "0",
+    **_NO_TIMING,
+}
+#: Kilo's assistant turns and their parts, timed by the store's own ``time_created`` milliseconds. Integers only.
+_TIMING_QUERY: Final = (
+    "SELECT count(*), sum(first IS NULL), max(first - created), max(last) - (SELECT min(time_created) FROM message),"
+    " sum(iif(json_type(data, '$.tokens.output') = 'integer', json_extract(data, '$.tokens.output'), 0)"
+    " + iif(json_type(data, '$.tokens.reasoning') = 'integer', json_extract(data, '$.tokens.reasoning'), 0))"
+    " FROM (SELECT m.time_created AS created, m.data AS data, min(p.time_created) AS first,"
+    " max(p.time_created) AS last FROM message m LEFT JOIN part p ON p.message_id = m.id"
+    " WHERE json_extract(m.data, '$.role') = 'assistant' GROUP BY m.id)"
+)
+
+
+def _session_timing(connection: sqlite3.Connection) -> dict[str, str]:
+    """Issue #718: whether the model's turns ever produced content, and when it last made progress.
+
+    A turn with no part is a request that never delivered anything Kilo recorded (the hosted #705 timeouts and a
+    local rehearsal of the same free route both left the budget unexplained). Only integer seconds and counts leave
+    this function, never a part or message; a store without the timing columns reads as ``none``.
+    """
+
+    def seconds(value: object) -> str:
+        return str(max(0, min(int(value) // 1000, 99999))) if type(value) is int else "none"
+
+    try:
+        row = connection.execute(_TIMING_QUERY).fetchone()
+    except sqlite3.Error:
+        return dict(_NO_TIMING)
+    if row is None or type(row[0]) is not int or row[0] == 0:
+        return dict(_NO_TIMING)
+    turns, empty, first_max, last, tokens = row
+    return {
+        "turns": str(min(turns, 999)),
+        "turns_without_content": str(min(empty, 999)) if type(empty) is int else "none",
+        "first_content_max_s": seconds(first_max),
+        "last_progress_s": seconds(last),
+        "tokens_out": str(max(0, min(tokens, 10**9))) if type(tokens) is int else "none",
+    }
 
 
 def _private_copy(source: Path, target: Path) -> bool:
@@ -155,6 +207,7 @@ def kilo_session_outcome(home: Path) -> dict[str, str]:
                     "SELECT count(*) FROM part WHERE json_extract(data, '$.type') = 'tool'"
                     " AND json_extract(data, '$.state.status') = 'error'"
                 ).fetchone()
+                timing = _session_timing(connection)
             finally:
                 connection.close()
     except FileNotFoundError:
@@ -162,7 +215,7 @@ def kilo_session_outcome(home: Path) -> dict[str, str]:
     except (OSError, sqlite3.Error, ValueError):
         return {**_NO_SESSION, "error": "UNREADABLE"}
     if row is None:
-        return {**_NO_SESSION, "tool_errors": str(min(int(tool_errors), 999))}
+        return {**_NO_SESSION, "tool_errors": str(min(int(tool_errors), 999)), **timing}
     name, status, retryable, finish = row
     return {
         "error": "none" if name is None else name if name in _SESSION_ERRORS else "OTHER",
@@ -170,6 +223,7 @@ def kilo_session_outcome(home: Path) -> dict[str, str]:
         "retryable": {1: "true", 0: "false"}.get(retryable, "none") if type(retryable) is int else "none",
         "finish": "none" if finish is None else finish if finish in _FINISH_REASONS else "OTHER",
         "tool_errors": str(min(int(tool_errors), 999)) if type(tool_errors) is int else "none",
+        **timing,
     }
 
 
@@ -262,10 +316,62 @@ def canary_refusal_evidence(
 _TRACE = re.compile(r"BROKER_EXECUTED: (\[[^\n]*?\]) EXIT: (-?\d+) TREE: ([0-9a-f]{64}) STDOUT_BYTES: (\d+)")
 
 
+#: ``docker logs --timestamps`` prefixes every line with Docker's own RFC 3339 receive time (Issue #718).
+_BROKER_STAMP = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z ")
+_BROKER_RECEIVED = re.compile(r"BROKER_RECEIVED: ")
+_BROKER_DENIED = re.compile(r"BROKER_DENIED: ([A-Za-z]{1,40})$")
+#: The only refusal types the broker raises (``real_broker_server.handle``); anything else is reported as OTHER.
+_BROKER_DENIAL_TYPES = frozenset(
+    {
+        "ShellDenied",
+        "BudgetExhausted",
+        "PermissionError",
+        "TimeoutExpired",
+        "ValueError",
+        "TypeError",
+        "UnicodeDecodeError",
+        "UnicodeEncodeError",
+        "OSError",
+        "FileNotFoundError",
+        "JSONDecodeError",
+    }
+)
+
+
+def _broker_stamp(line: str) -> tuple[float | None, str]:
+    match = _BROKER_STAMP.match(line)
+    if match is None:
+        return None, line
+    try:
+        whole = datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%S").replace(tzinfo=UTC).timestamp()
+    except ValueError:
+        return None, line
+    return whole + float("0." + (match.group(2) or "0")), line[match.end() :]
+
+
 def parse_broker_trace(log: str) -> list[dict[str, object]]:
-    """Closed-vocabulary execution trace from the broker log; never includes command output."""
+    """Closed-vocabulary execution trace from the broker log; never includes command output.
+
+    Issue #718: when the log carries Docker's timestamps, each command also reports ``at`` (whole seconds since
+    the broker's first line) and ``dur`` (whole seconds from its ``BROKER_RECEIVED`` line), so the time between
+    commands, which is the model's own turn time, is measurable. Both are ``None`` without timestamps.
+    """
     trace: list[dict[str, object]] = []
-    for match in _TRACE.finditer(log[:262144]):
+    origin: float | None = None
+    received: float | None = None
+    for line in log[:262144].splitlines():
+        when, body = _broker_stamp(line)
+        if when is not None and origin is None:
+            origin = when
+        if _BROKER_RECEIVED.match(body):
+            received = when
+            continue
+        if _BROKER_DENIED.match(body):
+            received = None  # a refused command never executed: its receive time belongs to no trace entry
+            continue
+        match = _TRACE.match(body)
+        if match is None:
+            continue
         try:
             argv = ast.literal_eval(match.group(1))
         except (ValueError, SyntaxError):
@@ -278,9 +384,99 @@ def parse_broker_trace(log: str) -> list[dict[str, object]]:
                     "exit": int(match.group(2)),
                     "tree": match.group(3),
                     "stdout_bytes": int(match.group(4)),
+                    "at": None if when is None or origin is None else int(when - origin),
+                    "dur": None if when is None or received is None else max(0, int(when - received)),
                 }
             )
+        received = None
     return trace
+
+
+def broker_session_summary(log: str, *, origin: float | None = None) -> dict[str, str]:
+    """Issue #718: the broker session's closed outline: refusals by type and when its last line was written.
+
+    A broker past its session deadline exits and every later agent command fails, so the time of its last line,
+    against the model's own wall clock, shows whether a model timeout was spent with or without tools. With
+    ``origin`` (the model start) that time is on the model's clock, else on the broker's first line.
+    """
+
+    first: float | None = None
+    last: float | None = None
+    denied: dict[str, int] = {}
+    for line in log[:262144].splitlines():
+        when, body = _broker_stamp(line)
+        if when is not None:
+            first = when if first is None else first
+            last = when
+        match = _BROKER_DENIED.match(body)
+        if match is not None:
+            kind = match.group(1) if match.group(1) in _BROKER_DENIAL_TYPES else "OTHER"
+            denied[kind] = min(denied.get(kind, 0) + 1, 999)
+    base = origin if origin is not None else first
+    return {
+        "denied": ",".join(f"{kind}:{count}" for kind, count in sorted(denied.items())) or "none",
+        "last_line_at": "none" if base is None or last is None else f"+{int(last - base)}s",
+    }
+
+
+#: Issue #718: the gateway's content-free tunnel close line (``model_egress_gateway.TUNNEL_CLOSED_MARKER``).
+_GATEWAY_TUNNEL = re.compile(
+    r"GATEWAY_TUNNEL_CLOSED host=([a-z0-9.-]{1,253}) reason=(idle|eof|error) open_s=(\d{1,7}) silent_s=(\d{1,7}) "
+    r"up_bytes=(\d{1,15}) down_bytes=(\d{1,15})$"
+)
+#: The gateway's idle cut (``model_egress_gateway.TUNNEL_IDLE_SECONDS``), reported beside the counts.
+GATEWAY_TUNNEL_IDLE_SECONDS: Final = 60
+_IDLE_REPORT_LIMIT = 16
+_HOST_REPORT_LIMIT = 8
+
+
+def gateway_tunnel_summary(log: str, *, origin: float | None = None) -> dict[str, str]:
+    """Issue #718: how every tunnel through this run's gateway ended, counts and times only.
+
+    A provider stream silent for longer than the gateway's idle limit is cut and Kilo re-sends the whole request, so
+    each ``idle`` closure on the provider host is model budget lost without any other trace; an idle closure of a
+    pooled connection with no request in flight (``models.dev``) is not. Per host, the tunnel count, the longest
+    open time and the bytes received separate a stream that delivered from repeated empty requests. Times are seconds from
+    ``origin`` (the model start) when given, else from the gateway's first line. A line counts only when it is the
+    whole line after an optional ``docker logs --timestamps`` stamp; no host outside the gateway's own fixed marker
+    grammar, and nothing a tunnel carried, is ever reported.
+    """
+
+    first: float | None = None
+    counts = {"idle": 0, "eof": 0, "error": 0}
+    longest_silent = 0
+    idle_at: list[str] = []
+    per_host: dict[str, list[int]] = {}  # host -> [tunnels, longest open seconds, bytes received]
+    for line in log[:262144].splitlines():
+        when, body = _broker_stamp(line)
+        if when is not None and first is None:
+            first = when
+        match = _GATEWAY_TUNNEL.fullmatch(body.strip())
+        if match is None:
+            continue
+        host, reason, silent = match.group(1), match.group(2), int(match.group(4))
+        counts[reason] += 1
+        if host in per_host or len(per_host) < _HOST_REPORT_LIMIT:
+            entry = per_host.setdefault(host, [0, 0, 0])
+            entry[0] += 1
+            entry[1] = max(entry[1], int(match.group(3)))
+            entry[2] = min(entry[2] + int(match.group(6)), 10**15)
+        longest_silent = max(longest_silent, silent)
+        if reason == "idle" and len(idle_at) < _IDLE_REPORT_LIMIT:
+            base = origin if origin is not None else first
+            at = "?" if when is None or base is None else f"+{int(when - base)}s"
+            idle_at.append(f"{host}@{at}")
+    return {
+        "closed": str(sum(counts.values())),
+        **{name: str(value) for name, value in counts.items()},
+        "longest_silent_s": str(longest_silent),
+        "idle_at": ",".join(idle_at) or "none",
+        "hosts": ",".join(
+            f"{host}:n={n}/max_open_s={longest}/down_bytes={down}"
+            for host, (n, longest, down) in sorted(per_host.items())
+        )
+        or "none",
+    }
 
 
 class KiloContainerIsolation:
@@ -299,6 +495,7 @@ class KiloContainerIsolation:
         self.home: Path | None = None
         self.started = False
         self.trace: list[dict[str, object]] = []
+        self.model_started_at: float | None = None
         #: ADR 0041 F2: the closed stderr category of the last isolated run (an untrusted hint, never content).
         self.last_stderr_category: str | None = None
         #: ADR 0041 F8: set only by ``arm_canary`` from the signed ``AUTHORIZED.fallback_canary`` flag.
@@ -598,7 +795,12 @@ class KiloContainerIsolation:
                 KILO_IMAGE,
                 *mapped[1:],
             ]
-            result = self._docker(*command, timeout=timeout, stdin=stdin)
+            self.model_started_at = time.time()
+            try:
+                result = self._docker(*command, timeout=timeout, stdin=stdin)
+            except subprocess.TimeoutExpired as expired:
+                self._timeout_diagnostic(expired)
+                raise
         # Bounded, content-free telemetry: do not log model text, task attachment, or secrets.
         output = result.stdout[:262144].lower()
         markers = {
@@ -641,6 +843,38 @@ class KiloContainerIsolation:
             flush=True,
         )
         return result.returncode
+
+    def _timeout_diagnostic(self, expired: subprocess.TimeoutExpired) -> None:
+        """Issue #718: what the agent was doing when the model budget ran out, in the existing closed vocabularies.
+
+        A timeout used to skip every diagnostic a non-zero exit prints, so run 42642658174 left no evidence of
+        whether its 720 s went to tool work or to provider retries. The agent container is stopped first so its
+        session store is quiescent, then the partial stderr is classified and outlined, and Kilo's own record of
+        its last turn is read. It is diagnostic only: the timeout still propagates unchanged, no category is stored
+        for a fallback or canary decision, and no text, command or message is ever printed.
+        """
+
+        try:
+            self._docker("rm", "-f", self.agent, timeout=15)
+        except (OSError, subprocess.TimeoutExpired, RoleRefused):
+            pass
+        stderr = expired.stderr if isinstance(expired.stderr, bytes) else b""
+        stdout = expired.output if isinstance(expired.output, bytes) else b""
+        print(
+            f"isolated Kilo timeout diagnostic: stdout_bytes={len(stdout)} stderr_bytes={len(stderr)} "
+            f"stderr_category={stderr_category(stderr[:65536])}",
+            flush=True,
+        )
+        print(
+            "isolated Kilo stderr structure: "
+            + " ".join(f"{name}={value}" for name, value in stderr_structure(stderr).items()),
+            flush=True,
+        )
+        print(
+            "isolated Kilo session outcome: "
+            + " ".join(f"{name}={value}" for name, value in self.session_outcome().items()),
+            flush=True,
+        )
 
     def session_outcome(self) -> dict[str, str]:
         """Kilo's closed record of its last turn, read after the agent container exited (Issue #577).
@@ -791,14 +1025,35 @@ class KiloContainerIsolation:
         if not self.started:
             return
         try:  # evidence of what the broker actually executed, read before the container is removed
-            logs = self._docker("logs", self.broker, timeout=15)
-            self.trace = parse_broker_trace((logs.stdout + logs.stderr).decode("utf-8", errors="replace"))
+            logs = self._docker("logs", "--timestamps", self.broker, timeout=15)
+            text = (logs.stdout + logs.stderr).decode("utf-8", errors="replace")
+            self.trace = parse_broker_trace(text)
             for entry in self.trace:
+                timing = "" if entry["at"] is None else f" at=+{entry['at']}s dur={entry['dur']}s"
                 print(
                     f"isolated broker trace: seq={entry['seq']} cmd={entry['cmd']!r} exit={entry['exit']} "
-                    f"tree={str(entry['tree'])[:12]} stdout_bytes={entry['stdout_bytes']}",
+                    f"tree={str(entry['tree'])[:12]} stdout_bytes={entry['stdout_bytes']}{timing}",
                     flush=True,
                 )
+            summary = broker_session_summary(text, origin=self.model_started_at)
+            print(
+                f"isolated broker session: executed={len(self.trace)} denied={summary['denied']} "
+                f"last_line_at={summary['last_line_at']} deadline={BROKER_DEADLINE_SECONDS}s",
+                flush=True,
+            )
+        except (OSError, subprocess.TimeoutExpired, RoleRefused):
+            pass
+        try:  # Issue #718: how each model tunnel ended, read before the gateway is removed
+            logs = self._docker("logs", "--timestamps", self.gateway, timeout=15)
+            tunnels = gateway_tunnel_summary(
+                (logs.stdout + logs.stderr).decode("utf-8", errors="replace"), origin=self.model_started_at
+            )
+            print(
+                "isolated gateway tunnels: "
+                + " ".join(f"{name}={value}" for name, value in tunnels.items())
+                + f" idle_limit={GATEWAY_TUNNEL_IDLE_SECONDS}s",
+                flush=True,
+            )
         except (OSError, subprocess.TimeoutExpired, RoleRefused):
             pass
         for args in (

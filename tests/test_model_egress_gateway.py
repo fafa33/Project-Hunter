@@ -97,3 +97,74 @@ def test_no_other_profile_gains_the_liveness_host() -> None:
     assert _gateway.KILO_LIVENESS_HOST not in _gateway.PROFILES["kilo-canary"][0]
     assert _gateway.KILO_LIVENESS_HOST not in _gateway.PROFILES["codex"][0]
     assert _gateway.PROFILES["kilo"][0] == _gateway.ALLOWED_HOSTS | {"kilo.ai"}
+
+
+# Issue #718: a provider stream silent for longer than the gateway's idle limit is cut, and Kilo 7.8.18 re-sends the
+# whole request with backoff (a local rehearsal against a silent-then-dropped stream: six full requests, then
+# ``Connection reset by server``). The cut used to leave no trace at all; each tunnel now reports how it ended.
+
+
+def _tunnel(silence: float, idle: float, capsys: pytest.CaptureFixture[str]) -> tuple[bytes, str]:
+    import socketserver
+    import threading
+    import time
+
+    upstream = socket.socket()
+    upstream.bind(("127.0.0.1", 0))
+    upstream.listen(1)
+
+    def answer() -> None:
+        connection, _ = upstream.accept()
+        with connection:
+            connection.recv(1024)
+            time.sleep(silence)
+            try:
+                connection.sendall(b"pong")
+            except OSError:
+                pass
+
+    threading.Thread(target=answer, daemon=True).start()
+    handler = type("H", (_gateway.Handler,), {"allowed": frozenset({"ai-gateway.kilo.ai"})})
+    address = [(socket.AF_INET, socket.SOCK_STREAM, 0, "", upstream.getsockname())]
+    with (
+        patch.object(_gateway, "public_addresses", lambda host: address),
+        patch.object(_gateway, "TUNNEL_IDLE_SECONDS", idle),
+        socketserver.ThreadingTCPServer(("127.0.0.1", 0), handler) as server,
+    ):
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        with socket.create_connection(server.server_address, timeout=10) as client:
+            client.sendall(b"CONNECT ai-gateway.kilo.ai:443 HTTP/1.1\r\n\r\n")
+            assert client.recv(1024).startswith(b"HTTP/1.1 200")
+            client.sendall(b"ping")
+            received = client.recv(1024)
+        deadline = time.monotonic() + 5
+        while "GATEWAY_TUNNEL_CLOSED" not in (out := capsys.readouterr().out) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        server.shutdown()
+    upstream.close()
+    return received, out
+
+
+def test_a_stream_silent_past_the_idle_limit_is_cut_and_reported_as_idle(capsys: pytest.CaptureFixture[str]) -> None:
+    received, out = _tunnel(silence=1.5, idle=0.5, capsys=capsys)
+    assert received == b""  # the client sees the tunnel closed, exactly as Kilo did
+    lines = [line for line in out.splitlines() if line.startswith("GATEWAY_TUNNEL_CLOSED")]
+    assert len(lines) == 1
+    assert lines[0].startswith("GATEWAY_TUNNEL_CLOSED host=ai-gateway.kilo.ai reason=idle open_s=0 silent_s=0 ")
+    assert lines[0].endswith(" up_bytes=4 down_bytes=0")
+
+
+def test_a_stream_that_answers_within_the_limit_is_relayed_and_closes_by_eof(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    received, out = _tunnel(silence=0.1, idle=5, capsys=capsys)
+    assert received == b"pong"
+    lines = [line for line in out.splitlines() if line.startswith("GATEWAY_TUNNEL_CLOSED")]
+    assert len(lines) == 1 and " reason=eof " in lines[0] and lines[0].endswith(" up_bytes=4 down_bytes=4")
+    assert "ping" not in out and "pong" not in out  # counts only, never a payload byte
+
+
+def test_the_production_idle_limit_is_the_one_the_host_reports() -> None:
+    from hunter.automation import issue_agent_kilo_container as kilo
+
+    assert _gateway.TUNNEL_IDLE_SECONDS == kilo.GATEWAY_TUNNEL_IDLE_SECONDS == 60
