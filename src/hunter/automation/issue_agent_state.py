@@ -1021,6 +1021,28 @@ def recovery_unstarted_on_ledger(item: AuthorizationView) -> bool:
     )
 
 
+#: Issue #718: the one executed-recovery failure that is retried on the same head. It spends the execution budget.
+RECOVERY_RETRYABLE_EXECUTION_FAILURE: Final = "EXECUTOR_RESULT_TIMEOUT"
+
+
+def recovery_timed_out_on_ledger(item: AuthorizationView) -> bool:
+    """A recovery whose started executor hit the model timeout before any result was bound (Issue #718).
+
+    It executed, so it always counts against the execution budget. Only this exact failure is retried on the same
+    head: every other executor, validation or publication failure of a recovery stays terminal.
+    """
+
+    failure = item.evidence.get(FAILED)
+    return (
+        item.state == FAILED
+        and failure is not None
+        and failure.get("code") == RECOVERY_RETRYABLE_EXECUTION_FAILURE
+        and failure.get("failed_from_state") == AUTHORIZED
+        and item.evidence[AUTHORIZED].get("preflight_recovery") is not None
+        and set(item.evidence) == {AUTHORIZED, FAILED}
+    )
+
+
 def preflight_recovery_budget_refusal(
     done: list[AuthorizationView], *, unstarted: Callable[[AuthorizationView], bool] = recovery_unstarted_on_ledger
 ) -> str | None:
@@ -1063,7 +1085,7 @@ def preflight_recovery_refusal(
         and failure.get("code") == PREFLIGHT_RECOVERY_TRIGGER
         and failure.get("failed_from_state") == PUBLISHED
     )
-    interrupted_recovery = recovery_unstarted_on_ledger(parent)
+    interrupted_recovery = recovery_unstarted_on_ledger(parent) or recovery_timed_out_on_ledger(parent)
     if parent.state != FAILED or not (original_preflight_failure or interrupted_recovery):
         return "the recovery parent did not fail its exact-head Pre-PR Preflight from PUBLISHED or an authorized recovery before execution"
     if parent.evidence[AUTHORIZED].get("remediation") is not None:

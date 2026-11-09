@@ -1118,11 +1118,14 @@ def eligible_preflight_recovery(
     parent = view.authorizations[view.claimed[-1]]
     failure = parent.evidence.get(state.FAILED)
     interrupted = state.recovery_unstarted_on_ledger(parent)
+    # Issue #718: a recovery whose executor timed out is retried on the same head; it spends the execution budget.
+    timed_out = state.recovery_timed_out_on_ledger(parent)
+    same_head = interrupted or timed_out
     if (
         parent.state != state.FAILED
         or failure is None
         or not (
-            interrupted
+            same_head
             or (
                 failure.get("code") == state.PREFLIGHT_RECOVERY_TRIGGER
                 and failure.get("failed_from_state") == state.PUBLISHED
@@ -1134,10 +1137,10 @@ def eligible_preflight_recovery(
     branch = str(parent.binding("execution_branch"))
     head = str(
         parent.evidence[state.AUTHORIZED]["preflight_recovery"]["bound_head_sha"]
-        if interrupted
+        if same_head
         else (parent.evidence.get(state.PUBLISHED) or {}).get("head_sha") or ""
     )
-    if interrupted and parent.binding("base_sha") != head:
+    if same_head and parent.binding("base_sha") != head:
         return None
     done = state.preflight_recoveries(view, branch)
     attempt = len(done) + 1
