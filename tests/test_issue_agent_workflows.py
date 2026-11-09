@@ -168,6 +168,15 @@ _STATUS_FUNCTION = re.compile(r"\b(?:always|cancelled|failure|success)\(\s*\)")
 _RUNS_AFTER_SKIP = re.compile(r"\balways\(\s*\)|!\s*cancelled\(\s*\)")
 
 
+_STRING_LITERAL = re.compile(r"'(?:[^']|'')*'")
+
+
+def _code(expression: object) -> str:
+    """The expression with its string literals blanked, so a quoted 'always()' is never read as a call."""
+
+    return _STRING_LITERAL.sub("''", str(expression or ""))
+
+
 def _needs(job: Mapping[str, Any]) -> list[str]:
     needs = job.get("needs") or []
     return [needs] if isinstance(needs, str) else [str(need) for need in needs]
@@ -185,11 +194,11 @@ def implicitly_skipped_dependents(workflow: Mapping[str, Any]) -> list[tuple[str
     jobs = workflow.get("jobs") or {}
     found: list[tuple[str, str]] = []
     for job_id, job in jobs.items():
-        if _STATUS_FUNCTION.search(str(job.get("if") or "")):
+        if _STATUS_FUNCTION.search(_code(job.get("if"))):
             continue
         for need in _needs(job):
             upstream = jobs.get(need) or {}
-            if _needs(upstream) and _RUNS_AFTER_SKIP.search(str(upstream.get("if") or "")):
+            if _needs(upstream) and _RUNS_AFTER_SKIP.search(_code(upstream.get("if"))):
                 found.append((str(job_id), need))
     return found
 
@@ -211,7 +220,9 @@ def _chain(dependent_if: str | None, *, upstream_if: str = "always() && needs.a.
         ("${{ !cancelled() && needs.b.result == 'success' }}", "always()", False),
         ("always() && needs.b.result == 'success'", "!cancelled()", False),
         (None, "github.event_name == 'issues'", False),  # the need is itself skipped with its ancestor
-        (None, "'always()' == 'x'", True),  # quoted text is still matched: conservative, never a silent skip
+        (None, "'always()' == 'x'", False),  # a quoted name is not a call: the need is skipped with its ancestor
+        ("needs.b.result == 'success' && 'always()' != ''", "always()", True),  # quoted name is not a call
+        ("needs.b.result == 'it''s always()' || always()", "always()", False),  # escaped quote, then a real call
     ],
 )
 def test_implicit_skip_guard_fixtures(dependent_if: str | None, upstream_if: str, flagged: bool) -> None:

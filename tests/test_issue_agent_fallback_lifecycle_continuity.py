@@ -64,14 +64,36 @@ def fallback_run(*, bound: bool, results: dict[str, str] | None = None) -> dict[
     return context
 
 
+def _ancestors(jobs: dict[str, Any], job: str) -> set[str]:
+    needs = jobs[job].get("needs") or []
+    direct = {needs} if isinstance(needs, str) else set(needs)
+    return direct.union(*(_ancestors(jobs, need) for need in direct))
+
+
 def runs(job: str, context: dict[str, str]) -> bool:
-    definition = yaml.safe_load(WORKFLOW.read_text())["jobs"][job]
-    if "if" not in definition:  # GitHub's implicit success(): every needed job succeeded
-        needs = definition.get("needs") or []
-        return all(
-            context.get(f"needs.{need}.result") == "success" for need in ([needs] if isinstance(needs, str) else needs)
-        )
+    jobs = yaml.safe_load(WORKFLOW.read_text())["jobs"]
+    definition = jobs[job]
+    if "if" not in definition:
+        # GitHub's implicit success() is evaluated over the whole dependency chain, not only the direct needs
+        # (PRH-131): a skipped ancestor skips the job even when its direct need ran under always() and succeeded.
+        return all(context.get(f"needs.{need}.result") == "success" for need in _ancestors(jobs, job))
     return evaluate(str(definition["if"]), context)
+
+
+def test_the_signed_remediation_dispatch_reaches_the_executor() -> None:
+    """PRH-131 (Issue #714): scope-admission is skipped on the dispatch, authorize succeeds, execute must run."""
+
+    context = {
+        "github.event_name": "workflow_dispatch",
+        "github.ref": "refs/heads/main",
+        "inputs.remediation_authorization": "signed",
+        "inputs.stage": "",
+        "needs.scope-admission.result": "skipped",
+        "needs.authorize.result": "success",
+    }
+    assert runs("execute", context)
+    assert not runs("execute", context | {"needs.authorize.result": "skipped"})
+    assert not runs("execute", context | {"needs.authorize.result": "failure"})
 
 
 def test_a_bound_fallback_result_continues_through_the_single_canonical_chain() -> None:
