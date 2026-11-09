@@ -808,3 +808,59 @@ def test_a_formatter_that_cannot_be_proven_stopped_refuses_collection(tmp_path: 
     isolation, _ = _hanging_formatter(tmp_path, **kw)
     with pytest.raises(kilo_port.RoleRefused, match="could not be stopped"):
         isolation.format_python(["pkg/m.py"])
+
+
+# --- Issue #718: a model timeout reports the same closed diagnostics a non-zero exit does ---------------------
+
+
+def test_a_model_timeout_reports_its_stderr_outline_and_session_outcome(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, workspace, home = _prepared(tmp_path)
+    _session_store(
+        home, {"role": "assistant", "error": {"name": "APIError", "data": {"statusCode": 429, "isRetryable": True}}}
+    )
+    calls: list[tuple[str, ...]] = []
+    reader = _container_fake(home, agent_exit=0, calls=calls)
+    partial = "\u2192 bash ls\n\u2190 bash ls\nError: 429 Too Many Requests SECRET-PROMPT-TEXT\n".encode()
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        if args[0] == "run" and kilo_port.KILO_IMAGE in args:
+            calls.append(args)
+            raise subprocess.TimeoutExpired("docker", timeout, output=b"partial model text", stderr=partial)
+        return reader(*args, timeout=timeout, stdin=stdin)
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run_agent(isolation, workspace)
+    out = capsys.readouterr().out
+    assert "isolated Kilo timeout diagnostic: stdout_bytes=18 stderr_bytes=" in out
+    assert "stderr_category=RATE_LIMIT" in out
+    assert "isolated Kilo stderr structure: " in out and "status=429" in out
+    assert "isolated Kilo session outcome: error=APIError status=429 retryable=true" in out
+    assert "SECRET-PROMPT-TEXT" not in out and "partial model text" not in out and "bash ls" not in out
+    # The agent is stopped before its store is read, and nothing feeds a fallback or canary decision.
+    agent_run = next(i for i, args in enumerate(calls) if args[0] == "run" and kilo_port.KILO_IMAGE in args)
+    removal = calls.index(("rm", "-f", isolation.agent))
+    assert agent_run < removal < next(i for i, args in enumerate(calls) if _is_reader(args))
+    assert isolation.last_stderr_category is None
+
+
+def test_a_timeout_without_any_output_or_store_is_still_reported_and_still_a_timeout(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    isolation, workspace, home = _prepared(tmp_path)
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        if args[0] == "run" and kilo_port.KILO_IMAGE in args:
+            raise subprocess.TimeoutExpired("docker", timeout)
+        if args[0] == "rm":
+            raise OSError("docker went away")  # a failed stop never masks the timeout
+        return _container_fake(home, agent_exit=0)(*args, timeout=timeout, stdin=stdin)
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run_agent(isolation, workspace)
+    out = capsys.readouterr().out
+    assert "isolated Kilo timeout diagnostic: stdout_bytes=0 stderr_bytes=0" in out
+    assert "isolated Kilo session outcome: error=ABSENT" in out

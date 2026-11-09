@@ -598,7 +598,11 @@ class KiloContainerIsolation:
                 KILO_IMAGE,
                 *mapped[1:],
             ]
-            result = self._docker(*command, timeout=timeout, stdin=stdin)
+            try:
+                result = self._docker(*command, timeout=timeout, stdin=stdin)
+            except subprocess.TimeoutExpired as expired:
+                self._timeout_diagnostic(expired)
+                raise
         # Bounded, content-free telemetry: do not log model text, task attachment, or secrets.
         output = result.stdout[:262144].lower()
         markers = {
@@ -641,6 +645,38 @@ class KiloContainerIsolation:
             flush=True,
         )
         return result.returncode
+
+    def _timeout_diagnostic(self, expired: subprocess.TimeoutExpired) -> None:
+        """Issue #718: what the agent was doing when the model budget ran out, in the existing closed vocabularies.
+
+        A timeout used to skip every diagnostic a non-zero exit prints, so run 42642658174 left no evidence of
+        whether its 720 s went to tool work or to provider retries. The agent container is stopped first so its
+        session store is quiescent, then the partial stderr is classified and outlined, and Kilo's own record of
+        its last turn is read. It is diagnostic only: the timeout still propagates unchanged, no category is stored
+        for a fallback or canary decision, and no text, command or message is ever printed.
+        """
+
+        try:
+            self._docker("rm", "-f", self.agent, timeout=15)
+        except (OSError, subprocess.TimeoutExpired, RoleRefused):
+            pass
+        stderr = expired.stderr if isinstance(expired.stderr, bytes) else b""
+        stdout = expired.output if isinstance(expired.output, bytes) else b""
+        print(
+            f"isolated Kilo timeout diagnostic: stdout_bytes={len(stdout)} stderr_bytes={len(stderr)} "
+            f"stderr_category={stderr_category(stderr[:65536])}",
+            flush=True,
+        )
+        print(
+            "isolated Kilo stderr structure: "
+            + " ".join(f"{name}={value}" for name, value in stderr_structure(stderr).items()),
+            flush=True,
+        )
+        print(
+            "isolated Kilo session outcome: "
+            + " ".join(f"{name}={value}" for name, value in self.session_outcome().items()),
+            flush=True,
+        )
 
     def session_outcome(self) -> dict[str, str]:
         """Kilo's closed record of its last turn, read after the agent container exited (Issue #577).
