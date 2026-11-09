@@ -138,6 +138,15 @@ MAX_REMEDIATION_FINDINGS = 16
 _FINDING_ID_RE = re.compile(r"[0-9a-f]{64}")
 _FINDING_PATH_RE = re.compile(r"[A-Za-z0-9._@+/-]{1,512}")
 _FINDING_CLAIM_RE = re.compile(r"[\x20-\x7e]{1,280}")
+#: ADR 0039 L9: a recovery from a verified deterministic Pre-PR Preflight test failure. The failing tests are
+#: pytest node ids observed in the authoritative job and the reason is one bounded printable line; both are
+#: public log facts, and both reach the model only inside the untrusted task text.
+MAX_PREFLIGHT_RECOVERY_ATTEMPTS: Final = 2
+MAX_PREFLIGHT_FAILED_TESTS: Final = 16
+#: The ledger's own test-id vocabulary (``issue_agent_state._TEST_ID``); a test pins the two equal.
+PREFLIGHT_TEST_ID_RE: Final = re.compile(r"tests/[A-Za-z0-9_./-]{1,200}\.py::[A-Za-z0-9_\[\]-]{1,200}")
+PREFLIGHT_REASON_RE: Final = re.compile(r"[\x20-\x7e]{1,200}")
+_ISSUE_BRANCH_RE = re.compile(r"issue-([1-9][0-9]{0,8})-([0-9a-f]{16})")
 
 #: ADR 0039 L6 (RD-3): the canonical governed registry files that only trusted plumbing may change. A model
 #: result that names either path in a remediation is refused before it reaches the safety boundary.
@@ -601,9 +610,80 @@ class IssueAgentAuthorization:
         return authorization
 
 
-def validate_remediation_group(remediation: object, *, issue_number: int) -> dict[str, Any]:
-    """The closed ADR 0039 L4 remediation group, bound to its Issue and its parent authorization's branch."""
+PREFLIGHT_RECOVERY_GROUP_FIELDS: Final = frozenset(
+    {"parent_authorization_id", "branch", "bound_head_sha", "attempt", "preflight_failure"}
+)
+_PREFLIGHT_FAILURE_FIELDS: Final = frozenset({"run_id", "run_attempt", "job_id", "failed_tests"})
 
+
+def is_preflight_recovery(remediation: object) -> bool:
+    """Whether a remediation group is the ADR 0039 L9 preflight-recovery shape (else the L4 finding shape)."""
+
+    return isinstance(remediation, Mapping) and "preflight_failure" in remediation
+
+
+def _validate_preflight_recovery_group(remediation: dict[str, Any], *, issue_number: int) -> dict[str, Any]:
+    """ADR 0039 L9: the closed preflight-recovery group.
+
+    Its branch is the *lineage* branch, which the parent authorization (the failed root, or the failed previous
+    recovery) already bound; ``authorize`` and the ledger check that equality, because a second attempt's parent
+    is not the authorization whose digest names the branch.
+    """
+
+    if set(remediation) != PREFLIGHT_RECOVERY_GROUP_FIELDS:
+        raise IssueAgentAuthorizationError("preflight recovery group schema mismatch")
+    parent = remediation["parent_authorization_id"]
+    prefix, separator, digest = parent.partition(":") if isinstance(parent, str) else ("", "", "")
+    if (
+        prefix != ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX
+        or not separator
+        or not _AUTHORIZATION_DIGEST_RE.fullmatch(digest)
+    ):
+        raise IssueAgentAuthorizationError("preflight recovery parent is not a canonical authorization identity")
+    branch = remediation["branch"]
+    match = _ISSUE_BRANCH_RE.fullmatch(branch) if isinstance(branch, str) else None
+    if match is None or int(match.group(1)) != issue_number:
+        raise IssueAgentAuthorizationError("preflight recovery branch is not an Issue-agent branch of this Issue")
+    attempt = remediation["attempt"]
+    if type(attempt) is not int or not 1 <= attempt <= MAX_PREFLIGHT_RECOVERY_ATTEMPTS:
+        raise IssueAgentAuthorizationError("preflight recovery attempt is outside the approved budget")
+    if not isinstance(remediation["bound_head_sha"], str) or not _COMMIT_SHA_RE.fullmatch(
+        remediation["bound_head_sha"]
+    ):
+        raise IssueAgentAuthorizationError("preflight recovery must bind the exact failed head")
+    failure = remediation["preflight_failure"]
+    if not isinstance(failure, dict) or set(failure) != _PREFLIGHT_FAILURE_FIELDS:
+        raise IssueAgentAuthorizationError("preflight failure evidence schema mismatch")
+    for name in ("run_id", "run_attempt", "job_id"):
+        if type(failure[name]) is not int or failure[name] < 1:
+            raise IssueAgentAuthorizationError(f"preflight failure {name} must be a positive integer")
+    tests = failure["failed_tests"]
+    if not isinstance(tests, list) or not 1 <= len(tests) <= MAX_PREFLIGHT_FAILED_TESTS:
+        raise IssueAgentAuthorizationError("a preflight recovery names one to sixteen failed tests")
+    for item in tests:
+        if (
+            not isinstance(item, dict)
+            or set(item) != {"test_id", "reason"}
+            or not isinstance(item["test_id"], str)
+            or not PREFLIGHT_TEST_ID_RE.fullmatch(item["test_id"])
+            or not isinstance(item["reason"], str)
+            or not PREFLIGHT_REASON_RE.fullmatch(item["reason"])
+        ):
+            raise IssueAgentAuthorizationError("preflight failed test is malformed")
+    identities = [item["test_id"] for item in tests]
+    if identities != sorted(set(identities)):
+        raise IssueAgentAuthorizationError("preflight failed tests must be unique and sorted by test id")
+    return remediation
+
+
+def validate_remediation_group(remediation: object, *, issue_number: int) -> dict[str, Any]:
+    """The closed ADR 0039 L4 remediation group, bound to its Issue and its parent authorization's branch.
+
+    ADR 0039 L9 admits exactly one other closed shape, the preflight-recovery group; the two never mix.
+    """
+
+    if isinstance(remediation, dict) and is_preflight_recovery(remediation):
+        return _validate_preflight_recovery_group(remediation, issue_number=issue_number)
     expected = {"parent_authorization_id", "pull_request_number", "branch", "bound_head_sha", "attempt", "findings"}
     if not isinstance(remediation, dict) or set(remediation) != expected:
         raise IssueAgentAuthorizationError("remediation group schema mismatch")
@@ -763,11 +843,20 @@ def issue_agent_task_text(authorization: IssueAgentAuthorization) -> str:
     }
     if isinstance(authorization, IssueAgentRemediationAuthorization):
         assert authorization.remediation is not None
-        # ADR 0039 L4: a bounded remediation task -- the exact findings, never a repository rediscovery.
-        text["remediation_of_pull_request"] = authorization.remediation["pull_request_number"]
-        text["review_findings"] = [
-            {"path": item["path"], "claim": item["claim"]} for item in authorization.remediation["findings"]
-        ]
+        if is_preflight_recovery(authorization.remediation):
+            # ADR 0039 L9: a bounded recovery task -- the exact failing tests of the exact failed head.
+            text["preflight_recovery_of_branch"] = authorization.remediation["branch"]
+            text["preflight_failed_head_sha"] = authorization.remediation["bound_head_sha"]
+            text["preflight_failed_tests"] = [
+                {"test_id": item["test_id"], "reason": item["reason"]}
+                for item in authorization.remediation["preflight_failure"]["failed_tests"]
+            ]
+        else:
+            # ADR 0039 L4: a bounded remediation task -- the exact findings, never a repository rediscovery.
+            text["remediation_of_pull_request"] = authorization.remediation["pull_request_number"]
+            text["review_findings"] = [
+                {"path": item["path"], "claim": item["claim"]} for item in authorization.remediation["findings"]
+            ]
     return _canonical_json(text)
 
 

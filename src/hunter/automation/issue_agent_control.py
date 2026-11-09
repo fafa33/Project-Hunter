@@ -39,6 +39,8 @@ from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PublicKey
 from hunter.automation import issue_agent_knowledge as knowledge
 from hunter.automation import issue_agent_remediation as remediation
 from hunter.automation import issue_agent_state as state
+from hunter.automation.issue_agent_execution import MAX_PREFLIGHT_FAILED_TESTS
+from hunter.automation.issue_agent_execution import PREFLIGHT_TEST_ID_RE as PREFLIGHT_TEST_ID_PATTERN
 from hunter.automation.issue_agent_roles import RECEIPT_SCHEMA_VERSION, WriterIdentity
 from hunter.automation.issue_agent_transport import (
     MAX_PLAINTEXT_BYTES,
@@ -482,6 +484,23 @@ class GitHubRest:
         except zipfile.BadZipFile:
             return Read("unknown")
 
+    def job_log(self, job_id: int) -> Read:
+        """ADR 0039 L9: one Actions job log as bounded text. The signed blob URL never receives the token."""
+
+        if type(job_id) is not int or job_id < 1:
+            raise ValueError("a job log is read by its exact positive job id")
+        status, body = self._request("GET", f"{self.API}/repos/{self.repository}/actions/jobs/{job_id}/logs")
+        if status in (404, 410):
+            return Read("absent")
+        if status in (302, 307):
+            location = body.decode()
+            if urllib.parse.urlsplit(location).scheme != "https":
+                return Read("unknown")
+            status, body = self._request("GET", location, auth=False)
+        if status != 200 or len(body) > MAX_ARTIFACT_BYTES:
+            return Read("unknown")
+        return Read("ok", body.decode("utf-8", errors="replace"))
+
     def dispatch(self, workflow_file: str, inputs: Mapping[str, str]) -> bool:
         body = json.dumps({"ref": "main", "inputs": dict(inputs)}).encode()
         url = f"{self.API}/repos/{self.repository}/actions/workflows/{workflow_file}/dispatches"
@@ -773,6 +792,17 @@ def _unsigned_commit_sha(payload: str) -> str:
     return hashlib.sha1(b"commit %d\0" % len(data) + data, usedforsecurity=False).hexdigest()
 
 
+def lineage_branch_unpublished(bound: Mapping[str, Any], remote_head: str | None) -> bool:
+    """ADR 0039 L4/L9: a remediation's branch already exists at its bound head before the fast-forward.
+
+    That head therefore means "not yet published" (a bounded publication resume), never a foreign head and
+    never ``REMOTE_BRANCH_CONFLICT``. The Issue path creates its branch, so it never has such a head.
+    """
+
+    lineage = bound.get("remediation") is not None or bound.get("preflight_recovery") is not None
+    return lineage and remote_head is not None and remote_head == bound.get("base_sha")
+
+
 def remote_head_conforms(
     commit: Mapping[str, Any], view: state.AuthorizationView, configuration: Configuration
 ) -> bool:
@@ -921,6 +951,179 @@ def dispatch_remediation(github: GitHub, candidate: RemediationCandidate, docume
     return github.dispatch(
         Path(LIFECYCLE_WORKFLOW).name,
         {REMEDIATION_DISPATCH_INPUT: base64.b64encode(document).decode("ascii")},
+    )
+
+
+# --- ADR 0039 L9: recovery from a verified deterministic Pre-PR Preflight test failure ---------------------
+
+#: The authoritative preflight job and the one step whose failure may be recovered automatically.
+PREFLIGHT_JOB_NAME: Final = "Hunter Pre-PR Preflight"
+PREFLIGHT_RECOVERABLE_STEP: Final = "Run shared deterministic preflight"
+#: Every gate the shared preflight runs before Pytest. A recovery needs each one to have printed PASS: a failure
+#: of any of them (security, artifact, prevention, lint, format, type) is never retried by a model.
+PREFLIGHT_REQUIRED_PASSES: Final = frozenset(
+    {"Architecture Index Guard", "Artifact Guard", "Defect Prevention Guard", "Ruff", "Black", "Mypy"}
+)
+_LOG_TIMESTAMP = re.compile(r"^\ufeff?[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z ?")
+_GATE_PASS = re.compile(r"\[Hunter Pre-PR\] PASS: (.+)")
+_GATE_FAIL = re.compile(r"\[Hunter Pre-PR\] FAIL: (.+)")
+_PYTEST_SUMMARY = re.compile(r"=+ (.+) in [0-9.]+s(?: \([0-9:]+\))? =+")
+_PYTEST_FAILED = re.compile(r"FAILED (\S+)(?: - (.*))?")
+_SUMMARY_FAILED = re.compile(r"(?:^|, )([0-9]+) failed(?:,|$)")
+_SUMMARY_ERRORS = re.compile(r"(?:^|, )[0-9]+ errors?(?:,|$)")
+
+
+@dataclass(frozen=True, slots=True)
+class PreflightFailureClass:
+    """The trusted classification of one failed authoritative preflight job (ADR 0039 L9).
+
+    ``kind`` is ``deterministic_test_failure`` (recoverable), ``gate_failure`` (a non-test gate: never retried),
+    or ``unknown`` (anything incomplete, ambiguous or inconsistent: fail closed). Only the first carries tests.
+    """
+
+    kind: Literal["deterministic_test_failure", "gate_failure", "unknown"]
+    failed_tests: tuple[Mapping[str, str], ...] = ()
+    reason: str = ""
+
+
+def _sanitized_reason(text: str | None) -> str:
+    printable = "".join(character for character in (text or "") if " " <= character <= "~").strip()
+    return (printable or "failed")[:200]
+
+
+def classify_preflight_log(text: str) -> PreflightFailureClass:
+    """ADR 0039 L9: classify a failed shared-preflight job log, failing closed on anything unexpected.
+
+    The log is untrusted data. It may only *narrow* what is recoverable: every gate marker the trusted preflight
+    prints must be present and consistent, the only failure must be Pytest's ordinary test-failure exit (1), the
+    pytest summary must report failures and no errors, and the parsed ``FAILED`` node ids must match the summary's
+    count exactly. The extracted node ids and one-line reasons are bounded public facts that reach the model only
+    as untrusted task text; they never choose a command, a path, a branch, a credential or a permission.
+    """
+
+    passes: set[str] = set()
+    fails: list[str] = []
+    summaries: list[str] = []
+    failed: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = _LOG_TIMESTAMP.sub("", raw, count=1).rstrip()
+        if (match := _GATE_PASS.fullmatch(line)) is not None:
+            passes.add(match.group(1))
+        elif (match := _GATE_FAIL.fullmatch(line)) is not None:
+            fails.append(match.group(1))
+        elif (match := _PYTEST_SUMMARY.fullmatch(line)) is not None:
+            summaries.append(match.group(1))
+        elif (match := _PYTEST_FAILED.fullmatch(line)) is not None:
+            identity = match.group(1)
+            if PREFLIGHT_TEST_ID_PATTERN.fullmatch(identity) is None:
+                return PreflightFailureClass("unknown", reason="a failed test id is outside the ledger vocabulary")
+            failed.setdefault(identity, _sanitized_reason(match.group(2)))
+    for item in fails:
+        gate = next((name for name in sorted(PREFLIGHT_REQUIRED_PASSES) if item.startswith(f"{name} ")), None)
+        if gate is not None:
+            return PreflightFailureClass("gate_failure", reason=f"non-test gate failed: {gate}")
+    if not PREFLIGHT_REQUIRED_PASSES <= passes:
+        return PreflightFailureClass("unknown", reason="the preflight gate sequence is incomplete")
+    if fails != ["Pytest exited 1"]:
+        return PreflightFailureClass("unknown", reason="the only failure is not an ordinary Pytest test failure")
+    if len(summaries) != 1:
+        return PreflightFailureClass("unknown", reason="the pytest summary is missing or duplicated")
+    summary = summaries[0]
+    counted = _SUMMARY_FAILED.search(summary)
+    if counted is None or _SUMMARY_ERRORS.search(summary) is not None:
+        return PreflightFailureClass("unknown", reason="the pytest summary reports errors or no failures")
+    if int(counted.group(1)) != len(failed) or not 1 <= len(failed) <= MAX_PREFLIGHT_FAILED_TESTS:
+        return PreflightFailureClass("unknown", reason="the failed tests do not match the pytest summary")
+    tests = tuple({"test_id": identity, "reason": failed[identity]} for identity in sorted(failed))
+    return PreflightFailureClass("deterministic_test_failure", tests, "deterministic test failure")
+
+
+@dataclass(frozen=True, slots=True)
+class PreflightRecoveryCandidate:
+    """One verified, recoverable failed candidate (ADR 0039 L9). Every field is a GitHub or ledger fact."""
+
+    branch: str
+    bound_head_sha: str
+    parent_authorization_id: str
+    attempt: int
+    run_id: int
+    run_attempt: int
+    job_id: int
+    failed_tests: tuple[Mapping[str, str], ...]
+
+
+def eligible_preflight_recovery(
+    github: GitHub,
+    configuration: Configuration,
+    view: state.LedgerView,
+    issue: int,
+    *,
+    job_log: Callable[[int], Read],
+) -> PreflightRecoveryCandidate | PreflightFailureClass | None:
+    """ADR 0039 L9: the one recoverable failed candidate of this Issue, its non-recoverable class, or ``None``.
+
+    ``None`` means there is nothing to recover (no failed candidate, a recovery already active or already claimed,
+    the branch moved, a pull request exists). A :class:`PreflightFailureClass` means a failed candidate exists but
+    is not automatically recoverable (non-test gate, ambiguous evidence, exhausted budget): it stays terminal and
+    the caller reports it once. Every condition is re-checked by ``authorize`` and by the ledger fold.
+    """
+
+    if view.active is not None or not view.claimed:
+        return None
+    parent = view.authorizations[view.claimed[-1]]
+    failure = parent.evidence.get(state.FAILED)
+    if (
+        parent.state != state.FAILED
+        or failure is None
+        or failure.get("code") != state.PREFLIGHT_RECOVERY_TRIGGER
+        or failure.get("failed_from_state") != state.PUBLISHED
+        or parent.evidence[state.AUTHORIZED].get("remediation") is not None
+    ):
+        return None
+    branch = str(parent.binding("execution_branch"))
+    head = str((parent.evidence.get(state.PUBLISHED) or {}).get("head_sha") or "")
+    attempt = len(state.preflight_recoveries(view, branch)) + 1
+    if attempt > state.MAX_PREFLIGHT_RECOVERY_ATTEMPTS:
+        return PreflightFailureClass("unknown", reason="RECOVERY_BUDGET_EXHAUSTED")
+    ref = definitive(github.get(f"/repos/{configuration.repository}/git/ref/heads/{branch}"))
+    current = (ref.get("object") or {}).get("sha") if isinstance(ref, Mapping) else None
+    if current != head or _SHA40.fullmatch(head) is None:
+        return None  # the branch moved or vanished: the failure no longer describes the candidate
+    if _pull_requests(github, configuration, branch):
+        return None  # a pull request exists: that is the finding-remediation path, never this one
+    conclusion, run_id = _preflight(github, configuration, head)
+    if conclusion != "failure" or run_id is None:
+        return PreflightFailureClass("unknown", reason="the authoritative preflight is not a definitive failure")
+    jobs = definitive(github.get(f"/repos/{configuration.repository}/actions/runs/{run_id}/attempts/1/jobs"))
+    listing = jobs.get("jobs") if isinstance(jobs, Mapping) else None
+    if not isinstance(listing, list):
+        raise FactsUnavailable("preflight jobs missing")
+    named = [job for job in listing if isinstance(job, Mapping) and job.get("name") == PREFLIGHT_JOB_NAME]
+    if len(named) != 1 or named[0].get("conclusion") != "failure" or type(named[0].get("id")) is not int:
+        return PreflightFailureClass("unknown", reason="the authoritative preflight job is not one failed job")
+    job = named[0]
+    failed_steps = [
+        str(step.get("name"))
+        for step in job.get("steps") or []
+        if isinstance(step, Mapping) and step.get("conclusion") == "failure"
+    ]
+    if failed_steps != [PREFLIGHT_RECOVERABLE_STEP]:
+        return PreflightFailureClass("unknown", reason="the failed preflight step is not the shared Pytest lane")
+    text = definitive(job_log(int(job["id"])))
+    if not isinstance(text, str):
+        raise FactsUnavailable("preflight job log missing")
+    classified = classify_preflight_log(text)
+    if classified.kind != "deterministic_test_failure":
+        return classified
+    return PreflightRecoveryCandidate(
+        branch=branch,
+        bound_head_sha=head,
+        parent_authorization_id=parent.authorization_id,
+        attempt=attempt,
+        run_id=run_id,
+        run_attempt=1,
+        job_id=int(job["id"]),
+        failed_tests=classified.failed_tests,
     )
 
 
@@ -1250,6 +1453,9 @@ def observe(
         fields["receipt"] = receipt if receipt is not None and _receipt_matches(view, receipt) else None
         observation["receipt_run_id"] = run_id if fields["receipt"] is not None else None
     if current == state.VALIDATED:
+        if lineage_branch_unpublished(view.evidence[state.AUTHORIZED], remote_head):
+            remote_head = None
+            fields["remote_branch_head"] = None
         if remote_head is not None:
             commit = definitive(github.get(f"/repos/{repository}/commits/{remote_head}"))
             fields["remote_head_conforms"] = isinstance(commit, Mapping) and remote_head_conforms(
@@ -1772,7 +1978,12 @@ __all__ = [
     "bind_resume",
     "owner_decision",
     "dispatch_remediation",
+    "eligible_preflight_recovery",
     "eligible_remediation",
+    "classify_preflight_log",
+    "lineage_branch_unpublished",
+    "PreflightFailureClass",
+    "PreflightRecoveryCandidate",
     "exact_head_proof",
     "resolve_thread",
     "review_threads",

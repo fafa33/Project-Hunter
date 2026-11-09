@@ -83,6 +83,35 @@ def remediation_group(
         raise RemediationRefused("NOT_ELIGIBLE", str(error)) from None
 
 
+def preflight_recovery_group(candidate: Any, *, issue_number: int) -> dict[str, Any]:
+    """ADR 0039 L9: the closed preflight-recovery group for one verified recoverable failed candidate.
+
+    Every value is a GitHub or ledger fact the control job verified; the failed tests are bounded public log
+    facts. The group is the only difference from an L4 remediation, so the same signature, claim, SPM/DPM
+    compile, isolated executor, credential-free validator and exact-lease publisher run unchanged.
+    """
+
+    group = {
+        "parent_authorization_id": candidate.parent_authorization_id,
+        "branch": candidate.branch,
+        "bound_head_sha": candidate.bound_head_sha,
+        "attempt": candidate.attempt,
+        "preflight_failure": {
+            "run_id": candidate.run_id,
+            "run_attempt": candidate.run_attempt,
+            "job_id": candidate.job_id,
+            "failed_tests": sorted(
+                ({"test_id": str(item["test_id"]), "reason": str(item["reason"])} for item in candidate.failed_tests),
+                key=lambda item: item["test_id"],
+            ),
+        },
+    }
+    try:
+        return validate_remediation_group(group, issue_number=issue_number)
+    except IssueAgentAuthorizationError as error:
+        raise RemediationRefused("NOT_ELIGIBLE", str(error)) from None
+
+
 def remediation_authorization(
     issue: Mapping[str, Any], *, repository: str, owner_login: str, remediation: Mapping[str, Any]
 ) -> IssueAgentRemediationAuthorization:
@@ -541,6 +570,7 @@ __all__ = [
     "proven_family",
     "proven_writes",
     "read_promotion_inputs",
+    "preflight_recovery_group",
     "remediation_authorization",
     "remediation_writes",
     "remediation_group",

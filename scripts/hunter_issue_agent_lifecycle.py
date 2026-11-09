@@ -743,6 +743,117 @@ def cmd_knowledge_context_check(configuration: control.Configuration, arguments:
     return 0
 
 
+def _notify_recovery_budget_exhausted(
+    github: control.GitHubRest, configuration: control.Configuration, view: state.LedgerView, issue: int
+) -> None:
+    """Notify the owner once for a terminal, ledger-proven recovery budget exhaustion.
+
+    The reconciler is serialized. On ambiguous reads/writes it fails closed and the next
+    reconciliation re-reads the existing comment before attempting a write. No log text,
+    model output, or secrets enter the comment.
+    """
+
+    if not view.claimed:
+        return
+    parent = view.authorizations[view.claimed[-1]]
+    failure = parent.evidence.get(state.FAILED)
+    if (
+        parent.state != state.FAILED
+        or not isinstance(failure, Mapping)
+        or failure.get("code") != state.PREFLIGHT_RECOVERY_TRIGGER
+        or failure.get("failed_from_state") != state.PUBLISHED
+    ):
+        return
+    branch = str(parent.binding("execution_branch"))
+    if len(state.preflight_recoveries(view, branch)) < state.MAX_PREFLIGHT_RECOVERY_ATTEMPTS:
+        return
+    head = str((parent.evidence.get(state.PUBLISHED) or {}).get("head_sha") or "")
+    marker = f"<!-- hunter-preflight-recovery-exhausted:{parent.authorization_id} -->"
+    base = f"/repos/{configuration.repository}/issues/{issue}/comments"
+    # Complete bounded pagination; an incomplete history is not permission to post.
+    for page in range(1, 101):
+        comments = control.definitive(github.get(f"{base}?per_page=100&page={page}"))
+        if not isinstance(comments, list):
+            raise control.FactsUnavailable("Issue comment history is not observable")
+        if any(
+            isinstance(item, Mapping)
+            and isinstance(item.get("user"), Mapping)
+            and item["user"].get("login") == "github-actions[bot]"
+            and marker in str(item.get("body", ""))
+            for item in comments
+        ):
+            return
+        if len(comments) < 100:
+            break
+    else:
+        raise control.FactsUnavailable("Issue comment history exceeds notification inspection bound")
+    body = (
+        f"{marker}\n"
+        "Hunter autonomous Pre-PR recovery is BLOCKED: the approved repair budget "
+        f"({state.MAX_PREFLIGHT_RECOVERY_ATTEMPTS} attempts) is exhausted.\n\n"
+        f"Issue: #{issue}\nBranch: `{branch}`\nExact failed HEAD: `{head}`\n"
+        f"Last failed authorization: `{parent.authorization_id}`\n"
+        "Owner action: inspect the signed Issue lifecycle and authoritative Preflight evidence; "
+        "approve a new bounded remediation scope only after root-cause review. "
+        "No further automatic recovery or PR creation is authorized by this notice."
+    )
+    posted = control.definitive(github.reply(base, {"body": body}))
+    if not isinstance(posted, Mapping) or not isinstance(posted.get("id"), int):
+        raise control.FactsUnavailable("Issue notification publication was not confirmed")
+
+
+def _recover_failed_preflight(
+    configuration: control.Configuration,
+    github: control.GitHubRest,
+    ledger_view: state.LedgerView,
+    issue: int,
+    signing_key: Ed25519PrivateKey,
+) -> bool:
+    """ADR 0039 L9: mint and dispatch one bounded recovery of a verified failed exact-head Pre-PR Preflight.
+
+    The decision is durable without a second store: the authorization identity is a pure function of the live
+    Issue and the verified failure, ``authorize`` claims it by CAS on the Issue ledger, and once claimed the
+    ledger itself (an active authorization, then the recovery's own terminal record) makes every later pass a
+    no-op. A lost dispatch is simply re-detected; a duplicate dispatch loses the claim. Nothing here reads Issue
+    text for scope or routing, and a non-recoverable failure stays terminal and is only reported.
+    """
+
+    found = control.eligible_preflight_recovery(github, configuration, ledger_view, issue, job_log=github.job_log)
+    if found is None:
+        print(f"issue {issue}: no eligible remediation")
+        return False
+    if isinstance(found, control.PreflightFailureClass):
+        if found.reason == "RECOVERY_BUDGET_EXHAUSTED":
+            _notify_recovery_budget_exhausted(github, configuration, ledger_view, issue)
+        print(f"issue {issue}: failed candidate stays terminal (BLOCKED): {found.kind}: {found.reason}")
+        return False
+    live = control.definitive(github.get(f"/repos/{configuration.repository}/issues/{issue}"))
+    if not isinstance(live, Mapping):
+        raise control.FactsUnavailable("the governing Issue is not observable")
+    parent = ledger_view.authorizations[found.parent_authorization_id]
+    try:
+        group = remediation.preflight_recovery_group(found, issue_number=issue)
+        authorization = remediation.remediation_authorization(
+            live, repository=configuration.repository, owner_login=configuration.owner_login, remediation=group
+        )
+        scope = remediation.remediation_scope(authorization, parent.evidence[state.AUTHORIZED]["task_scope"])
+        document = remediation.sign_remediation(authorization, scope, signing_key=signing_key).to_json()
+    except remediation.RemediationRefused as refusal:
+        print(f"issue {issue}: refused {refusal}")
+        return False
+    if not github.dispatch(
+        Path(control.LIFECYCLE_WORKFLOW).name,
+        {control.REMEDIATION_DISPATCH_INPUT: base64.b64encode(document.encode()).decode("ascii")},
+    ):
+        raise control.FactsUnavailable("the preflight recovery dispatch was not accepted")
+    print(
+        f"issue {issue}: dispatched preflight recovery {authorization.authorization_id} attempt {found.attempt} "
+        f"on {found.branch} at {found.bound_head_sha[:12]} for run {found.run_id} job {found.job_id} "
+        f"({len(found.failed_tests)} failed test(s))"
+    )
+    return True
+
+
 def cmd_remediate(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     """ADR 0039 L4 (RD-4/RD-5): detect an eligible lifecycle PR and dispatch one bounded remediation.
 
@@ -773,7 +884,8 @@ def cmd_remediate(configuration: control.Configuration, arguments: argparse.Name
                 trusted_reviewers=collector._trusted_reviewer_logins(),
             )
             if candidate is None:
-                print(f"issue {issue}: no eligible remediation")
+                if _recover_failed_preflight(configuration, github, ledger_view, issue, signing_key):
+                    dispatched += 1
                 continue
             live = control.definitive(github.get(f"/repos/{configuration.repository}/issues/{issue}"))
             if not isinstance(live, Mapping):
