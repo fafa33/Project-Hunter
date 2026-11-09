@@ -12,7 +12,9 @@ AUTHORIZED -> RESULT_BOUND -> VALIDATED -> PUBLISHED -> COMPLETED
 
 - `PUBLISHED` is the trusted publication ACK. `COMPLETED` follows only after the single Draft PR is
   observed.
-- `FAILED` is the explicit terminal failure.
+- `FAILED` is the explicit terminal failure. It is terminal for its own authorization: a
+  `FAILED(CANDIDATE_PREFLIGHT_FAILED)` from `PUBLISHED` may be followed by a new, budgeted preflight-recovery
+  authorization on the same branch (ADR 0039 L9, section *Preflight recovery* below).
 - A lost ACK reconciles from durable identity. It never reruns the model, and it never creates a second
   branch or PR.
 
@@ -305,8 +307,21 @@ From `FALLBACK_AUTHORIZED`:
 | Duplicate / out-of-order replay | list-by-head before create, then adopt; per-Issue concurrency (`queue: max`); GitHub refuses a second open PR for the same head and base, and that refusal is adopted; a Pre-PR run for an older head does not match `head_sha` and is ignored |
 | Timeout | `deadline_completed_at` → TF `CANDIDATE_PREFLIGHT_TIMEOUT` |
 | GitHub outage | no-op until definitive |
-| Pre-PR failed | conclusion other than success for `head_sha` → TF `CANDIDATE_PREFLIGHT_FAILED`; the branch is kept and no PR is created |
+| Pre-PR failed | conclusion other than success for `head_sha` → TF `CANDIDATE_PREFLIGHT_FAILED`; the branch is kept and no PR is created; a verified deterministic test failure may then be recovered on the same branch (*Preflight recovery* below) |
 | Terminal / recovery | COMPLETED is absorbing. Side effects (best effort, non-authoritative): clear the active pointer in the same commit; status comment; label removal; delete transport artifacts. New claims stay refused while the PR is open. |
+
+### Preflight recovery (ADR 0039 L9, Issue #706)
+
+| Aspect | Rule |
+|---|---|
+| Actor | reconcile `remediate` job (control). It mints a K_AUTH-signed remediation authorization of the closed preflight-recovery shape and dispatches the unchanged trigger workflow |
+| Eligible | the Issue's newest authorization is `FAILED(CANDIDATE_PREFLIGHT_FAILED)` from `PUBLISHED`, and is not a finding remediation; the branch is still at its PUBLISHED `head_sha`; no open PR; the Issue is open and labelled; the first-attempt `push` Pre-PR run at that head concluded `failure` with only the step `Run shared deterministic preflight` failed, every non-test gate `PASS`, only `FAIL: Pytest exited 1`, and failed node ids matching the pytest summary |
+| Not eligible (stays terminal) | non-test gate failure (never retried); infrastructure step, cancellation, timeout; inconsistent or incomplete log; indefinite read; budget exhausted (`RECOVERY_BUDGET_EXHAUSTED`) |
+| Bound evidence | AUTHORIZED `preflight_recovery` = `{parent_authorization_id, bound_head_sha, attempt, preflight_run_id, preflight_run_attempt, preflight_job_id, failed_test_ids}`; `execution_branch` = the parent's; `base_sha` = `bound_head_sha` |
+| CAS / idempotency key | the authorization identity is a pure function of the live Issue claims and the failure facts; the AUTHORIZED claim is the usual CAS; `authorize` and the ledger fold apply one rule (`preflight_recovery_refusal`): the parent is the newest authorization on its branch, it is not yet recovered, and `attempt` = recoveries on that branch + 1 ≤ 2 |
+| Duplicate / concurrent delivery | a second claim is refused while one is active; after it the parent is no longer the newest on its branch, so a replay of the same failure is refused |
+| Publication | exact-lease fast-forward from `bound_head_sha` (L7); refused while an Issue-Agent PR is open; before it, a branch at `bound_head_sha` is "not yet published" (publication resume), never `REMOTE_BRANCH_CONFLICT` |
+| Terminal / recovery | the recovery is an ordinary authorization: T5 `COMPLETED` (one Draft PR) or `CANDIDATE_PREFLIGHT_FAILED` again, after which the budget decides; exhausted → the last FAILED record is the durable BLOCKED state for an owner decision |
 
 ### TF: any non-terminal → FAILED
 

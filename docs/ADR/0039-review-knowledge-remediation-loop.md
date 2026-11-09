@@ -2,7 +2,8 @@
 
 ## Status
 
-**Accepted** (2026-10-04, owner decisions RD-1…RD-6 on Issue #560). This is a binding amendment of:
+**Accepted** (2026-10-04, owner decisions RD-1…RD-6 on Issue #560). **Amended** 2026-11-09 by L9 (owner decisions
+D1–D3, Issue #706). This is a binding amendment of:
 
 - ADR 0037 D6 (publication becomes create-only **or fast-forward from the bound head** for a remediation);
 - ADR 0037 D9/D1, which add a knowledge ledger and a remediation authorization next to the Issue ledger;
@@ -176,6 +177,63 @@ unresolved threads.
 Every transition is a CAS append keyed as in L2. A crash or lost acknowledgement is resolved by read-back, and a
 duplicate dispatch loses the CAS. Malformed, ambiguous or provenance-mismatched input fails closed with no write.
 Everything stays inert until S6 (`MISSING_CONFIGURATION`).
+
+### L9. Recovery from a verified failed exact-head Pre-PR Preflight (owner decisions D1–D3, Issue #706)
+
+**Amendment, accepted 2026-11-09.** Before this amendment a candidate whose exact-head Pre-PR Preflight failed
+went `PUBLISHED → FAILED(CANDIDATE_PREFLIGHT_FAILED)` and stayed stranded: L4 only remediates a reviewer finding
+on an open PR of a `COMPLETED` authorization. L9 adds exactly one more closed authorization shape to L4. It adds no
+new lifecycle, workflow, ledger, writer or orchestrator.
+
+- **Trigger and eligibility.** The scheduled reconcile `remediate` job admits an Issue when **all** of these hold:
+  - its newest authorization is `FAILED` with code `CANDIDATE_PREFLIGHT_FAILED`, written from `PUBLISHED`, and it
+    is not a finding remediation;
+  - its lineage branch is still exactly at the head that authorization published;
+  - no pull request is open for that branch;
+  - the Issue is still open and carries `hunter-agent-execute` (standing consent, as in L4).
+- **Trusted classification.** Only a *deterministic test failure* is recoverable. All of these must hold:
+  - the authoritative run is the first-attempt `push` run of `hunter-pre-pr-preflight.yml` at the exact failed
+    head, the same selection the lifecycle uses for T5, and it concluded `failure`;
+  - exactly one job, `Hunter Pre-PR Preflight`, failed, with exactly one failed step,
+    `Run shared deterministic preflight`;
+  - the job log shows `PASS` for Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black
+    and Mypy, and its only `FAIL` is `Pytest exited 1`;
+  - the pytest summary reports failures and no errors, and its count equals the parsed `FAILED` node ids (one to
+    sixteen, in the ledger's test-id vocabulary).
+
+  Everything else stays terminal: a non-test gate (never retried), an infrastructure step, a cancellation or
+  timeout, an inconsistent or incomplete log, or an indefinite read. The log is untrusted. It can only narrow what
+  is recoverable, and the extracted node ids and one-line printable reasons reach the model only as untrusted
+  task text.
+- **Authorization.** The control job signs, with K_AUTH, a remediation authorization whose group is the closed
+  preflight-recovery shape. It binds:
+  - the parent authorization and the lineage branch;
+  - the exact failed head;
+  - the preflight run id, run attempt and job id;
+  - the failed tests;
+  - the attempt number.
+
+  Its identity is a pure function of those facts and the live Issue claims. `authorize` re-applies the eligibility
+  rule against the ledger under CAS and refuses while any authorization is active or a pull request is open.
+  The AUTHORIZED evidence carries a `preflight_recovery` group, never mixed with `remediation`. The ledger fold
+  applies the identical rule on every read.
+- **Budget.** At most **2** recoveries per lineage branch. Attempt *n + 1* names attempt *n*'s failed
+  authorization as its parent, so the lineage stays on the same branch. Once the budget is exhausted, the last
+  `FAILED(CANDIDATE_PREFLIGHT_FAILED)` record is the durable, evidence-backed BLOCKED state. The reconcile log
+  reports `RECOVERY_BUDGET_EXHAUSTED`, and the owner decides.
+- **Execution, validation and publication.**
+  - **Unchanged:** the SPM/DPM compile (the parent's TaskScope rebased onto the failed head, never wider), the
+    isolated executor on the lineage branch at the exact bound head (`PR_HEAD_MOVED` otherwise), and the
+    credential-free validator.
+  - **No proof group:** a recovery carries no finding proof and promotes nothing.
+  - **Publication:** the publisher refuses while an Issue-Agent pull request is open. Otherwise it fast-forwards
+    with `--force-with-lease=<branch>:<failed head>` (L7). A moved head is `REMOTE_BRANCH_CONFLICT`, and nothing
+    is ever force-pushed.
+  - **Observer:** before the fast-forward, a lineage branch at its bound head means "not yet published" (a
+    bounded publication resume), never a conflict.
+- **Completion.** The new head runs the ordinary exact-head Pre-PR Preflight. Success lets the unchanged
+  Candidate PR workflow open exactly one Draft PR and record `COMPLETED` (T5). Failure records
+  `CANDIDATE_PREFLIGHT_FAILED` again and the budget decides. Nothing merges automatically.
 
 ## Consequences
 

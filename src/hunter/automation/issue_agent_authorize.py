@@ -50,6 +50,7 @@ from hunter.automation.issue_agent_execution import (
     build_production_source_handling_resolver,
     compose_governed_compilation,
     derive_execution_target,
+    is_preflight_recovery,
     issue_agent_intake_reference,
     issue_agent_task_request,
     verify_signed_authorization,
@@ -329,7 +330,21 @@ def prepare(
     if view.active is not None:
         raise AuthorizeRefused("ISSUE_EXECUTION_ACTIVE", "another authorization for this Issue is active")
     remediation = authorization.remediation if isinstance(authorization, IssueAgentRemediationAuthorization) else None
-    if remediation is not None:
+    if remediation is not None and is_preflight_recovery(remediation):
+        # ADR 0039 L9: the parent is this Issue's authorization that failed exactly CANDIDATE_PREFLIGHT_FAILED from
+        # PUBLISHED at the bound head, on the same lineage branch, and the approved attempt budget still holds.
+        refusal = state.preflight_recovery_refusal(
+            view,
+            parent_authorization_id=remediation["parent_authorization_id"],
+            branch=target.branch,
+            bound_head_sha=remediation["bound_head_sha"],
+            attempt=remediation["attempt"],
+        )
+        if refusal is not None:
+            raise AuthorizeRefused("NOT_ELIGIBLE", refusal)
+        if _definitive(lambda: dependencies.open_issue_agent_pull_request(issue), "ISSUE_HAS_ACTIVE_DRAFT_PR"):
+            raise AuthorizeRefused("ISSUE_HAS_ACTIVE_DRAFT_PR", "an Issue-Agent pull request is open for this Issue")
+    elif remediation is not None:
         parent = view.authorizations.get(remediation["parent_authorization_id"])
         # ADR 0039 L4: the open PR *is* the remediation's target, so ISSUE_HAS_ACTIVE_DRAFT_PR does not apply;
         # the parent must be this Issue's completed authorization on exactly that branch.
@@ -539,7 +554,18 @@ def prepare(
             "reconstruction_reason": "NO_CONFIDENTIAL_DURABLE_STORE",
         },
     }
-    if remediation is not None:
+    if remediation is not None and is_preflight_recovery(remediation):
+        failure = remediation["preflight_failure"]
+        unsigned_evidence["preflight_recovery"] = {
+            "parent_authorization_id": remediation["parent_authorization_id"],
+            "bound_head_sha": remediation["bound_head_sha"],
+            "attempt": remediation["attempt"],
+            "preflight_run_id": failure["run_id"],
+            "preflight_run_attempt": failure["run_attempt"],
+            "preflight_job_id": failure["job_id"],
+            "failed_test_ids": [item["test_id"] for item in failure["failed_tests"]],
+        }
+    elif remediation is not None:
         unsigned_evidence["remediation"] = {
             "parent_authorization_id": remediation["parent_authorization_id"],
             "pull_request_number": remediation["pull_request_number"],

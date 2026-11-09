@@ -1122,13 +1122,14 @@ def run_executor(
         arm()
 
     workspace, git_dir, home = workroot / "workspace", workroot / "trusted.git", workroot / "home"
-    # ADR 0039 L4: a remediation executes on its parent PR branch at the exact bound head, not on main.
+    # ADR 0039 L4/L9: a remediation or a preflight recovery executes on its lineage branch at the exact bound
+    # head, not on main.
     materialize_base(
         workspace,
         git_dir,
         remote=config.remote,
         base_sha=bound["base_sha"],
-        remediation_branch=bound["execution_branch"] if bound.get("remediation") is not None else None,
+        remediation_branch=bound["execution_branch"] if _runs_on_lineage_branch(bound) else None,
     )
     # The fallback attestation already created this private home; the primary path has not.
     home.mkdir(mode=0o700, exist_ok=True)
@@ -1305,6 +1306,19 @@ class RemediationPort:
 
     red_green: Callable[..., Mapping[str, Any]] = core.red_green_regression_proof
     promote: Callable[..., Mapping[str, bytes]] | None = None
+
+
+def _runs_on_lineage_branch(bound: Mapping[str, Any]) -> bool:
+    """ADR 0039 L4/L9: whether this authorization continues an existing branch instead of creating one."""
+
+    return bound.get("remediation") is not None or bound.get("preflight_recovery") is not None
+
+
+def _preflight_recovery_group(view: state.AuthorizationView) -> dict[str, Any] | None:
+    """The AUTHORIZED preflight-recovery group of this authorization (ADR 0039 L9), or ``None``."""
+
+    group = view.evidence[state.AUTHORIZED].get("preflight_recovery")
+    return None if group is None else dict(group)
 
 
 def _remediation_group(view: state.AuthorizationView) -> dict[str, Any] | None:
@@ -1567,12 +1581,34 @@ def run_publisher(
     if (issue_gate.title_sha256, issue_gate.body_sha256) != (claims["title_sha256"], claims["body_sha256"]):
         raise RoleRefused("ISSUE_CHANGED_AFTER_AUTHORIZATION", "the Issue changed after authorization")
     group = _remediation_group(view)
+    recovery = _preflight_recovery_group(view)
     if group is None and open_issue_agent_pull_request:
         raise RoleRefused("PUBLICATION_UNAVAILABLE", "another Issue-Agent pull request is open for this Issue")
     _, validated = _open_validated(view, result_envelope, result_key, repository)
     validation = view.evidence[state.VALIDATED]
     if validated.result_sha256 != validation["result_sha256"]:
         raise RoleRefused("TRANSPORT_INTEGRITY_FAILED", "the result is not the validated result")
+    if recovery is not None:
+        # ADR 0039 L9: the same exact-lease fast-forward from the failed head; a recovery promotes nothing, so the
+        # validated tree is exactly the result's tree and the receipt carries no proof group.
+        if validated.remediation is not None or validation.get("remediation") is not None:
+            raise RoleRefused("PUBLICATION_UNAVAILABLE", "a preflight recovery carries no finding proof")
+        try:
+            return core.publish_bound_fast_forward(
+                trusted_repo,
+                validated=validated,
+                identity=commit_identity(view, writer, validated.result_sha256),
+                expected_unsigned_commit_sha=validation["unsigned_commit_sha"],
+                expected_tree_sha=validation["tree_sha"],
+                lease_sha=recovery["bound_head_sha"],
+                signing_key=signing_key,
+                push_url=push_url,
+                push_config=push_config,
+            )
+        except (core.PublicationConflictError, core.PublicationRejectedError) as error:
+            raise RoleRefused(error.failure_code, str(error)) from None
+        except core.ReplacementExecutorError:
+            raise RoleRefused("PUBLICATION_UNAVAILABLE", "publication failed before any write") from None
     if group is not None:
         validated = _rederive_promotion(
             validated,

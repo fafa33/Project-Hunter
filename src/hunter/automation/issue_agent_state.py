@@ -589,6 +589,18 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
             "fallback": _object({"execution_id": SHA64, "handoff_artifact": _ARTIFACT}),
             # ADR 0041 F8: whether the owner armed the single-use canary before the authorizing label event.
             "fallback_canary": _bool,
+            # ADR 0039 L9: present only on a recovery from the parent's verified failed exact-head Pre-PR Preflight.
+            "preflight_recovery": _object(
+                {
+                    "parent_authorization_id": AUTHORIZATION_ID,
+                    "bound_head_sha": SHA40,
+                    "attempt": _int(1),
+                    "preflight_run_id": POSITIVE,
+                    "preflight_run_attempt": POSITIVE,
+                    "preflight_job_id": POSITIVE,
+                    "failed_test_ids": _list(_pattern(_TEST_ID), maximum=16),
+                }
+            ),
             # ADR 0039 L4: present only on a finding-driven remediation of the parent's open PR.
             "remediation": _object(
                 {
@@ -968,11 +980,94 @@ def empty_view(repository_id: int, issue_number: int) -> LedgerView:
     return LedgerView(repository_id, issue_number, {}, [], None, None, 0)
 
 
+#: ADR 0039 L9 (owner decision D1, 2026-11-09): automated recovery attempts per failed candidate lineage.
+MAX_PREFLIGHT_RECOVERY_ATTEMPTS: Final = 2
+#: The one terminal failure an automated recovery may start from: a deterministic exact-head Pre-PR failure.
+PREFLIGHT_RECOVERY_TRIGGER: Final = "CANDIDATE_PREFLIGHT_FAILED"
+
+
+def preflight_recoveries(view: LedgerView, branch: str) -> list[AuthorizationView]:
+    """Every preflight recovery already claimed on one lineage branch, in claim order."""
+
+    return [
+        view.authorizations[identity]
+        for identity in view.claimed
+        if view.authorizations[identity].evidence[AUTHORIZED].get("preflight_recovery") is not None
+        and view.authorizations[identity].binding("execution_branch") == branch
+    ]
+
+
+def preflight_recovery_refusal(
+    view: LedgerView, *, parent_authorization_id: str, branch: str, bound_head_sha: str, attempt: int
+) -> str | None:
+    """ADR 0039 L9: why a preflight recovery may not be claimed now, or ``None`` when it may.
+
+    The single rule both ``authorize`` (before the claim) and the ledger fold (on every read) apply, so a recovery
+    the controller could mint but the ledger would reject cannot exist. The parent must be the newest
+    authorization on its lineage branch; it must have failed exactly ``CANDIDATE_PREFLIGHT_FAILED`` from
+    ``PUBLISHED``; the bound head must be the head it published; it must not be a finding remediation; it must not
+    already have a recovery; and the attempt must be the next one inside the approved budget.
+    """
+
+    parent = view.authorizations.get(parent_authorization_id)
+    if parent is None:
+        return "the recovery parent is not an authorization of this Issue"
+    if parent.binding("execution_branch") != branch:
+        return "a recovery runs only on its parent authorization's branch"
+    failure = parent.evidence.get(FAILED)
+    if (
+        parent.state != FAILED
+        or failure is None
+        or failure.get("code") != PREFLIGHT_RECOVERY_TRIGGER
+        or failure.get("failed_from_state") != PUBLISHED
+    ):
+        return "the recovery parent did not fail its exact-head Pre-PR Preflight from PUBLISHED"
+    if parent.evidence[AUTHORIZED].get("remediation") is not None:
+        return "a finding remediation is not recovered by a preflight recovery"
+    if (parent.evidence.get(PUBLISHED) or {}).get("head_sha") != bound_head_sha:
+        return "the bound head is not the head the parent published"
+    lineage = [
+        identity for identity in view.claimed if view.authorizations[identity].binding("execution_branch") == branch
+    ]
+    if not lineage or lineage[-1] != parent_authorization_id:
+        return "the recovery parent is not the newest authorization on its branch"
+    done = preflight_recoveries(view, branch)
+    if any(
+        item.evidence[AUTHORIZED]["preflight_recovery"]["parent_authorization_id"] == parent_authorization_id
+        for item in done
+    ):
+        return "this failed preflight was already recovered"
+    if attempt != len(done) + 1:
+        return "the recovery attempt is not the next attempt of this lineage"
+    if attempt > MAX_PREFLIGHT_RECOVERY_ATTEMPTS:
+        return "the recovery attempt budget of this lineage is exhausted"
+    return None
+
+
 def _check_authorized_bindings(record: Mapping[str, Any], view: LedgerView | None = None) -> None:
     evidence = record["evidence"]
     authorization_id = record["authorization_id"]
     remediation = evidence.get("remediation")
-    if remediation is not None:
+    recovery = evidence.get("preflight_recovery")
+    if recovery is not None:
+        if remediation is not None:
+            raise LedgerCorruptError("an authorization is either a finding remediation or a preflight recovery")
+        if view is None:
+            raise LedgerCorruptError("a preflight recovery needs the Issue ledger it recovers")
+        refusal = preflight_recovery_refusal(
+            view,
+            parent_authorization_id=recovery["parent_authorization_id"],
+            branch=evidence["execution_branch"],
+            bound_head_sha=recovery["bound_head_sha"],
+            attempt=recovery["attempt"],
+        )
+        if refusal is not None:
+            raise LedgerCorruptError(refusal)
+        if evidence["base_sha"] != recovery["bound_head_sha"]:
+            raise LedgerCorruptError("a preflight recovery's base is not the exact failed head")
+        if not recovery["failed_test_ids"] or recovery["failed_test_ids"] != sorted(recovery["failed_test_ids"]):
+            raise LedgerCorruptError("a preflight recovery names its failed tests, sorted")
+    elif remediation is not None:
         parent = None if view is None else view.authorizations.get(remediation["parent_authorization_id"])
         if parent is None or parent.state != COMPLETED:
             raise LedgerCorruptError("a remediation's parent is not a completed authorization of this Issue")
