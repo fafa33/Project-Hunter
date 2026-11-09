@@ -982,6 +982,11 @@ def empty_view(repository_id: int, issue_number: int) -> LedgerView:
 
 #: ADR 0039 L9 (owner decision D1, 2026-11-09): automated recovery attempts per failed candidate lineage.
 MAX_PREFLIGHT_RECOVERY_ATTEMPTS: Final = 2
+#: Owner D1 accounting (Issue #716): a recovery proven never to have reached execution does not consume the execution
+#: budget above, but such recoveries have their own finite budget, so a recurring dispatch failure cannot loop.
+MAX_UNSTARTED_PREFLIGHT_RECOVERIES: Final = 3
+#: The hard bound on recovery authorizations of one lineage, whatever their outcome.
+MAX_PREFLIGHT_RECOVERY_AUTHORIZATIONS: Final = MAX_PREFLIGHT_RECOVERY_ATTEMPTS + MAX_UNSTARTED_PREFLIGHT_RECOVERIES
 #: The one terminal failure an automated recovery may start from: a deterministic exact-head Pre-PR failure.
 PREFLIGHT_RECOVERY_TRIGGER: Final = "CANDIDATE_PREFLIGHT_FAILED"
 
@@ -997,6 +1002,42 @@ def preflight_recoveries(view: LedgerView, branch: str) -> list[AuthorizationVie
     ]
 
 
+def recovery_unstarted_on_ledger(item: AuthorizationView) -> bool:
+    """The signed-ledger half of the proof that a recovery never reached execution (Issue #716).
+
+    Necessary, never sufficient: ``EXECUTION_NOT_STARTED`` is also raised inside a started executor, so the
+    controller additionally requires every ``execute`` job of the authorizing run to have been skipped. Any other
+    lifecycle evidence (a fallback admission, a bound result, a validation, a publication) means it was not.
+    """
+
+    failure = item.evidence.get(FAILED)
+    return (
+        item.state == FAILED
+        and failure is not None
+        and failure.get("code") == "EXECUTION_NOT_STARTED"
+        and failure.get("failed_from_state") == AUTHORIZED
+        and item.evidence[AUTHORIZED].get("preflight_recovery") is not None
+        and set(item.evidence) == {AUTHORIZED, FAILED}
+    )
+
+
+def preflight_recovery_budget_refusal(
+    done: list[AuthorizationView], *, unstarted: Callable[[AuthorizationView], bool] = recovery_unstarted_on_ledger
+) -> str | None:
+    """Why one more recovery of a lineage is over budget, or ``None`` (owner D1, Issue #716).
+
+    A recovery counts against the execution budget unless ``unstarted`` proves it never reached execution; such
+    recoveries count against their own finite budget instead, so the total stays bounded.
+    """
+
+    started = sum(1 for item in done if not unstarted(item))
+    if started >= MAX_PREFLIGHT_RECOVERY_ATTEMPTS:
+        return "the recovery execution budget of this lineage is exhausted"
+    if len(done) - started >= MAX_UNSTARTED_PREFLIGHT_RECOVERIES:
+        return "the unstarted-recovery budget of this lineage is exhausted"
+    return None
+
+
 def preflight_recovery_refusal(
     view: LedgerView, *, parent_authorization_id: str, branch: str, bound_head_sha: str, attempt: int
 ) -> str | None:
@@ -1006,7 +1047,9 @@ def preflight_recovery_refusal(
     the controller could mint but the ledger would reject cannot exist. The parent must be the newest
     authorization on its lineage branch; it must have failed exactly ``CANDIDATE_PREFLIGHT_FAILED`` from
     ``PUBLISHED``; the bound head must be the head it published; it must not be a finding remediation; it must not
-    already have a recovery; and the attempt must be the next one inside the approved budget.
+    already have a recovery; and the attempt must be the next one inside the approved budget. A recovery that the
+    ledger shows never reached execution may itself be recovered, and spends the unstarted budget, not the
+    execution budget (Issue #716).
     """
 
     parent = view.authorizations.get(parent_authorization_id)
@@ -1020,14 +1063,7 @@ def preflight_recovery_refusal(
         and failure.get("code") == PREFLIGHT_RECOVERY_TRIGGER
         and failure.get("failed_from_state") == PUBLISHED
     )
-    interrupted_recovery = (
-        failure is not None
-        and failure.get("code") == "EXECUTION_NOT_STARTED"
-        and failure.get("failed_from_state") == AUTHORIZED
-        and parent.evidence[AUTHORIZED].get("preflight_recovery") is not None
-        and PUBLISHED not in parent.evidence
-        and RESULT_BOUND not in parent.evidence
-    )
+    interrupted_recovery = recovery_unstarted_on_ledger(parent)
     if parent.state != FAILED or not (original_preflight_failure or interrupted_recovery):
         return "the recovery parent did not fail its exact-head Pre-PR Preflight from PUBLISHED or an authorized recovery before execution"
     if parent.evidence[AUTHORIZED].get("remediation") is not None:
@@ -1056,9 +1092,7 @@ def preflight_recovery_refusal(
         return "this failed preflight was already recovered"
     if attempt != len(done) + 1:
         return "the recovery attempt is not the next attempt of this lineage"
-    if attempt > MAX_PREFLIGHT_RECOVERY_ATTEMPTS:
-        return "the recovery attempt budget of this lineage is exhausted"
-    return None
+    return preflight_recovery_budget_refusal(done)
 
 
 def _check_authorized_bindings(record: Mapping[str, Any], view: LedgerView | None = None) -> None:

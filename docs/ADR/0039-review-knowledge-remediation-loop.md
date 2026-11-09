@@ -221,6 +221,18 @@ new lifecycle, workflow, ledger, writer or orchestrator.
   authorization as its parent, so the lineage stays on the same branch. Once the budget is exhausted, the last
   `FAILED(CANDIDATE_PREFLIGHT_FAILED)` record is the durable, evidence-backed BLOCKED state. The reconcile log
   reports `RECOVERY_BUDGET_EXHAUSTED`, and the owner decides.
+- **Unstarted recoveries (owner decision, Issue #716).** A recovery that provably never reached execution does not
+  spend the execution budget of 2. It spends its own finite budget of **3** instead, so the total stays at most 5
+  authorizations per lineage, and its signed records stay on the ledger unchanged. Two facts are needed:
+  - **Ledger (necessary):** the record is `FAILED(EXECUTION_NOT_STARTED)` from `AUTHORIZED`, with no other
+    lifecycle evidence (no fallback admission, bound result, validation or publication).
+  - **Run (sufficient):** the controller reads the lifecycle run that the signed AUTHORIZED record binds
+    (`authorize_run_id`). In every run attempt, the complete job listing holds exactly one `execute` job, and every
+    `execute` / `execute-fallback` job is completed and `skipped`.
+
+  `EXECUTION_NOT_STARTED` is also raised inside a started executor, so a code alone is never proof. Any job that
+  started, or any partial, foreign or contradictory evidence, counts as an execution. An unreadable run is a no-op.
+  Such a recovery may itself be recovered at the same exact head (`base_sha` = `bound_head_sha`).
 - **Execution, validation and publication.**
   - **Unchanged:** the SPM/DPM compile (the parent's TaskScope rebased onto the failed head, never wider), the
     isolated executor on the lineage branch at the exact bound head (`PR_HEAD_MOVED` otherwise), and the

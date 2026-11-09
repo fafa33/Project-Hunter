@@ -757,7 +757,8 @@ def _notify_recovery_budget_exhausted(
         return
     parent = view.authorizations[view.claimed[-1]]
     failure = parent.evidence.get(state.FAILED)
-    if (
+    interrupted = state.recovery_unstarted_on_ledger(parent)
+    if not interrupted and (
         parent.state != state.FAILED
         or not isinstance(failure, Mapping)
         or failure.get("code") != state.PREFLIGHT_RECOVERY_TRIGGER
@@ -765,9 +766,15 @@ def _notify_recovery_budget_exhausted(
     ):
         return
     branch = str(parent.binding("execution_branch"))
+    # The caller decided exhaustion with the run-level execution proof (Issue #716); this is only a lower bound
+    # that keeps a notice from ever being posted for a lineage that has not spent its execution budget.
     if len(state.preflight_recoveries(view, branch)) < state.MAX_PREFLIGHT_RECOVERY_ATTEMPTS:
         return
-    head = str((parent.evidence.get(state.PUBLISHED) or {}).get("head_sha") or "")
+    head = str(
+        parent.evidence[state.AUTHORIZED]["preflight_recovery"]["bound_head_sha"]
+        if interrupted
+        else (parent.evidence.get(state.PUBLISHED) or {}).get("head_sha") or ""
+    )
     marker = f"<!-- hunter-preflight-recovery-exhausted:{parent.authorization_id} -->"
     base = f"/repos/{configuration.repository}/issues/{issue}/comments"
     # Complete bounded pagination; an incomplete history is not permission to post.
@@ -790,7 +797,8 @@ def _notify_recovery_budget_exhausted(
     body = (
         f"{marker}\n"
         "Hunter autonomous Pre-PR recovery is BLOCKED: the approved repair budget "
-        f"({state.MAX_PREFLIGHT_RECOVERY_ATTEMPTS} attempts) is exhausted.\n\n"
+        f"({state.MAX_PREFLIGHT_RECOVERY_ATTEMPTS} executed attempts, "
+        f"{state.MAX_UNSTARTED_PREFLIGHT_RECOVERIES} proven-unstarted authorizations) is exhausted.\n\n"
         f"Issue: #{issue}\nBranch: `{branch}`\nExact failed HEAD: `{head}`\n"
         f"Last failed authorization: `{parent.authorization_id}`\n"
         "Owner action: inspect the signed Issue lifecycle and authoritative Preflight evidence; "
