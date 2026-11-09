@@ -55,10 +55,7 @@ from hunter.evidence_intelligence.smart_prompt_routing import WORKSPACE_EDIT_OUT
 from hunter.task_scope import TaskScopeContract
 
 RECEIPT_SCHEMA_VERSION: Final = "hunter-issue-agent-validation-receipt-v2"
-#: Issue #718: 16 minutes. The only completed #705 execution on the pinned free Kilo model took 716 s of the former
-#: 720 s budget, and its recovery timed out at 720 s with no gateway, rate-limit or network signal (model latency;
-#: every tool result is capped at 16 KiB). The execute job allows 20 minutes and spends about 2 on setup and sealing.
-MODEL_TIMEOUT_SECONDS: Final = 16 * 60
+MODEL_TIMEOUT_SECONDS: Final = 12 * 60
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 
 

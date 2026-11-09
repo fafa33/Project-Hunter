@@ -322,7 +322,6 @@ From `FALLBACK_AUTHORIZED`:
 | Duplicate / concurrent delivery | a second claim is refused while one is active; after it the parent is no longer the newest on its branch, so a replay of the same failure is refused |
 | Publication | exact-lease fast-forward from `bound_head_sha` (L7); refused while an Issue-Agent PR is open; before it, a branch at `bound_head_sha` is "not yet published" (publication resume), never `REMOTE_BRANCH_CONFLICT` |
 | Unstarted recovery (Issue #716) | `FAILED(EXECUTION_NOT_STARTED)` from `AUTHORIZED` with no other evidence, **and** every `execute`/`execute-fallback` job of the bound `authorize_run_id` run (all attempts, complete listing) completed `skipped` → recoverable at the same head, spends the unstarted budget (3), not the execution budget (2); anything less is an execution or, for the parent, `BLOCKED` |
-| Timed-out recovery (Issue #718) | a recovery `FAILED(EXECUTOR_RESULT_TIMEOUT)` from `AUTHORIZED` with no other evidence, at an unchanged head → recoverable at the same head; spends the **execution** budget (2); any other executor failure stays terminal |
 | Terminal / recovery | the recovery is an ordinary authorization: T5 `COMPLETED` (one Draft PR) or `CANDIDATE_PREFLIGHT_FAILED` again, after which the budget decides; exhausted → the last FAILED record is the durable BLOCKED state for an owner decision |
 
 ### TF: any non-terminal → FAILED

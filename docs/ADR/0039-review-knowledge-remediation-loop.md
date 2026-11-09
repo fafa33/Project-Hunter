@@ -233,12 +233,6 @@ new lifecycle, workflow, ledger, writer or orchestrator.
   `EXECUTION_NOT_STARTED` is also raised inside a started executor, so a code alone is never proof. Any job that
   started, or any partial, foreign or contradictory evidence, counts as an execution. An unreadable run is a no-op.
   Such a recovery may itself be recovered at the same exact head (`base_sha` = `bound_head_sha`).
-- **Timed-out recoveries (Issue #718).** A preflight recovery that started execution and failed exactly
-  `EXECUTOR_RESULT_TIMEOUT` from `AUTHORIZED` is also recoverable on the same exact head. That means no bound
-  result and no other lifecycle evidence. It counts against the **execution** budget, so the bounds above are
-  unchanged. Every other executor, validation or publication failure of a recovery stays terminal, and an
-  Issue's own first execution is never a recovery parent. `MODEL_TIMEOUT` remains "never a fallback cause"
-  (ADR 0041).
 - **Execution, validation and publication.**
   - **Unchanged:** the SPM/DPM compile (the parent's TaskScope rebased onto the failed head, never wider), the
     isolated executor on the lineage branch at the exact bound head (`PR_HEAD_MOVED` otherwise), and the

@@ -757,7 +757,7 @@ def _notify_recovery_budget_exhausted(
         return
     parent = view.authorizations[view.claimed[-1]]
     failure = parent.evidence.get(state.FAILED)
-    interrupted = state.recovery_unstarted_on_ledger(parent) or state.recovery_timed_out_on_ledger(parent)
+    interrupted = state.recovery_unstarted_on_ledger(parent)
     if not interrupted and (
         parent.state != state.FAILED
         or not isinstance(failure, Mapping)
