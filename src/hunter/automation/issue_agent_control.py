@@ -1072,16 +1072,35 @@ def eligible_preflight_recovery(
         return None
     parent = view.authorizations[view.claimed[-1]]
     failure = parent.evidence.get(state.FAILED)
+    interrupted = (
+        failure is not None
+        and failure.get("code") == "EXECUTION_NOT_STARTED"
+        and failure.get("failed_from_state") == state.AUTHORIZED
+        and parent.evidence[state.AUTHORIZED].get("preflight_recovery") is not None
+        and state.RESULT_BOUND not in parent.evidence
+        and state.PUBLISHED not in parent.evidence
+    )
     if (
         parent.state != state.FAILED
         or failure is None
-        or failure.get("code") != state.PREFLIGHT_RECOVERY_TRIGGER
-        or failure.get("failed_from_state") != state.PUBLISHED
+        or not (
+            interrupted
+            or (
+                failure.get("code") == state.PREFLIGHT_RECOVERY_TRIGGER
+                and failure.get("failed_from_state") == state.PUBLISHED
+            )
+        )
         or parent.evidence[state.AUTHORIZED].get("remediation") is not None
     ):
         return None
     branch = str(parent.binding("execution_branch"))
-    head = str((parent.evidence.get(state.PUBLISHED) or {}).get("head_sha") or "")
+    head = str(
+        parent.evidence[state.AUTHORIZED]["preflight_recovery"]["bound_head_sha"]
+        if interrupted
+        else (parent.evidence.get(state.PUBLISHED) or {}).get("head_sha") or ""
+    )
+    if interrupted and parent.binding("base_sha") != head:
+        return None
     attempt = len(state.preflight_recoveries(view, branch)) + 1
     if attempt > state.MAX_PREFLIGHT_RECOVERY_ATTEMPTS:
         return PreflightFailureClass("unknown", reason="RECOVERY_BUDGET_EXHAUSTED")
