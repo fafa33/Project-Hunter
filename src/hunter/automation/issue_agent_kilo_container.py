@@ -264,11 +264,11 @@ _TRACE = re.compile(r"BROKER_EXECUTED: (\[[^\n]*?\]) EXIT: (-?\d+) TREE: ([0-9a-
 
 
 #: ``docker logs --timestamps`` prefixes every line with Docker's own RFC 3339 receive time (Issue #718).
-_STAMP = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z ")
-_RECEIVED = re.compile(r"BROKER_RECEIVED: ")
-_DENIED = re.compile(r"BROKER_DENIED: ([A-Za-z]{1,40})$")
+_BROKER_STAMP = re.compile(r"(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.(\d{1,9}))?Z ")
+_BROKER_RECEIVED = re.compile(r"BROKER_RECEIVED: ")
+_BROKER_DENIED = re.compile(r"BROKER_DENIED: ([A-Za-z]{1,40})$")
 #: The only refusal types the broker raises (``real_broker_server.handle``); anything else is reported as OTHER.
-_DENIAL_TYPES = frozenset(
+_BROKER_DENIAL_TYPES = frozenset(
     {
         "ShellDenied",
         "BudgetExhausted",
@@ -285,8 +285,8 @@ _DENIAL_TYPES = frozenset(
 )
 
 
-def _stamp(line: str) -> tuple[float | None, str]:
-    match = _STAMP.match(line)
+def _broker_stamp(line: str) -> tuple[float | None, str]:
+    match = _BROKER_STAMP.match(line)
     if match is None:
         return None, line
     try:
@@ -307,13 +307,13 @@ def parse_broker_trace(log: str) -> list[dict[str, object]]:
     origin: float | None = None
     received: float | None = None
     for line in log[:262144].splitlines():
-        when, body = _stamp(line)
+        when, body = _broker_stamp(line)
         if when is not None and origin is None:
             origin = when
-        if _RECEIVED.match(body):
+        if _BROKER_RECEIVED.match(body):
             received = when
             continue
-        if _DENIED.match(body):
+        if _BROKER_DENIED.match(body):
             received = None  # a refused command never executed: its receive time belongs to no trace entry
             continue
         match = _TRACE.match(body)
@@ -350,13 +350,13 @@ def broker_session_summary(log: str) -> dict[str, str]:
     last: float | None = None
     denied: dict[str, int] = {}
     for line in log[:262144].splitlines():
-        when, body = _stamp(line)
+        when, body = _broker_stamp(line)
         if when is not None:
             origin = when if origin is None else origin
             last = when
-        match = _DENIED.match(body)
+        match = _BROKER_DENIED.match(body)
         if match is not None:
-            kind = match.group(1) if match.group(1) in _DENIAL_TYPES else "OTHER"
+            kind = match.group(1) if match.group(1) in _BROKER_DENIAL_TYPES else "OTHER"
             denied[kind] = min(denied.get(kind, 0) + 1, 999)
     return {
         "denied": ",".join(f"{kind}:{count}" for kind, count in sorted(denied.items())) or "none",
