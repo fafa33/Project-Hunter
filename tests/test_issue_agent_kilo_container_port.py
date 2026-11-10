@@ -1,6 +1,7 @@
 """Runner's Kilo Isolation port must fail closed on wrong runtime or workspace."""
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -102,12 +103,35 @@ def test_prepared_containers_have_no_docker_socket_host_home_or_privileges(tmp_p
         assert "--cap-drop" in run_call and "no-new-privileges" in run_call and "--read-only" in run_call
 
 
-def test_agent_container_is_bounded_and_secrets_stay_out_of_argv(tmp_path: Path) -> None:
+def test_agent_container_is_bounded_and_secrets_stay_out_of_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     workspace, home = _roots(tmp_path)
     isolation = KiloContainerIsolation(SCRIPTS)
     isolation.workspace, isolation.home, isolation.started = workspace.resolve(), home.resolve(), True
-    calls: list[tuple[str, ...]] = []
-    with patch.object(KiloContainerIsolation, "_docker", staticmethod(_recorder(calls))):
+    calls: list[list[str]] = []
+
+    class _Recording:
+        def __new__(cls, argv: list[str], **kwargs: Any) -> Any:
+            if not argv or argv[0] != "docker":
+                return _REAL_POPEN(argv, **kwargs)
+            return super().__new__(cls)
+
+        def __init__(self, argv: list[str], *, stdin: int, stdout: Any, stderr: Any) -> None:
+            calls.append(argv)
+            stdout.write(b"")
+            stderr.write(b"")
+            self.returncode = 0
+            self.stdin = _ImmediateWritable()
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(kilo_port.subprocess, "Popen", _Recording)
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(_recorder([]))):
         isolation.run(
             ("kilo", "run", "--model", "kilo/x:free"),
             cwd=workspace,
@@ -117,6 +141,7 @@ def test_agent_container_is_bounded_and_secrets_stay_out_of_argv(tmp_path: Path)
             timeout=5,
         )
     (agent,) = calls
+    agent = agent[1:]  # drop the leading "docker" argv0
     joined = " ".join(agent)
     assert "secret-sentinel-123" not in joined and "KILO_API_KEY" not in joined
     assert "docker.sock" not in joined and "--privileged" not in joined
@@ -140,7 +165,9 @@ def test_only_governed_kilo_run_argv_is_accepted(tmp_path: Path) -> None:
         isolation.run(("kilo", "run"), cwd=tmp_path, public_env={}, secret_env={}, stdin=b"", timeout=1)
 
 
-def test_model_timeout_propagates_and_stop_removes_every_container(tmp_path: Path) -> None:
+def test_model_timeout_propagates_and_stop_removes_every_container(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     workspace, home = _roots(tmp_path)
     isolation = KiloContainerIsolation(SCRIPTS)
     isolation.workspace, isolation.home, isolation.started = workspace.resolve(), home.resolve(), True
@@ -148,10 +175,12 @@ def test_model_timeout_propagates_and_stop_removes_every_container(tmp_path: Pat
 
     def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
         calls.append(args)
-        if args[0] == "run":
+        if args[0] == "run":  # the reader container only; the agent launch no longer reaches ``_docker``
             raise subprocess.TimeoutExpired("docker", timeout)
         return subprocess.CompletedProcess(args, 0, b"", b"")
 
+    monkeypatch.setattr(kilo_port.time, "monotonic", _ticking_clock())
+    _hanging_agent_popen(monkeypatch, final=(137, b"", b""))
     with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
         with pytest.raises(subprocess.TimeoutExpired):
             isolation.run(
@@ -287,7 +316,7 @@ def test_stderr_structure_never_echoes_stderr_content() -> None:
 
 @pytest.mark.parametrize("returncode,printed", [(1, True), (0, False)])
 def test_only_a_non_zero_exit_prints_the_stderr_outline(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], returncode: int, printed: bool
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], returncode: int, printed: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace, home = _roots(tmp_path)
     isolation = KiloContainerIsolation(SCRIPTS)
@@ -297,6 +326,7 @@ def test_only_a_non_zero_exit_prints_the_stderr_outline(
         stderr = b"> code \xc2\xb7 m\nError: provider said no (key sk-SECRET) 502\n" if args[0] == "run" else b""
         return subprocess.CompletedProcess(args, returncode if args[0] == "run" else 0, b"", stderr)
 
+    _delegate_popen_to_docker(monkeypatch)
     with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
         status = isolation.run(
             ("kilo", "run"),
@@ -433,7 +463,7 @@ def test_a_corrupt_or_oversized_store_is_unreadable(tmp_path: Path, monkeypatch:
 
 @pytest.mark.parametrize("returncode,printed", [(1, True), (0, False)])
 def test_only_a_non_zero_exit_prints_the_session_outcome(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str], returncode: int, printed: bool
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], returncode: int, printed: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     workspace, home = _roots(tmp_path)
     _session_store(home, {"role": "assistant", "error": {"name": "APIError", "data": {"statusCode": 502}}})
@@ -442,6 +472,7 @@ def test_only_a_non_zero_exit_prints_the_session_outcome(
 
     fake = _container_fake(home, agent_exit=returncode)
 
+    _delegate_popen_to_docker(monkeypatch)
     with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
         isolation.run(
             ("kilo", "run"),
@@ -531,6 +562,238 @@ def _run_agent(isolation: KiloContainerIsolation, workspace: Path) -> int:
     )
 
 
+# --- Issue #705: the supervised agent launch is a ``Popen``, not a single ``_docker`` call ------------------------
+
+#: Captured before any test patches ``subprocess.Popen``: the fakes below only stand in for the agent's own
+#: ``docker ...`` launch, and must hand every other command (notably the live ``git status`` poll, a real
+#: subprocess the trusted host actually runs) through to the genuine implementation, unpatched.
+_REAL_POPEN = kilo_port.subprocess.Popen
+
+
+class _ImmediateWritable:
+    """Stands in for ``Popen.stdin``: the agent never reads it in these fakes, so every write is discarded."""
+
+    def write(self, data: bytes) -> int:
+        return len(data)
+
+    def close(self) -> None:
+        pass
+
+
+def _delegate_popen_to_docker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Route the supervised launch's ``Popen`` straight back through the test's own ``_docker`` fake.
+
+    ``run`` now launches the agent container with ``subprocess.Popen`` instead of ``self._docker`` so it can poll
+    for progress, but every fixture in this file still describes the agent and reader containers' behavior
+    through ``_docker``. This delegates the very first (and, for these fixtures, only) poll to it, so the agent
+    "completes" immediately with whatever exit code and stderr the test's ``_docker`` fake already returns. Any
+    other command (the live ``git status`` poll) is not a docker invocation and runs for real, unpatched.
+    """
+
+    class _Delegating:
+        def __new__(cls, argv: list[str], **kwargs: Any) -> Any:
+            if not argv or argv[0] != "docker":
+                return _REAL_POPEN(argv, **kwargs)
+            return super().__new__(cls)
+
+        def __init__(self, argv: list[str], *, stdin: int, stdout: Any, stderr: Any) -> None:
+            result = KiloContainerIsolation._docker(*argv[1:])
+            stdout.write(result.stdout)
+            stderr.write(result.stderr)
+            self.returncode = result.returncode
+            self.stdin = _ImmediateWritable()
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode
+
+        def kill(self) -> None:
+            pass
+
+    monkeypatch.setattr(kilo_port.subprocess, "Popen", _Delegating)
+
+
+def _hanging_agent_popen(monkeypatch: pytest.MonkeyPatch, *, final: tuple[int, bytes, bytes]) -> None:
+    """A docker CLI client that never exits on its own; only the supervisor's post-stall ``kill()`` makes it
+    report an exit (``final``), so a test controls exactly when the agent "stops" without any real wall clock.
+    """
+
+    class _Hanging:
+        def __new__(cls, argv: list[str], **kwargs: Any) -> Any:
+            if not argv or argv[0] != "docker":
+                return _REAL_POPEN(argv, **kwargs)
+            return super().__new__(cls)
+
+        def __init__(self, argv: list[str], *, stdin: int, stdout: Any, stderr: Any) -> None:
+            self.args = argv
+            self._stdout, self._stderr = stdout, stderr
+            self._killed = False
+            self.stdin = _ImmediateWritable()
+            self.returncode: int | None = None
+
+        def wait(self, timeout: float | None = None) -> int:
+            if not self._killed:
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            returncode, out, err = final
+            self._stdout.write(out)
+            self._stderr.write(err)
+            self.returncode = returncode
+            return returncode
+
+        def kill(self) -> None:
+            self._killed = True
+
+    monkeypatch.setattr(kilo_port.subprocess, "Popen", _Hanging)
+
+
+def _finite_agent_popen(
+    monkeypatch: pytest.MonkeyPatch, *, stall_ticks: int, final: tuple[int, bytes, bytes], growth: bytes = b""
+) -> None:
+    """A docker CLI client that keeps "running" for exactly ``stall_ticks`` polls, then completes with ``final``.
+
+    If ``growth`` is given, every still-running poll appends one more copy of it to the agent's own stdout: an
+    idle heartbeat the supervisor must never read as progress (Issue #705 (3)).
+    """
+
+    class _Finite:
+        def __new__(cls, argv: list[str], **kwargs: Any) -> Any:
+            if not argv or argv[0] != "docker":
+                return _REAL_POPEN(argv, **kwargs)
+            return super().__new__(cls)
+
+        def __init__(self, argv: list[str], *, stdin: int, stdout: Any, stderr: Any) -> None:
+            self.args = argv
+            self._stdout, self._stderr = stdout, stderr
+            self._ticks = 0
+            self.stdin = _ImmediateWritable()
+            self.returncode: int | None = None
+
+        def wait(self, timeout: float | None = None) -> int:
+            self._ticks += 1
+            if self._ticks <= stall_ticks:
+                if growth:
+                    self._stdout.write(growth)
+                raise subprocess.TimeoutExpired(self.args, timeout)
+            returncode, out, err = final
+            self._stdout.write(out)
+            self._stderr.write(err)
+            self.returncode = returncode
+            return returncode
+
+        def kill(self) -> None:
+            self._ticks = max(self._ticks, stall_ticks)
+
+    monkeypatch.setattr(kilo_port.subprocess, "Popen", _Finite)
+
+
+def _ticking_clock(step: float = kilo_port.KILO_POLL_INTERVAL_SECONDS) -> Any:
+    """A fake ``time.monotonic`` that advances by exactly one poll interval on every call: deterministic, and
+    never actually waits (Issue #705 regression tests must never spend real minutes on a simulated stall).
+    """
+
+    value = [-step]
+
+    def clock() -> float:
+        value[0] += step
+        return value[0]
+
+    return clock
+
+
+# --- Issue #705: progress-aware Kilo execution supervision ----------------------------------------------------
+
+
+def test_an_active_run_may_exceed_the_flat_wall_clock_while_progressing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(1) Hosted run 42739368326 was killed by the fixed 720s wall clock while Kilo was still editing files.
+    Continuous trusted file-change evidence must let a run cross 720s of simulated elapsed time and still
+    complete -- it is never terminated solely because 720s passed.
+    """
+    isolation, workspace, home = _prepared(tmp_path)
+    monkeypatch.setattr(kilo_port.time, "monotonic", _ticking_clock())
+    changes = iter(range(1, 200))  # a new value every poll: always "changed" relative to the last one
+    monkeypatch.setattr(isolation, "_workspace_changed_entries", lambda: next(changes))
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(_recorder([]))):
+        # 75 polls * 10s = 750s of simulated elapsed time: past the old fixed 720s timeout, still inside
+        # KILO_HARD_CEILING_SECONDS (900s) -- and the run completes, it does not time out.
+        _finite_agent_popen(monkeypatch, stall_ticks=75, final=(0, b"", b""))
+        assert _run_agent(isolation, workspace) == 0
+
+
+def test_a_silent_or_genuinely_stalled_execution_terminates(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(2) With no trusted evidence of progress at all, the run is killed as STALLED well inside the hard
+    ceiling -- not left to run the full 900s -- and the regression itself never spends real minutes finding out.
+    """
+    isolation, workspace, home = _prepared(tmp_path)
+    monkeypatch.setattr(kilo_port.time, "monotonic", _ticking_clock())
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(_recorder([]))):
+        _hanging_agent_popen(monkeypatch, final=(137, b"", b""))
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run_agent(isolation, workspace)
+    out = capsys.readouterr().out
+    assert "isolated Kilo supervision diagnostic: reason=STALLED" in out
+    assert f"ceiling_s={int(kilo_port.KILO_HARD_CEILING_SECONDS)}" in out
+    assert f"stall_s={int(kilo_port.KILO_IDLE_STALL_SECONDS)}" in out
+
+
+def test_repeated_meaningless_output_does_not_reset_idle_time(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(3) A heartbeat that only grows the agent's own stdout is never read as progress: the supervisor polls
+    trusted host-side evidence only, so a chatty idle agent stalls on exactly the same schedule as a silent one.
+    """
+    isolation, workspace, home = _prepared(tmp_path)
+    monkeypatch.setattr(kilo_port.time, "monotonic", _ticking_clock())
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(_recorder([]))):
+        _finite_agent_popen(monkeypatch, stall_ticks=10_000, final=(0, b"", b""), growth=b"still working...\n")
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run_agent(isolation, workspace)
+    out = capsys.readouterr().out
+    assert "isolated Kilo supervision diagnostic: reason=STALLED" in out
+
+
+def test_repeated_denied_commands_do_not_count_as_progress(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """(4) A broker log full of received-then-denied commands -- never an executed one -- never advances the
+    broker-trace progress signal, so a model stuck issuing denied commands stalls like a silent one.
+    """
+    isolation, workspace, home = _prepared(tmp_path)
+    monkeypatch.setattr(kilo_port.time, "monotonic", _ticking_clock())
+
+    def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
+        if args[0] == "logs" and isolation.broker in args:
+            denied = b"BROKER_RECEIVED: \nBROKER_DENIED: ShellDenied\n" * 5
+            return subprocess.CompletedProcess(args, 0, denied, b"")
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
+        _hanging_agent_popen(monkeypatch, final=(137, b"", b""))
+        with pytest.raises(subprocess.TimeoutExpired):
+            _run_agent(isolation, workspace)
+    out = capsys.readouterr().out
+    assert "isolated Kilo supervision diagnostic: reason=STALLED" in out
+
+
+def test_valid_scoped_changes_count_as_meaningful_progress(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """(5) A single trusted file change resets the idle clock, letting the run survive well past the point a
+    silent run would have stalled -- a real edit, not elapsed time, is what the supervisor rewards.
+    """
+    isolation, workspace, home = _prepared(tmp_path)
+    monkeypatch.setattr(kilo_port.time, "monotonic", _ticking_clock())
+    # The first 21 reads (the one before the loop starts, plus polls 1-19) see no change; poll 20 is the first to
+    # see the edit, landing at ~200s -- inside the 360s idle window a silent run would have stalled at.
+    counts = iter([0] * 20 + [1] * 1000)
+    monkeypatch.setattr(isolation, "_workspace_changed_entries", lambda: next(counts))
+    with patch.object(KiloContainerIsolation, "_docker", staticmethod(_recorder([]))):
+        # Completes at poll 50 (~500s): past the 360s a silent run stalls at, proving the edit bought the extra
+        # time rather than the ceiling (900s, far later) ever coming into play.
+        _finite_agent_popen(monkeypatch, stall_ticks=49, final=(0, b"", b""))
+        assert _run_agent(isolation, workspace) == 0
+
+
 def test_the_reader_container_is_offline_read_only_and_holds_only_the_read_search_capability(tmp_path: Path) -> None:
     isolation, workspace, home = _prepared(tmp_path)
     _session_store(home, {"role": "assistant", "finish": "stop"})
@@ -587,10 +850,11 @@ def test_a_store_the_trusted_step_cannot_search_is_still_read_through_the_reader
 
 
 def test_a_genuinely_incomplete_session_stays_a_failed_execution(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     isolation, workspace, home = _prepared(tmp_path)
     _session_store(home, {"role": "assistant"})  # the turn never finished
+    _delegate_popen_to_docker(monkeypatch)
     with patch.object(KiloContainerIsolation, "_docker", staticmethod(_container_fake(home, agent_exit=1))):
         assert _run_agent(isolation, workspace) == 1  # the exit status, not the record, decides
     out = capsys.readouterr().out
@@ -598,15 +862,18 @@ def test_a_genuinely_incomplete_session_stays_a_failed_execution(
     assert "exit=NONZERO" in out
 
 
-def test_a_finished_record_never_turns_a_non_zero_exit_into_success(tmp_path: Path) -> None:
+def test_a_finished_record_never_turns_a_non_zero_exit_into_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     isolation, workspace, home = _prepared(tmp_path)
     _session_store(home, {"role": "assistant", "finish": "stop"})
+    _delegate_popen_to_docker(monkeypatch)
     with patch.object(KiloContainerIsolation, "_docker", staticmethod(_container_fake(home, agent_exit=1))):
         assert _run_agent(isolation, workspace) == 1
 
 
 def test_denied_tool_calls_are_counted_and_reported_with_the_session_record(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     isolation, workspace, home = _prepared(tmp_path)
     _session_store(
@@ -615,6 +882,7 @@ def test_denied_tool_calls_are_counted_and_reported_with_the_session_record(
         parts=({"type": "tool", "state": {"status": "error", "error": "denied: secret path"}},) * 2,
     )
     stderr = "\u2192 Read secret\nDENIED\n\u2192 Bash rm\nDENIED\n".encode()
+    _delegate_popen_to_docker(monkeypatch)
     with patch.object(
         KiloContainerIsolation, "_docker", staticmethod(_container_fake(home, agent_exit=1, stderr=stderr))
     ):
@@ -672,7 +940,9 @@ def test_the_real_reader_script_refuses_links_fifos_and_missing_stores(tmp_path:
     assert done.returncode == 0 and kilo_port._unframe_session_store(done.stdout) is not None
 
 
-def test_the_reader_runs_once_per_failed_turn_and_never_reruns_the_model(tmp_path: Path) -> None:
+def test_the_reader_runs_once_per_failed_turn_and_never_reruns_the_model(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     isolation, workspace, home = _prepared(tmp_path)
     calls: list[tuple[str, ...]] = []
 
@@ -682,15 +952,17 @@ def test_the_reader_runs_once_per_failed_turn_and_never_reruns_the_model(tmp_pat
             raise subprocess.TimeoutExpired(args, timeout)
         return subprocess.CompletedProcess(args, 1 if kilo_port.KILO_IMAGE in args else 0, b"", b"")
 
+    _delegate_popen_to_docker(monkeypatch)
     with patch.object(KiloContainerIsolation, "_docker", staticmethod(failing_reader)):
         assert _run_agent(isolation, workspace) == 1
     assert sum(kilo_port.KILO_IMAGE in call for call in calls) == 1
     assert sum(_is_reader(call) for call in calls) == 1
 
 
-def test_a_successful_turn_never_starts_the_reader(tmp_path: Path) -> None:
+def test_a_successful_turn_never_starts_the_reader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     isolation, workspace, home = _prepared(tmp_path)
     calls: list[tuple[str, ...]] = []
+    _delegate_popen_to_docker(monkeypatch)
     with patch.object(
         KiloContainerIsolation, "_docker", staticmethod(_container_fake(home, agent_exit=0, calls=calls))
     ):
@@ -825,7 +1097,7 @@ def test_a_formatter_that_cannot_be_proven_stopped_refuses_collection(tmp_path: 
 
 
 def test_a_model_timeout_reports_its_stderr_outline_and_session_outcome(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     isolation, workspace, home = _prepared(tmp_path)
     _session_store(
@@ -836,11 +1108,11 @@ def test_a_model_timeout_reports_its_stderr_outline_and_session_outcome(
     partial = "\u2192 bash ls\n\u2190 bash ls\nError: 429 Too Many Requests SECRET-PROMPT-TEXT\n".encode()
 
     def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
-        if args[0] == "run" and kilo_port.KILO_IMAGE in args:
-            calls.append(args)
-            raise subprocess.TimeoutExpired("docker", timeout, output=b"partial model text", stderr=partial)
+        calls.append(args)
         return reader(*args, timeout=timeout, stdin=stdin)
 
+    monkeypatch.setattr(kilo_port.time, "monotonic", _ticking_clock())
+    _hanging_agent_popen(monkeypatch, final=(124, b"partial model text", partial))
     with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
         with pytest.raises(subprocess.TimeoutExpired):
             _run_agent(isolation, workspace)
@@ -850,25 +1122,24 @@ def test_a_model_timeout_reports_its_stderr_outline_and_session_outcome(
     assert "isolated Kilo stderr structure: " in out and "status=429" in out
     assert "isolated Kilo session outcome: error=APIError status=429 retryable=true" in out
     assert "SECRET-PROMPT-TEXT" not in out and "partial model text" not in out and "bash ls" not in out
-    # The agent is stopped before its store is read, and nothing feeds a fallback or canary decision.
-    agent_run = next(i for i, args in enumerate(calls) if args[0] == "run" and kilo_port.KILO_IMAGE in args)
+    # The agent is stopped (by the stall/ceiling supervisor) before its store is read.
     removal = calls.index(("rm", "-f", isolation.agent))
-    assert agent_run < removal < next(i for i, args in enumerate(calls) if _is_reader(args))
+    assert removal < next(i for i, args in enumerate(calls) if _is_reader(args))
     assert isolation.last_stderr_category is None
 
 
 def test_a_timeout_without_any_output_or_store_is_still_reported_and_still_a_timeout(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     isolation, workspace, home = _prepared(tmp_path)
 
     def fake(*args: str, timeout: float = 40, stdin: bytes = b""):
-        if args[0] == "run" and kilo_port.KILO_IMAGE in args:
-            raise subprocess.TimeoutExpired("docker", timeout)
         if args[0] == "rm":
             raise OSError("docker went away")  # a failed stop never masks the timeout
         return _container_fake(home, agent_exit=0)(*args, timeout=timeout, stdin=stdin)
 
+    monkeypatch.setattr(kilo_port.time, "monotonic", _ticking_clock())
+    _hanging_agent_popen(monkeypatch, final=(124, b"", b""))
     with patch.object(KiloContainerIsolation, "_docker", staticmethod(fake)):
         with pytest.raises(subprocess.TimeoutExpired):
             _run_agent(isolation, workspace)
