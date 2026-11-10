@@ -1341,6 +1341,28 @@ def commit_identity(view: state.AuthorizationView, writer: WriterIdentity, resul
     )
 
 
+def result_contract_refusal_category(message: str) -> str:
+    """Non-sensitive diagnostic for a rejected hostile result; never emit paths or payloads."""
+
+    if "outside signed TaskScope" in message:
+        return "TASK_SCOPE_PATH"
+    if "does not match signed authorization" in message:
+        return "AUTHORIZATION_BINDING"
+    if "schema mismatch" in message or "wrong execution class" in message:
+        return "RESULT_SCHEMA"
+    if "digest mismatch" in message or "invalid sha256" in message:
+        return "FILE_DIGEST"
+    if "base64" in message or "UTF-8" in message:
+        return "RESULT_ENCODING"
+    if "duplicate paths" in message:
+        return "DUPLICATE_PATH"
+    if "file list" in message or "size limit" in message:
+        return "RESULT_LIMIT"
+    if "canonical" in message or "Git metadata" in message or "invalid mode" in message:
+        return "UNSAFE_FILE_METADATA"
+    return "OTHER_CONTRACT_VIOLATION"
+
+
 def _open_validated(
     view: state.AuthorizationView, envelope: bytes, recipient: X25519PrivateKey, repository: str
 ) -> tuple[bytes, core.ValidatedReplacementResult]:
@@ -1366,7 +1388,12 @@ def _open_validated(
             ),
             rehearsal=False,
         )
-    except core.ReplacementExecutorError:
+    except core.ReplacementExecutorError as error:
+        # Keep the signed refusal code unchanged. Emit only a closed diagnostic category,
+        # never hostile paths, source bytes, model output, or credentials.
+        print(
+            f"validator result contract diagnostic: category={result_contract_refusal_category(str(error))}", flush=True
+        )
         raise RoleRefused("EXECUTOR_RESULT_REJECTED", "the result violates the closed contract or TaskScope") from None
     return document, validated
 
