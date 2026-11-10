@@ -247,7 +247,15 @@ def test_host_secrets_never_reach_command_environment(monkeypatch):
 def test_budget_constants_are_bounded():
     assert 1 <= broker.MAX_COMMANDS <= 32
     assert broker.MAX_REQUESTS >= broker.MAX_COMMANDS
-    assert broker.DEADLINE_SECONDS <= 900
+    # The broker must outlive the supervised model ceiling, while remaining
+    # bounded inside the hosted 20-minute execute job.
+    from hunter.automation.issue_agent_kilo_container import (
+        BROKER_DEADLINE_SECONDS,
+        KILO_HARD_CEILING_SECONDS,
+    )
+
+    assert KILO_HARD_CEILING_SECONDS < broker.DEADLINE_SECONDS < 1200
+    assert broker.DEADLINE_SECONDS == BROKER_DEADLINE_SECONDS
 
 
 def test_black_cache_is_private_unique_and_removed(monkeypatch):
