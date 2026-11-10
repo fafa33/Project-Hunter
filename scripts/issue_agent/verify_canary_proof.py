@@ -45,6 +45,7 @@ def canonicalize(
     jobs: Mapping[str, Any],
     event: Mapping[str, Any],
     env: Mapping[str, str],
+    dispatch_pr: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Pure verification: returns the canonical record or raises ``ProofRejected``."""
 
@@ -52,7 +53,24 @@ def canonicalize(
         if not condition:
             raise ProofRejected(reason)
 
-    pull = event.get("pull_request") or {}
+    dispatch = env.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    if dispatch:
+        if dispatch_pr is None:
+            raise ProofRejected("dispatch PR API evidence required")
+        require(run.get("event") == "workflow_dispatch", "unexpected run event")
+        require(event.get("inputs", {}).get("canary") == "run", "dispatch authorization missing")
+        require(env.get("GITHUB_ACTOR") == env.get("GITHUB_REPOSITORY_OWNER"), "owner authorization missing")
+        require(env.get("GITHUB_REF") == "refs/heads/fix/718-broker-supervisor-budget", "unexpected dispatch ref")
+        require(run.get("head_branch") == "fix/718-broker-supervisor-budget", "unexpected run branch")
+        require(dispatch_pr.get("number") == 723 and dispatch_pr.get("state") == "open", "invalid dispatch PR")
+        require((dispatch_pr.get("base") or {}).get("ref") == "main", "invalid dispatch base")
+        pr_head = dispatch_pr.get("head") or {}
+        require((pr_head.get("repo") or {}).get("full_name") == env.get("GITHUB_REPOSITORY"), "fork refused")
+        require(pr_head.get("ref") == "fix/718-broker-supervisor-budget", "invalid dispatch PR branch")
+        pull = {"number": dispatch_pr["number"], "head": {"sha": pr_head.get("sha")}}
+    else:
+        require(env.get("GITHUB_EVENT_NAME", "pull_request") == "pull_request", "unsupported event")
+        pull = event.get("pull_request") or {}
     head = (pull.get("head") or {}).get("sha")
     require(isinstance(head, str) and _SHA40.fullmatch(head) is not None, "event carries no exact PR head")
     require(proof.get("head_sha") == head == run.get("head_sha"), "head SHA differs between proof, event and run")
@@ -66,10 +84,13 @@ def canonicalize(
         "stale or replayed attempt",
     )
     require(proof.get("pull_request") == pull.get("number"), "pull request mismatch")
-    require(
-        proof.get("pull_request") in {p.get("number") for p in run.get("pull_requests", [])},
-        "run is not bound to the PR",
-    )
+    if dispatch:
+        require(head == env.get("GITHUB_SHA"), "dispatch SHA mismatch")
+    else:
+        require(
+            proof.get("pull_request") in {p.get("number") for p in run.get("pull_requests", [])},
+            "run is not bound to the PR",
+        )
     require(proof.get("validator_verdict") == "PASS", "validator did not pass")
     matching = [job for job in jobs.get("jobs", []) if job.get("name") == proof.get("job")]
     require(len(matching) == 1, "job identity is not unique")
@@ -113,6 +134,11 @@ def main(stdin: TextIO, fetch: Callable[[str, str], dict[str, Any]] = _get) -> i
             jobs=fetch(f"{api}/attempts/{attempt}/jobs?per_page=100", env["GITHUB_TOKEN"]),
             event=event,
             env=env,
+            dispatch_pr=(
+                fetch(f"https://api.github.com/repos/{repository}/pulls/723", env["GITHUB_TOKEN"])
+                if env.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+                else None
+            ),
         )
     except (ProofRejected, KeyError, ValueError, OSError) as error:
         print(f"CANONICAL PROOF REJECTED: {type(error).__name__}: {error}", file=sys.stderr)

@@ -145,3 +145,68 @@ def test_main_fails_closed_without_a_token_and_on_api_errors(tmp_path, monkeypat
 def test_no_file_path_is_taken_from_the_command_line() -> None:
     source = (Path(__file__).resolve().parents[1] / "scripts/issue_agent/verify_canary_proof.py").read_text()
     assert "sys.argv" not in source and "argv[" not in source
+
+
+DISPATCH_ENV = {
+    **ENV,
+    "GITHUB_EVENT_NAME": "workflow_dispatch",
+    "GITHUB_ACTOR": "owner",
+    "GITHUB_REPOSITORY_OWNER": "owner",
+    "GITHUB_REF": "refs/heads/fix/718-broker-supervisor-budget",
+    "GITHUB_SHA": HEAD,
+}
+DISPATCH_EVENT = {"inputs": {"canary": "run"}}
+DISPATCH_RUN = {
+    **RUN,
+    "event": "workflow_dispatch",
+    "head_branch": "fix/718-broker-supervisor-budget",
+    "pull_requests": [],
+}
+DISPATCH_PR = {
+    "number": 723,
+    "state": "open",
+    "base": {"ref": "main"},
+    "head": {"sha": HEAD, "ref": "fix/718-broker-supervisor-budget", "repo": {"full_name": "o/r"}},
+}
+
+
+def test_owner_dispatch_is_bound_to_live_pr_head_without_pr_event_payload() -> None:
+    proof = {**BASE, "pull_request": 723}
+    record = verify.canonicalize(
+        sealed(proof),
+        run=DISPATCH_RUN,
+        jobs=JOBS,
+        event=DISPATCH_EVENT,
+        env=DISPATCH_ENV,
+        dispatch_pr=DISPATCH_PR,
+    )
+    assert record["job_id"] == 12345 and record["pull_request"] == 723
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"head": {"sha": "cd" * 20, "ref": "fix/718-broker-supervisor-budget", "repo": {"full_name": "o/r"}}},
+        {"state": "closed"},
+        {"base": {"ref": "evil"}},
+        {"head": {"sha": HEAD, "ref": "evil", "repo": {"full_name": "o/r"}}},
+        {"head": {"sha": HEAD, "ref": "fix/718-broker-supervisor-budget", "repo": {"full_name": "fork/r"}}},
+    ],
+)
+def test_dispatch_refuses_stale_or_untrusted_pr(change) -> None:
+    with pytest.raises(verify.ProofRejected):
+        verify.canonicalize(
+            sealed({**BASE, "pull_request": 723}),
+            run=DISPATCH_RUN,
+            jobs=JOBS,
+            event=DISPATCH_EVENT,
+            env=DISPATCH_ENV,
+            dispatch_pr={**DISPATCH_PR, **change},
+        )
+
+
+def test_dispatch_refuses_missing_pr_or_unauthorized_actor() -> None:
+    proof = sealed({**BASE, "pull_request": 723})
+    for env, pr in ((DISPATCH_ENV, None), ({**DISPATCH_ENV, "GITHUB_ACTOR": "stranger"}, DISPATCH_PR)):
+        with pytest.raises(verify.ProofRejected):
+            verify.canonicalize(proof, run=DISPATCH_RUN, jobs=JOBS, event=DISPATCH_EVENT, env=env, dispatch_pr=pr)
