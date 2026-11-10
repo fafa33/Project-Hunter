@@ -1596,3 +1596,25 @@ def test_a_change_without_python_launches_no_formatter(
     outcome = execute(repos, ledger, envelope, isolation)
     assert outcome.sealed_result and isolation.formatted == []
     assert "executor result formatting: python_files=0 outcome=SKIPPED" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("candidate path is outside signed TaskScope: private/secret.txt", "TASK_SCOPE_PATH"),
+        ("replacement result base_sha does not match signed authorization", "AUTHORIZATION_BINDING"),
+        ("replacement result schema mismatch", "RESULT_SCHEMA"),
+        ("candidate file 'secret.txt' digest mismatch", "FILE_DIGEST"),
+        ("candidate file 'secret.txt' content is invalid base64", "RESULT_ENCODING"),
+        ("replacement result contains duplicate paths", "DUPLICATE_PATH"),
+        ("replacement result must contain a bounded non-empty file list", "RESULT_LIMIT"),
+        ("candidate path is not canonical: '../secret'", "UNSAFE_FILE_METADATA"),
+        ("candidate file 'secret.txt' has invalid mode", "UNSAFE_FILE_METADATA"),
+        ("unexpected attacker-supplied secret content", "OTHER_CONTRACT_VIOLATION"),
+    ],
+)
+def test_result_contract_diagnostic_is_closed_category(message: str, expected: str) -> None:
+    category = roles.result_contract_refusal_category(message)
+    assert category == expected
+    assert "secret" not in category.lower()
+    assert "/" not in category
