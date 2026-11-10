@@ -275,8 +275,12 @@ def cmd_step(configuration: control.Configuration, arguments: argparse.Namespace
                     result_bound="true" if decision.target_state == state.RESULT_BOUND else "false",
                     fallback_authorized="true" if decision.target_state == state.FALLBACK_AUTHORIZED else "false",
                 )
-            if decision.target_state == state.VALIDATED and job == "record-validation":
-                _record_proven_classification(configuration, github, writer, issue)
+            if job == "record-validation":
+                # The job can succeed while the signed transition is terminal FAILED.
+                # Only an actual VALIDATED transition may release same-run publication.
+                _output(publication_eligible="true" if decision.target_state == state.VALIDATED else "false")
+                if decision.target_state == state.VALIDATED:
+                    _record_proven_classification(configuration, github, writer, issue)
         except control.FactsUnavailable as error:
             print(f"issue {issue}: no-op ({error})")
     return 0

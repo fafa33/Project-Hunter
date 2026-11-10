@@ -28,3 +28,13 @@ def test_signed_automated_remediation_admitted_without_owner_actor() -> None:
     assert "needs.scope-admission.outputs.eligible == 'true'" in authorize
     assert "issuer signature verifies" in authorize
     assert "python scripts/hunter_issue_agent_lifecycle.py" in authorize
+
+
+def test_terminal_signed_validation_failure_never_releases_publisher() -> None:
+    workflow = Path(".github/workflows/hunter-issue-agent-trigger.yml").read_text()
+    record = workflow.split("\n  record-validation:\n", 1)[1].split("\n  publish:\n", 1)[0]
+    publish = workflow.split("\n  publish:\n", 1)[1].split("\n  finalize:\n", 1)[0]
+    assert "publication_eligible: ${{ steps.advance.outputs.publication_eligible }}" in record
+    assert "id: advance" in record
+    assert publish.count("needs.record-validation.outputs.publication_eligible == 'true'") == 2
+    assert "inputs.stage == 'publication'" in publish  # independent signed resume path
