@@ -16,15 +16,16 @@ import sqlite3
 import stat
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
+from typing import IO, Final
 from urllib.parse import urlunsplit
 
-from hunter.automation.issue_agent_roles import RoleRefused, stderr_category
+from hunter.automation.issue_agent_roles import RoleRefused, stderr_category, trusted_git_command
 
 KILO_IMAGE = "hunter-682-kilo-canary:local"
 BROKER_IMAGE = "hunter-682-broker-canary:local"
@@ -32,6 +33,20 @@ BROKER_IMAGE = "hunter-682-broker-canary:local"
 BROKER_MAX_COMMANDS = 32
 BROKER_DEADLINE_SECONDS = 660  # strictly below the 12 minute model timeout
 PYTHON_IMAGE = "python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea"
+
+# Issue #705: hosted run 42739368326 was killed by the flat MODEL_TIMEOUT_SECONDS wall clock while Kilo was still
+# actively editing. ``KiloContainerIsolation.run`` instead polls host-trusted evidence (never the agent's own
+# stdout/stderr, which grows just as readily on an idle heartbeat) and only extends the deadline on real progress.
+# A run that stops producing trusted evidence for this long is STALLED and is killed early, well inside the
+# ``execute`` job's 20-minute budget (``.github/workflows/hunter-issue-agent-trigger.yml``). PRH-132 already
+# recorded a turn going 235 s without delivering any content while its single provider tunnel stayed open and
+# never errored, so this stays comfortably above that observed figure, not just above a guess at turn latency.
+KILO_IDLE_STALL_SECONDS: Final = 360.0
+# An absolute backstop for a run that keeps producing trusted evidence forever: FAILED, not STALLED, because it
+# exceeds a genuine resource/runtime limit rather than going quiet. Kept well under the job's 1200s budget so the
+# trusted collection and diagnostics that follow still have time to run.
+KILO_HARD_CEILING_SECONDS: Final = 900.0
+KILO_POLL_INTERVAL_SECONDS: Final = 10.0
 
 
 #: ADR 0041 F8: the gateway's content-free refusal line (``model_egress_gateway.REFUSED_HOST_MARKER``).
@@ -797,7 +812,7 @@ class KiloContainerIsolation:
             ]
             self.model_started_at = time.time()
             try:
-                result = self._docker(*command, timeout=timeout, stdin=stdin)
+                result = self._run_supervised(command, stdin=stdin, timeout=timeout)
             except subprocess.TimeoutExpired as expired:
                 self._timeout_diagnostic(expired)
                 raise
@@ -843,6 +858,156 @@ class KiloContainerIsolation:
             flush=True,
         )
         return result.returncode
+
+    def _run_supervised(
+        self, command: Sequence[str], *, stdin: bytes, timeout: float
+    ) -> subprocess.CompletedProcess[bytes]:
+        """Progress-aware supervision of the foreground ``docker run`` (Issue #705).
+
+        ``subprocess.run(timeout=...)`` enforces one flat wall clock, so hosted run 42739368326 was killed mid-edit.
+        This instead polls two host-trusted signals -- the workspace's own ``git status`` (the agent's bind mount,
+        read by the host without executing or even opening a single model-written byte) and the broker's own
+        executed-command trace (a distinct trusted container the host already controls) -- and extends the
+        deadline only when one of them changes. Neither the agent's stdout/stderr nor its own claims ever reach
+        this decision: both grow just as readily on an idle heartbeat as on real work, and a repeated or denied
+        command never advances the broker trace signal (:func:`parse_broker_trace` already omits denials, and
+        repeats are deduplicated here) by design. A caller-supplied ``timeout`` shorter than
+        :data:`KILO_HARD_CEILING_SECONDS` is still honored as the absolute ceiling; one longer than it is not
+        shortened. Reports exactly the same ``subprocess.TimeoutExpired`` an ordinary flat timeout always raised,
+        so every existing caller, and ADR 0041 F2's closed cause set, is unchanged.
+        """
+
+        started = time.monotonic()
+        ceiling = max(float(timeout), KILO_HARD_CEILING_SECONDS)
+        last_progress_at = started
+        last_changed = self._workspace_changed_entries()
+        seen_commands: set[str] = set()
+        docker_argv = ["docker", *command]
+        with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+            process = subprocess.Popen(  # noqa: S603 - fixed docker launcher, closed argv
+                docker_argv, stdin=subprocess.PIPE, stdout=out, stderr=err
+            )
+            assert process.stdin is not None  # guaranteed by stdin=subprocess.PIPE above
+            feeder = threading.Thread(target=self._feed_stdin, args=(process.stdin, stdin), daemon=True)
+            feeder.start()
+            reason: str | None = None
+            now = started
+            try:
+                while True:
+                    try:
+                        returncode = process.wait(timeout=KILO_POLL_INTERVAL_SECONDS)
+                        break
+                    except subprocess.TimeoutExpired:
+                        pass
+                    now = time.monotonic()
+                    changed = self._workspace_changed_entries()
+                    progressed = changed != -1 and changed != last_changed
+                    if not progressed:
+                        progressed = self._new_broker_commands(seen_commands)
+                    if progressed:
+                        last_changed, last_progress_at = changed, now
+                        continue
+                    if now - last_progress_at >= KILO_IDLE_STALL_SECONDS:
+                        reason = "STALLED"
+                        break
+                    if now >= started + ceiling:
+                        reason = "FAILED_CEILING"
+                        break
+                if reason is not None:
+                    try:
+                        self._docker("rm", "-f", self.agent, timeout=15)
+                    except (OSError, subprocess.TimeoutExpired, RoleRefused):
+                        pass  # a failed stop never masks the stall/ceiling timeout raised below
+                    try:
+                        process.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait(timeout=15)
+                    out.seek(0, os.SEEK_SET)
+                    err.seek(0, os.SEEK_SET)
+                    captured_out, captured_err = out.read(), err.read()
+                    print(
+                        f"isolated Kilo supervision diagnostic: reason={reason} "
+                        f"elapsed_s={int(now - started)} idle_s={int(now - last_progress_at)} "
+                        f"ceiling_s={int(ceiling)} stall_s={int(KILO_IDLE_STALL_SECONDS)}",
+                        flush=True,
+                    )
+                    raise subprocess.TimeoutExpired(docker_argv, ceiling, output=captured_out, stderr=captured_err)
+            finally:
+                feeder.join(timeout=5)
+            out.seek(0, os.SEEK_SET)
+            err.seek(0, os.SEEK_SET)
+            return subprocess.CompletedProcess(docker_argv, returncode, out.read(), err.read())
+
+    @staticmethod
+    def _feed_stdin(pipe: IO[bytes], payload: bytes) -> None:
+        try:
+            if payload:
+                pipe.write(payload)
+        except (BrokenPipeError, OSError):
+            pass
+        finally:
+            try:
+                pipe.close()
+            except OSError:
+                pass
+
+    def _workspace_changed_entries(self) -> int:
+        """Trusted-host count of changed workspace entries, polled live while Kilo runs (Issue #705).
+
+        The workspace is the same bind mount the agent edits directly, so the host's own ``git status`` observes
+        an edit as it lands, without ever reading model output or trusting the agent's word. ``-1`` (unreadable)
+        never counts as progress -- a probe failure fails closed toward the stall/ceiling path, not toward it.
+        """
+
+        if self.workspace is None:
+            return -1
+        git_dir = self.workspace.parent / "trusted.git"
+        try:
+            command = trusted_git_command(
+                git_dir, self.workspace, ("status", "--porcelain", "-z", "--untracked-files=normal")
+            )
+            result = subprocess.run(
+                command,
+                cwd=self.workspace,
+                env={
+                    "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                    "HOME": str(git_dir),
+                    "GIT_CONFIG_GLOBAL": os.devnull,
+                    "GIT_CONFIG_NOSYSTEM": "1",
+                    "GIT_TERMINAL_PROMPT": "0",
+                },
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+        except (RoleRefused, OSError, subprocess.SubprocessError):
+            return -1
+        if result.returncode != 0:
+            return -1
+        return sum(bool(item) for item in result.stdout.split(b"\0"))
+
+    def _new_broker_commands(self, seen: set[str]) -> bool:
+        """Trusted-host evidence of a new, successfully executed, non-repeated shell command (Issue #705).
+
+        Read from the broker's own log, a distinct trusted container the host already controls: a model stuck
+        repeating one command (a directory listing, say) never advances ``seen``, and a denied command never
+        reaches :func:`parse_broker_trace` at all, so neither counts as progress.
+        """
+
+        try:
+            logs = self._docker("logs", self.broker, timeout=15)
+        except (OSError, subprocess.TimeoutExpired, RoleRefused):
+            return False
+        text = (logs.stdout + logs.stderr).decode("utf-8", errors="replace")
+        progressed = False
+        for entry in parse_broker_trace(text):
+            if entry["exit"] == 0:
+                cmd = str(entry["cmd"])
+                if cmd not in seen:
+                    seen.add(cmd)
+                    progressed = True
+        return progressed
 
     def _timeout_diagnostic(self, expired: subprocess.TimeoutExpired) -> None:
         """Issue #718: what the agent was doing when the model budget ran out, in the existing closed vocabularies.
