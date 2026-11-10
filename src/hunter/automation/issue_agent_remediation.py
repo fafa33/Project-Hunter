@@ -112,6 +112,30 @@ def preflight_recovery_group(candidate: Any, *, issue_number: int) -> dict[str, 
         raise RemediationRefused("NOT_ELIGIBLE", str(error)) from None
 
 
+def validator_recovery_group(candidate: Any, *, issue_number: int) -> dict[str, Any]:
+    """ADR 0039 L10: the closed repair group for one signed pre-publication Ruff failure."""
+
+    failure = candidate.failure
+    group = {
+        "parent_authorization_id": candidate.parent_authorization_id,
+        "branch": candidate.branch,
+        "bound_head_sha": candidate.bound_base_sha,
+        "attempt": candidate.attempt,
+        "validator_failure": {
+            "result_sha256": failure["result_sha256"],
+            "validator_run_id": failure["validator_run_id"],
+            "validator_run_attempt": failure["validator_run_attempt"],
+            "validator_job_id": failure["validator_job_id"],
+            "diagnostics_sha256": failure["diagnostics_sha256"],
+            "diagnostics": [dict(item) for item in failure["diagnostics"]],
+        },
+    }
+    try:
+        return validate_remediation_group(group, issue_number=issue_number)
+    except IssueAgentAuthorizationError as error:
+        raise RemediationRefused("NOT_ELIGIBLE", str(error)) from None
+
+
 def remediation_authorization(
     issue: Mapping[str, Any], *, repository: str, owner_login: str, remediation: Mapping[str, Any]
 ) -> IssueAgentRemediationAuthorization:
@@ -571,6 +595,7 @@ __all__ = [
     "proven_writes",
     "read_promotion_inputs",
     "preflight_recovery_group",
+    "validator_recovery_group",
     "remediation_authorization",
     "remediation_writes",
     "remediation_group",

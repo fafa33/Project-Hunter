@@ -452,7 +452,48 @@ def test_a_matching_pass_receipt_records_validated(repos: dict[str, Any]) -> Non
     assert evidence["validator_run_id"] == 100 and evidence["validation_attempts"] == 1
 
 
-@pytest.mark.parametrize("code", sorted(state.VALIDATION_REFUSAL_CODES))
+def _ruff_refusal(repos: dict[str, Any]) -> tuple[dict[str, Any], FakeGitHub]:
+    ledger, _result = rt.bound_result(repos)
+    bound = ledger.view.authorizations[rt.AUTH].evidence
+    diagnostics = [{"path": "src/a.py", "code": "F401", "row": 1, "column": 8}]
+    refusal = {
+        "schema_version": "hunter-issue-agent-validation-receipt-v2",
+        "authorization_id": rt.AUTH,
+        "execution_id": bound[state.AUTHORIZED]["execution_id"],
+        "ciphertext_sha256": bound[state.RESULT_BOUND]["result_artifact"]["ciphertext_sha256"],
+        "verdict": "REFUSED",
+        "code": "PRE_PUSH_RUFF_FAILED",
+        "ruff_failure": {
+            "result_sha256": bound[state.RESULT_BOUND]["result_plaintext_sha256"],
+            "diagnostics_sha256": state.ruff_diagnostics_digest(diagnostics),
+            "diagnostics": diagnostics,
+        },
+    }
+    return refusal, validation_world(repos, refusal)
+
+
+def test_a_ruff_refusal_is_signed_with_the_job_that_produced_it(repos: dict[str, Any]) -> None:
+    refusal, github = _ruff_refusal(repos)
+    job = {"id": 10, "name": "validate", "status": "completed", "conclusion": "success", "run_attempt": 3}
+    github.routes[f"/repos/{rt.REPOSITORY}/actions/runs/100/jobs"] = {"total_count": 1, "jobs": [job]}
+    assert step(repos, github, role="record-validation").code == "PRE_PUSH_RUFF_FAILED"
+    failure = ledger_state(repos).evidence[state.FAILED]["ruff_failure"]
+    assert (failure["validator_run_id"], failure["validator_run_attempt"], failure["validator_job_id"]) == (100, 3, 10)
+    assert failure["diagnostics"] == refusal["ruff_failure"]["diagnostics"]
+
+
+def test_a_ruff_refusal_from_an_unprovable_job_stays_generic(repos: dict[str, Any]) -> None:
+    _refusal, github = _ruff_refusal(repos)
+    job = {"id": 10, "name": "validate", "status": "completed", "conclusion": "failure", "run_attempt": 1}
+    github.routes[f"/repos/{rt.REPOSITORY}/actions/runs/100/jobs"] = {"total_count": 1, "jobs": [job]}
+    assert step(repos, github, role="record-validation").code == "PRE_PUSH_SAFETY_FAILED"
+    assert ledger_state(repos).evidence[state.FAILED] == {
+        "code": "PRE_PUSH_SAFETY_FAILED",
+        "failed_from_state": state.RESULT_BOUND,
+    }
+
+
+@pytest.mark.parametrize("code", sorted(state.VALIDATION_REFUSAL_CODES - {state.VALIDATOR_RECOVERY_TRIGGER}))
 def test_a_trusted_validator_refusal_is_terminal(repos: dict[str, Any], code: str) -> None:
     ledger, result = rt.bound_result(repos)
     bound = ledger.view.authorizations[rt.AUTH].evidence

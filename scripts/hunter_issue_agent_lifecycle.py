@@ -275,8 +275,12 @@ def cmd_step(configuration: control.Configuration, arguments: argparse.Namespace
                     result_bound="true" if decision.target_state == state.RESULT_BOUND else "false",
                     fallback_authorized="true" if decision.target_state == state.FALLBACK_AUTHORIZED else "false",
                 )
-            if decision.target_state == state.VALIDATED and job == "record-validation":
-                _record_proven_classification(configuration, github, writer, issue)
+            if job == "record-validation":
+                # The job can succeed while the signed transition is terminal FAILED.
+                # Only an actual VALIDATED transition may release same-run publication.
+                _output(publication_eligible="true" if decision.target_state == state.VALIDATED else "false")
+                if decision.target_state == state.VALIDATED:
+                    _record_proven_classification(configuration, github, writer, issue)
         except control.FactsUnavailable as error:
             print(f"issue {issue}: no-op ({error})")
     return 0
@@ -757,12 +761,20 @@ def _notify_recovery_budget_exhausted(
         return
     parent = view.authorizations[view.claimed[-1]]
     failure = parent.evidence.get(state.FAILED)
-    interrupted = state.recovery_unstarted_on_ledger(parent)
-    if not interrupted and (
-        parent.state != state.FAILED
-        or not isinstance(failure, Mapping)
-        or failure.get("code") != state.PREFLIGHT_RECOVERY_TRIGGER
-        or failure.get("failed_from_state") != state.PUBLISHED
+    source = state.validator_failure_source(parent)
+    interrupted = (
+        state.recovery_unstarted_on_ledger(parent)
+        and parent.evidence[state.AUTHORIZED].get("preflight_recovery") is not None
+    )
+    if (
+        source is None
+        and not interrupted
+        and (
+            parent.state != state.FAILED
+            or not isinstance(failure, Mapping)
+            or failure.get("code") != state.PREFLIGHT_RECOVERY_TRIGGER
+            or failure.get("failed_from_state") != state.PUBLISHED
+        )
     ):
         return
     branch = str(parent.binding("execution_branch"))
@@ -770,11 +782,14 @@ def _notify_recovery_budget_exhausted(
     # that keeps a notice from ever being posted for a lineage that has not spent its execution budget.
     if len(state.preflight_recoveries(view, branch)) < state.MAX_PREFLIGHT_RECOVERY_ATTEMPTS:
         return
-    head = str(
-        parent.evidence[state.AUTHORIZED]["preflight_recovery"]["bound_head_sha"]
-        if interrupted
-        else (parent.evidence.get(state.PUBLISHED) or {}).get("head_sha") or ""
-    )
+    if source is not None:
+        head = str(parent.binding("base_sha"))
+    else:
+        head = str(
+            parent.evidence[state.AUTHORIZED]["preflight_recovery"]["bound_head_sha"]
+            if interrupted
+            else (parent.evidence.get(state.PUBLISHED) or {}).get("head_sha") or ""
+        )
     marker = f"<!-- hunter-preflight-recovery-exhausted:{parent.authorization_id} -->"
     base = f"/repos/{configuration.repository}/issues/{issue}/comments"
     # Complete bounded pagination; an incomplete history is not permission to post.
@@ -826,7 +841,9 @@ def _recover_failed_preflight(
     text for scope or routing, and a non-recoverable failure stays terminal and is only reported.
     """
 
-    found = control.eligible_preflight_recovery(github, configuration, ledger_view, issue, job_log=github.job_log)
+    found: Any = control.eligible_validator_recovery(github, configuration, ledger_view, issue)
+    if found is None:
+        found = control.eligible_preflight_recovery(github, configuration, ledger_view, issue, job_log=github.job_log)
     if found is None:
         print(f"issue {issue}: no eligible remediation")
         return False
@@ -840,7 +857,12 @@ def _recover_failed_preflight(
         raise control.FactsUnavailable("the governing Issue is not observable")
     parent = ledger_view.authorizations[found.parent_authorization_id]
     try:
-        group = remediation.preflight_recovery_group(found, issue_number=issue)
+        builder = (
+            remediation.validator_recovery_group
+            if isinstance(found, control.ValidatorRecoveryCandidate)
+            else remediation.preflight_recovery_group
+        )
+        group = builder(found, issue_number=issue)
         authorization = remediation.remediation_authorization(
             live, repository=configuration.repository, owner_login=configuration.owner_login, remediation=group
         )
@@ -854,6 +876,13 @@ def _recover_failed_preflight(
         {control.REMEDIATION_DISPATCH_INPUT: base64.b64encode(document.encode()).decode("ascii")},
     ):
         raise control.FactsUnavailable("the preflight recovery dispatch was not accepted")
+    if isinstance(found, control.ValidatorRecoveryCandidate):
+        print(
+            f"issue {issue}: dispatched validator Ruff recovery {authorization.authorization_id} attempt "
+            f"{found.attempt} on {found.branch} at base {found.bound_base_sha[:12]} for validator run "
+            f"{found.failure['validator_run_id']} ({len(found.failure['diagnostics'])} finding(s))"
+        )
+        return True
     print(
         f"issue {issue}: dispatched preflight recovery {authorization.authorization_id} attempt {found.attempt} "
         f"on {found.branch} at {found.bound_head_sha[:12]} for run {found.run_id} job {found.job_id} "
@@ -1746,6 +1775,7 @@ def cmd_validate(configuration: control.Configuration, arguments: argparse.Names
             "ciphertext_sha256": view.evidence[state.RESULT_BOUND]["result_artifact"]["ciphertext_sha256"],
             "verdict": "REFUSED",
             "code": error.code,
+            **error.receipt_detail,
         }
     _write_outcome(arguments.out, receipt)
     print(f"validation {receipt['verdict']}")

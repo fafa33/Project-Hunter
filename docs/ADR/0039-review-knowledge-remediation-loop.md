@@ -247,6 +247,39 @@ new lifecycle, workflow, ledger, writer or orchestrator.
   Candidate PR workflow open exactly one Draft PR and record `COMPLETED` (T5). Failure records
   `CANDIDATE_PREFLIGHT_FAILED` again and the budget decides. Nothing merges automatically.
 
+### L10. Repair of a signed pre-publication Ruff failure (owner requirement, Issue #706, 2026-11-10)
+
+**Amendment, accepted 2026-11-10.** L9 starts only from `FAILED` written from `PUBLISHED`. Hosted run 42816584643
+showed the other stranded case: the credential-free validator refused a candidate because of Ruff alone, so nothing
+was published. L10 adds one more closed authorization shape. It adds no lifecycle, workflow, ledger, writer or
+orchestrator, and it does not change Ruff, the sealed result, or the parent authorization.
+
+- **Narrow class.** The validator reports `PRE_PUSH_RUFF_FAILED` only when all of these hold. Anything else stays
+  the generic, terminal `PRE_PUSH_SAFETY_FAILED`:
+  - the candidate-safety lane named Ruff and no other gate;
+  - a trusted rerun reproduced findings, using the pinned Ruff binary in a fresh clone with the base's
+    `pyproject.toml` passed explicitly, so a candidate configuration cannot shape it;
+  - there are 1 to 32 findings, each with a rule code, on a file the result wrote.
+
+  The lane is candidate-controlled and only names Ruff; the trusted rerun is the proof. A finding carries only its
+  path, rule, row and column, because a message can quote source.
+- **Signed failure.** `record-validation` re-checks the refusal receipt as hostile input and binds it to the
+  validator run, run attempt and job, and to the result digest and diagnostic digest, in
+  `FAILED.ruff_failure`. If the job identity cannot be proven, it records the generic code instead. The ledger
+  fold refuses this code without that group, and the group on any other code.
+- **Eligibility (reconcile `remediate`).** The signed ledger alone names the failure. Live facts can only narrow it:
+  the never-published branch must not exist, no pull request may be open, the base must still be on main, and the
+  Issue title and body must be unchanged. An indefinite read stops the pass.
+- **Authorization.** The closed `validator_failure` group binds the parent, the same branch, the exact parent base
+  and the failure facts above. `authorize` and the ledger fold apply one rule, `validator_recovery_refusal`.
+- **Budget.** L9 and L10 share one budget per lineage: at most **2** executed repairs, plus the L9 unstarted budget.
+- **Execution.** The result of the failed attempt stays sealed and is not given to the model. The repair runs the
+  task again from the same base, through the unchanged SPM/DPM and isolated executor, with the closed findings as
+  untrusted task text. It then needs the full credential-free validation and create-only signed publication.
+- **Boundary.** A finding remediation or an L9 recovery runs on a published lineage branch, so its Ruff failure
+  stays generic and terminal. A terminal failure never starts the same-run publisher: only a signed `VALIDATED`
+  transition sets `publication_eligible` (PR #722).
+
 ## Consequences
 
 - The knowledge ledger is a third anchored branch, and the anchor ruleset already covers it.
