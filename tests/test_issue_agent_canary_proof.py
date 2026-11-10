@@ -127,6 +127,9 @@ def test_main_fails_closed_without_a_token_and_on_api_errors(tmp_path, monkeypat
     event.write_text(json.dumps(EVENT))
     for name, value in {**ENV, "GITHUB_EVENT_PATH": str(event)}.items():
         monkeypatch.setenv(name, value)
+    # CI itself is a pull_request event; this fixture models a synthetic PR
+    # independently of the host runner event environment.
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request")
     monkeypatch.delenv("GITHUB_TOKEN", raising=False)
     assert verify.main(io.StringIO(log)) == 1  # missing token
     monkeypatch.setenv("GITHUB_TOKEN", "t")
