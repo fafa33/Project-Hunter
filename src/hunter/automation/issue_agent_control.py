@@ -728,6 +728,19 @@ def _stage_outcome(
     return _single_json(github, found[0]), run_id
 
 
+def _ruff_receipt_conforms(receipt: Mapping[str, Any], result: Mapping[str, Any]) -> bool:
+    """ADR 0039 L10: the refusal names the bound result and carries closed findings matching their digest."""
+
+    group = receipt.get("ruff_failure")
+    return (
+        isinstance(group, Mapping)
+        and set(group) == {"result_sha256", "diagnostics_sha256", "diagnostics"}
+        and group["result_sha256"] == result["result_plaintext_sha256"]
+        and state.ruff_diagnostics_conform(group["diagnostics"])
+        and group["diagnostics_sha256"] == state.ruff_diagnostics_digest(group["diagnostics"])
+    )
+
+
 def _receipt_matches(view: state.AuthorizationView, receipt: Mapping[str, Any]) -> bool:
     bound, result = view.evidence[state.AUTHORIZED], view.evidence[state.RESULT_BOUND]
     common = (
@@ -739,6 +752,8 @@ def _receipt_matches(view: state.AuthorizationView, receipt: Mapping[str, Any]) 
     if not common:
         return False
     if receipt.get("verdict") == "REFUSED":
+        if receipt.get("code") == state.VALIDATOR_RECOVERY_TRIGGER:
+            return set(receipt) == {*_REFUSAL_FIELDS, "ruff_failure"} and _ruff_receipt_conforms(receipt, result)
         return set(receipt) == {*_REFUSAL_FIELDS} and receipt.get("code") in state.VALIDATION_REFUSAL_CODES
     if not (
         receipt.get("verdict") == "PASS"
@@ -1117,7 +1132,10 @@ def eligible_preflight_recovery(
         return None
     parent = view.authorizations[view.claimed[-1]]
     failure = parent.evidence.get(state.FAILED)
-    interrupted = state.recovery_unstarted_on_ledger(parent)
+    interrupted = (
+        state.recovery_unstarted_on_ledger(parent)
+        and parent.evidence[state.AUTHORIZED].get("preflight_recovery") is not None
+    )
     if (
         parent.state != state.FAILED
         or failure is None
@@ -1191,6 +1209,73 @@ def eligible_preflight_recovery(
         run_attempt=1,
         job_id=int(job["id"]),
         failed_tests=classified.failed_tests,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatorRecoveryCandidate:
+    """One signed, repairable pre-publication Ruff failure (ADR 0039 L10). Every field is a ledger fact."""
+
+    branch: str
+    bound_base_sha: str
+    parent_authorization_id: str
+    attempt: int
+    failure: Mapping[str, Any]
+
+
+def eligible_validator_recovery(
+    github: GitHub, configuration: Configuration, view: state.LedgerView, issue: int
+) -> ValidatorRecoveryCandidate | PreflightFailureClass | None:
+    """ADR 0039 L10: the one repairable Ruff failure of this Issue, why it stays terminal, or ``None``.
+
+    Only the signed ledger names the failure: no log, comment or receipt is read here. The live facts can only
+    narrow it. A branch that now exists, a pull request, a base no longer on main, or an edited Issue is stale, and
+    every indefinite read stops the pass. ``authorize`` and the ledger fold re-apply the binding rules under CAS.
+    """
+
+    if view.active is not None or not view.claimed:
+        return None
+    parent = view.authorizations[view.claimed[-1]]
+    source = state.validator_failure_source(parent)
+    if source is None:
+        return None
+    bound = parent.evidence[state.AUTHORIZED]
+    if bound.get("remediation") is not None or bound.get("preflight_recovery") is not None:
+        return PreflightFailureClass("unknown", reason="a published lineage is never repaired before publication")
+    branch, base = str(parent.binding("execution_branch")), str(parent.binding("base_sha"))
+    done = state.preflight_recoveries(view, branch)
+    proven = {
+        item.authorization_id
+        for item in done
+        if state.recovery_unstarted_on_ledger(item) and execution_never_scheduled(github, configuration, item)
+    }
+    if state.recovery_unstarted_on_ledger(parent) and parent.authorization_id not in proven:
+        return PreflightFailureClass("unknown", reason="execution of the interrupted recovery cannot be ruled out")
+    if state.preflight_recovery_budget_refusal(done, unstarted=lambda item: item.authorization_id in proven):
+        return PreflightFailureClass("unknown", reason="RECOVERY_BUDGET_EXHAUSTED")
+    repository = configuration.repository
+    if definitive(github.get(f"/repos/{repository}/git/ref/heads/{branch}")) is not None:
+        return PreflightFailureClass("unknown", reason="the never-published branch exists")
+    if _pull_requests(github, configuration, branch):
+        return None
+    compare = definitive(github.get(f"/repos/{repository}/compare/{base}...main"))
+    if not isinstance(compare, Mapping) or compare.get("status") not in {"ahead", "identical"}:
+        return PreflightFailureClass("unknown", reason="the bound base is no longer on main")
+    live = definitive(github.get(f"/repos/{repository}/issues/{issue}"))
+    if not isinstance(live, Mapping):
+        raise FactsUnavailable("the governing Issue is not observable")
+    claims = bound["claims"]
+    if (
+        state.sha256_hex(str(live.get("title") or "").encode("utf-8")) != claims["title_sha256"]
+        or state.sha256_hex(str(live.get("body") or "").encode("utf-8")) != claims["body_sha256"]
+    ):
+        return PreflightFailureClass("unknown", reason="the Issue changed after the failed authorization")
+    return ValidatorRecoveryCandidate(
+        branch=branch,
+        bound_base_sha=base,
+        parent_authorization_id=parent.authorization_id,
+        attempt=len(done) + 1,
+        failure=dict(source),
     )
 
 
@@ -1778,6 +1863,35 @@ def _evidence(
     raise ValueError(f"no evidence builder for {target}")
 
 
+def _ruff_failure_evidence(
+    github: GitHub, configuration: Configuration, observation: Observation
+) -> dict[str, Any] | None:
+    """ADR 0039 L10: the verified refusal, bound to the validator job that produced it, for the signed record."""
+
+    receipt, run_id = observation.facts.receipt, observation.receipt_run_id
+    if not isinstance(receipt, Mapping) or run_id is None:
+        return None
+    job, _ = _job(github, configuration.repository, run_id, "validate")
+    if (
+        job is None
+        or job.get("status") != "completed"
+        or job.get("conclusion") != "success"
+        or type(job.get("id")) is not int
+        or type(job.get("run_attempt")) is not int
+        or int(job["run_attempt"]) < 1
+    ):
+        return None
+    group = receipt["ruff_failure"]
+    return {
+        "result_sha256": group["result_sha256"],
+        "validator_run_id": run_id,
+        "validator_run_attempt": int(job["run_attempt"]),
+        "validator_job_id": int(job["id"]),
+        "diagnostics_sha256": group["diagnostics_sha256"],
+        "diagnostics": [dict(item) for item in group["diagnostics"]],
+    }
+
+
 def step(
     *,
     github: GitHub,
@@ -1826,11 +1940,19 @@ def step(
         raise Frozen(decision.code or "STATE_ROLLBACK_SUSPECTED", decision.reason)
     if decision.action == "fail":
         assert decision.code is not None
+        evidence: dict[str, Any] = {"code": decision.code, "failed_from_state": view.state}
+        if decision.code == state.VALIDATOR_RECOVERY_TRIGGER:
+            ruff_failure = _ruff_failure_evidence(github, configuration, observation)
+            if ruff_failure is None:  # unprovable job identity: the narrow class is withheld, never guessed
+                decision = state.Decision("fail", code="PRE_PUSH_SAFETY_FAILED")
+                evidence["code"] = decision.code
+            else:
+                evidence["ruff_failure"] = ruff_failure
         ledger.append(
             view.authorization_id,
             kind="transition",
             target=state.FAILED,
-            evidence={"code": decision.code, "failed_from_state": view.state},
+            evidence=evidence,
             now=now,
         )
         return decision
@@ -2046,6 +2168,7 @@ __all__ = [
     "owner_decision",
     "dispatch_remediation",
     "eligible_preflight_recovery",
+    "eligible_validator_recovery",
     "eligible_remediation",
     "classify_preflight_log",
     "lineage_branch_unpublished",

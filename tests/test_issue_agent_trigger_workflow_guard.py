@@ -38,3 +38,21 @@ def test_terminal_signed_validation_failure_never_releases_publisher() -> None:
     assert "id: advance" in record
     assert publish.count("needs.record-validation.outputs.publication_eligible == 'true'") == 2
     assert "inputs.stage == 'publication'" in publish  # independent signed resume path
+
+
+def test_a_signed_terminal_failure_reports_publication_as_ineligible(monkeypatch, capsys) -> None:
+    import argparse
+
+    import hunter_issue_agent_lifecycle as lifecycle
+
+    outputs: list[dict[str, str]] = []
+    decision = lifecycle.state.Decision("fail", code="PRE_PUSH_RUFF_FAILED")
+    monkeypatch.setattr(lifecycle, "_writer", lambda *_a, **_k: object())
+    monkeypatch.setattr(lifecycle, "_github", lambda *_a, **_k: object())
+    monkeypatch.setattr(lifecycle, "_store", lambda *_a, **_k: object())
+    monkeypatch.setattr(lifecycle, "_ed25519", lambda *_a, **_k: object())
+    monkeypatch.setattr(lifecycle, "_output", lambda **kw: outputs.append(kw))
+    monkeypatch.setattr(lifecycle.control, "step", lambda **_k: decision)
+    arguments = argparse.Namespace(role="record-validation", issue=705, advisory="", job="")
+    assert lifecycle.cmd_step(object(), arguments) == 0
+    assert outputs == [{"publication_eligible": "false"}]

@@ -62,9 +62,11 @@ _SHA40 = re.compile(r"[0-9a-f]{40}")
 class RoleRefused(RuntimeError):
     """A role refused to act. ``code`` is the closed failure or advisory code it reports."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, receipt_detail: Mapping[str, Any] | None = None) -> None:
         super().__init__(f"{code}: {message}")
         self.code = code
+        #: Closed fields the validator's refusal receipt carries (ADR 0039 L10); never free-form text.
+        self.receipt_detail = dict(receipt_detail or {})
 
 
 @dataclass(frozen=True, slots=True)
@@ -1468,6 +1470,8 @@ def run_validator(
     identity = commit_identity(view, writer, validated.result_sha256)
     try:
         proof_safety = safety(trusted_repo, validated=validated, isolation_user=isolation_user, identity=identity)
+    except core.RuffSafetyFailure as failure:
+        raise _ruff_refusal(view, validated, failure) from None
     except core.ReplacementExecutorError:
         raise RoleRefused("PRE_PUSH_SAFETY_FAILED", "the trusted pre-push safety refused the candidate") from None
     bound = view.evidence[state.AUTHORIZED]
@@ -1488,6 +1492,35 @@ def run_validator(
     if group is not None:
         receipt["remediation"] = proven_finding_evidence(view, validated, proof)
     return receipt
+
+
+def _ruff_refusal(
+    view: state.AuthorizationView, validated: core.ValidatedReplacementResult, failure: core.RuffSafetyFailure
+) -> RoleRefused:
+    """ADR 0039 L10: the narrow recoverable refusal, or the generic one when it cannot be proven.
+
+    A finding remediation or an L9 recovery runs on a published lineage branch, so it is never repaired here.
+    """
+
+    bound = view.evidence[state.AUTHORIZED]
+    diagnostics = [dict(item) for item in failure.diagnostics]
+    if (
+        bound.get("remediation") is not None
+        or bound.get("preflight_recovery") is not None
+        or not state.ruff_diagnostics_conform(diagnostics)
+    ):
+        return RoleRefused("PRE_PUSH_SAFETY_FAILED", "the trusted pre-push safety refused the candidate")
+    return RoleRefused(
+        state.VALIDATOR_RECOVERY_TRIGGER,
+        "trusted Ruff reproduced findings on files the result wrote",
+        receipt_detail={
+            "ruff_failure": {
+                "result_sha256": validated.result_sha256,
+                "diagnostics_sha256": state.ruff_diagnostics_digest(diagnostics),
+                "diagnostics": diagnostics,
+            }
+        },
+    )
 
 
 def _prove_remediation(

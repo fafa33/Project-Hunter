@@ -51,6 +51,7 @@ from hunter.automation.issue_agent_execution import (
     compose_governed_compilation,
     derive_execution_target,
     is_preflight_recovery,
+    is_validator_recovery,
     issue_agent_intake_reference,
     issue_agent_task_request,
     verify_signed_authorization,
@@ -269,6 +270,17 @@ def _plus(timestamp: str, delta: timedelta) -> str:
     return (state._instant(timestamp) + delta).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _validator_recovery_evidence(remediation: Mapping[str, Any]) -> dict[str, Any]:
+    """The ledger's flat ``validator_recovery`` group for one closed L10 authorization group."""
+
+    return {
+        "parent_authorization_id": remediation["parent_authorization_id"],
+        "bound_base_sha": remediation["bound_head_sha"],
+        "attempt": remediation["attempt"],
+        **remediation["validator_failure"],
+    }
+
+
 def _definitive(probe: Callable[[], Any], code: str) -> Any:
     try:
         return probe()
@@ -330,7 +342,16 @@ def prepare(
     if view.active is not None:
         raise AuthorizeRefused("ISSUE_EXECUTION_ACTIVE", "another authorization for this Issue is active")
     remediation = authorization.remediation if isinstance(authorization, IssueAgentRemediationAuthorization) else None
-    if remediation is not None and is_preflight_recovery(remediation):
+    if remediation is not None and is_validator_recovery(remediation):
+        # ADR 0039 L10: the same rule the ledger fold applies, read before the claim.
+        refusal = state.validator_recovery_refusal(
+            view, _validator_recovery_evidence(remediation), branch=target.branch
+        )
+        if refusal is not None:
+            raise AuthorizeRefused("NOT_ELIGIBLE", refusal)
+        if _definitive(lambda: dependencies.open_issue_agent_pull_request(issue), "ISSUE_HAS_ACTIVE_DRAFT_PR"):
+            raise AuthorizeRefused("ISSUE_HAS_ACTIVE_DRAFT_PR", "an Issue-Agent pull request is open for this Issue")
+    elif remediation is not None and is_preflight_recovery(remediation):
         # ADR 0039 L9: the parent is this Issue's authorization that failed exactly CANDIDATE_PREFLIGHT_FAILED from
         # PUBLISHED at the bound head, on the same lineage branch, and the approved attempt budget still holds.
         refusal = state.preflight_recovery_refusal(
@@ -554,7 +575,9 @@ def prepare(
             "reconstruction_reason": "NO_CONFIDENTIAL_DURABLE_STORE",
         },
     }
-    if remediation is not None and is_preflight_recovery(remediation):
+    if remediation is not None and is_validator_recovery(remediation):
+        unsigned_evidence["validator_recovery"] = _validator_recovery_evidence(remediation)
+    elif remediation is not None and is_preflight_recovery(remediation):
         failure = remediation["preflight_failure"]
         unsigned_evidence["preflight_recovery"] = {
             "parent_authorization_id": remediation["parent_authorization_id"],

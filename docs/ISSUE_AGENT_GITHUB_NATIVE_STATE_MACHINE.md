@@ -324,6 +324,17 @@ From `FALLBACK_AUTHORIZED`:
 | Unstarted recovery (Issue #716) | `FAILED(EXECUTION_NOT_STARTED)` from `AUTHORIZED` with no other evidence, **and** every `execute`/`execute-fallback` job of the bound `authorize_run_id` run (all attempts, complete listing) completed `skipped` → recoverable at the same head, spends the unstarted budget (3), not the execution budget (2); anything less is an execution or, for the parent, `BLOCKED` |
 | Terminal / recovery | the recovery is an ordinary authorization: T5 `COMPLETED` (one Draft PR) or `CANDIDATE_PREFLIGHT_FAILED` again, after which the budget decides; exhausted → the last FAILED record is the durable BLOCKED state for an owner decision |
 
+### Validator Ruff repair (ADR 0039 L10, Issue #706)
+
+| Aspect | Rule |
+|---|---|
+| Trigger | `FAILED(PRE_PUSH_RUFF_FAILED)` from `RESULT_BOUND` with its signed `ruff_failure` group; never the generic `PRE_PUSH_SAFETY_FAILED` |
+| Eligible | newest authorization on the branch, never published (no finding remediation or L9 recovery in its bindings); the branch does not exist; no open PR; base still on main; Issue title and body unchanged; budget remains |
+| Bound evidence | AUTHORIZED `validator_recovery` = `{parent_authorization_id, bound_base_sha, attempt, result_sha256, validator_run_id, validator_run_attempt, validator_job_id, diagnostics_sha256, diagnostics}`; `execution_branch` = the parent's; `base_sha` = the parent's |
+| CAS / idempotency key | the authorization identity is a pure function of the live Issue claims and the signed failure; the AUTHORIZED claim is the usual CAS; `authorize` and the ledger fold apply `validator_recovery_refusal` |
+| Budget | shared with L9: at most 2 executed repairs per lineage; an unstarted repair keeps the same signed failure and spends the unstarted budget |
+| Publication | create-only, as for the Issue path; the failed result is never published or mutated |
+
 ### TF: any non-terminal → FAILED
 
 - **Actor.** Any control role running `advance`.

@@ -105,6 +105,9 @@ FAILURE_CODES: Final = frozenset(
         "SECRET_IN_RESULT",
         "TRANSPORT_INTEGRITY_FAILED",
         "PRE_PUSH_SAFETY_FAILED",
+        # ADR 0039 L10: the one narrow validator refusal an automated repair may start from. Never inferred from the
+        # generic PRE_PUSH_SAFETY_FAILED, which stays terminal.
+        "PRE_PUSH_RUFF_FAILED",
         "VALIDATION_UNAVAILABLE",
         "RESULT_TRANSPORT_EXPIRED",
         "PUBLICATION_UNAVAILABLE",
@@ -160,7 +163,13 @@ FALLBACK_SIGNAL_CATEGORIES: Final = frozenset(
 FALLBACK_EXECUTORS: Final = frozenset({"codex"})
 #: Terminal refusals the trusted validator step may report (SM T3 outcomes).
 VALIDATION_REFUSAL_CODES: Final = frozenset(
-    {"TRANSPORT_INTEGRITY_FAILED", "EXECUTOR_RESULT_REJECTED", "SECRET_IN_RESULT", "PRE_PUSH_SAFETY_FAILED"}
+    {
+        "TRANSPORT_INTEGRITY_FAILED",
+        "EXECUTOR_RESULT_REJECTED",
+        "SECRET_IN_RESULT",
+        "PRE_PUSH_SAFETY_FAILED",
+        "PRE_PUSH_RUFF_FAILED",
+    }
 )
 #: Terminal refusals the trusted publisher step may report (SM T4: live Issue gate, platform refusal, transport).
 PUBLICATION_REFUSAL_CODES: Final = frozenset(
@@ -464,6 +473,21 @@ POSITIVE = _int(1)
 #: ASCII model prose. Nothing confidential (prompt, source corpus, evidence database) can pass these shapes.
 _TEST_ID = re.compile(r"tests/[A-Za-z0-9_./-]{1,200}\.py::[A-Za-z0-9_\[\]-]{1,200}")
 _PATH = re.compile(r"[A-Za-z0-9._@+/-]{1,512}")
+#: ADR 0039 L10: the closed facts of one trusted Ruff finding. Never a message: a message can quote source.
+_RUFF_CODE = re.compile(r"[A-Z]{1,4}[0-9]{1,4}")
+_RUFF_PATH = re.compile(r"[A-Za-z0-9_.@+-]{1,128}(?:/[A-Za-z0-9_.@+-]{1,128}){0,31}")
+MAX_RUFF_DIAGNOSTICS: Final = 32
+_RUFF_DIAGNOSTIC = _object(
+    {"path": _pattern(_RUFF_PATH), "code": _pattern(_RUFF_CODE), "row": _int(1), "column": _int(1)}
+)
+_RUFF_FAILURE: Final[Mapping[str, Validator]] = {
+    "result_sha256": SHA64,
+    "validator_run_id": POSITIVE,
+    "validator_run_attempt": POSITIVE,
+    "validator_job_id": POSITIVE,
+    "diagnostics_sha256": SHA64,
+    "diagnostics": _list(_RUFF_DIAGNOSTIC, maximum=MAX_RUFF_DIAGNOSTICS),
+}
 _FAMILY_ID = re.compile(r"DFF-[0-9]{3}")
 _FAMILY_TITLE = re.compile(r"[a-z0-9][a-z0-9-]{2,99}")
 _FAMILY_TEXT = re.compile(r"[\x20-\x7e]{12,1000}")
@@ -601,6 +625,15 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
                     "failed_test_ids": _list(_pattern(_TEST_ID), maximum=16),
                 }
             ),
+            # ADR 0039 L10: present only on a repair of the parent's signed pre-publication Ruff failure.
+            "validator_recovery": _object(
+                {
+                    "parent_authorization_id": AUTHORIZATION_ID,
+                    "bound_base_sha": SHA40,
+                    "attempt": _int(1),
+                    **_RUFF_FAILURE,
+                }
+            ),
             # ADR 0039 L4: present only on a finding-driven remediation of the parent's open PR.
             "remediation": _object(
                 {
@@ -706,7 +739,9 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
         {
             "code": _enum(FAILURE_CODES),
             "failed_from_state": _enum({AUTHORIZED, FALLBACK_AUTHORIZED, RESULT_BOUND, VALIDATED, PUBLISHED}),
-        }
+        },
+        # ADR 0039 L10: present exactly on PRE_PUSH_RUFF_FAILED (cross-checked in the ledger fold).
+        optional={"ruff_failure": _object(_RUFF_FAILURE)},
     ),
 }
 _RESUME_REQUESTED = _object(
@@ -989,6 +1024,45 @@ MAX_UNSTARTED_PREFLIGHT_RECOVERIES: Final = 3
 MAX_PREFLIGHT_RECOVERY_AUTHORIZATIONS: Final = MAX_PREFLIGHT_RECOVERY_ATTEMPTS + MAX_UNSTARTED_PREFLIGHT_RECOVERIES
 #: The one terminal failure an automated recovery may start from: a deterministic exact-head Pre-PR failure.
 PREFLIGHT_RECOVERY_TRIGGER: Final = "CANDIDATE_PREFLIGHT_FAILED"
+#: ADR 0039 L10: the one validator refusal a repair may start from, before anything was published.
+VALIDATOR_RECOVERY_TRIGGER: Final = "PRE_PUSH_RUFF_FAILED"
+_RUFF_FAILURE_FIELDS: Final = tuple(_RUFF_FAILURE)
+
+
+def ruff_diagnostics_digest(diagnostics: Sequence[Mapping[str, Any]]) -> str:
+    """The digest that binds one exact, ordered list of trusted Ruff findings."""
+
+    return sha256_hex(canonical_json(list(diagnostics)))
+
+
+def ruff_diagnostics_conform(diagnostics: object) -> bool:
+    """One to ``MAX_RUFF_DIAGNOSTICS`` closed findings on repository-relative paths, canonically sorted."""
+
+    if not isinstance(diagnostics, list) or not 1 <= len(diagnostics) <= MAX_RUFF_DIAGNOSTICS:
+        return False
+    try:
+        for index, item in enumerate(diagnostics):
+            _RUFF_DIAGNOSTIC(item, f"diagnostics[{index}]")
+    except LedgerSchemaError:
+        return False
+    if any({".", ".."} & set(item["path"].split("/")) for item in diagnostics):
+        return False
+    keys = [(item["path"], item["row"], item["column"], item["code"]) for item in diagnostics]
+    return keys == sorted(set(keys))
+
+
+def _ruff_failure_conforms(group: Mapping[str, Any]) -> bool:
+    return ruff_diagnostics_conform(group["diagnostics"]) and group["diagnostics_sha256"] == ruff_diagnostics_digest(
+        group["diagnostics"]
+    )
+
+
+def recovery_group(item: AuthorizationView) -> Mapping[str, Any] | None:
+    """This authorization's automated-repair group (ADR 0039 L9 or L10), or ``None``."""
+
+    bound = item.evidence[AUTHORIZED]
+    group = bound.get("preflight_recovery")
+    return bound.get("validator_recovery") if group is None else group
 
 
 def preflight_recoveries(view: LedgerView, branch: str) -> list[AuthorizationView]:
@@ -997,7 +1071,7 @@ def preflight_recoveries(view: LedgerView, branch: str) -> list[AuthorizationVie
     return [
         view.authorizations[identity]
         for identity in view.claimed
-        if view.authorizations[identity].evidence[AUTHORIZED].get("preflight_recovery") is not None
+        if recovery_group(view.authorizations[identity]) is not None
         and view.authorizations[identity].binding("execution_branch") == branch
     ]
 
@@ -1016,7 +1090,7 @@ def recovery_unstarted_on_ledger(item: AuthorizationView) -> bool:
         and failure is not None
         and failure.get("code") == "EXECUTION_NOT_STARTED"
         and failure.get("failed_from_state") == AUTHORIZED
-        and item.evidence[AUTHORIZED].get("preflight_recovery") is not None
+        and recovery_group(item) is not None
         and set(item.evidence) == {AUTHORIZED, FAILED}
     )
 
@@ -1036,6 +1110,71 @@ def preflight_recovery_budget_refusal(
     if len(done) - started >= MAX_UNSTARTED_PREFLIGHT_RECOVERIES:
         return "the unstarted-recovery budget of this lineage is exhausted"
     return None
+
+
+def _recovers(item: AuthorizationView, parent_authorization_id: str) -> bool:
+    group = recovery_group(item)
+    return group is not None and group["parent_authorization_id"] == parent_authorization_id
+
+
+def validator_failure_source(parent: AuthorizationView) -> Mapping[str, Any] | None:
+    """ADR 0039 L10: the signed Ruff failure this parent carries, or ``None`` when it is not recoverable.
+
+    Either the parent itself failed ``PRE_PUSH_RUFF_FAILED`` from ``RESULT_BOUND``, or it is a repair the ledger
+    shows never reached execution, in which case the signed failure it was authorized for still stands.
+    """
+
+    failure = parent.evidence.get(FAILED)
+    if (
+        parent.state == FAILED
+        and failure is not None
+        and failure.get("code") == VALIDATOR_RECOVERY_TRIGGER
+        and failure.get("failed_from_state") == RESULT_BOUND
+    ):
+        return failure.get("ruff_failure")
+    if recovery_unstarted_on_ledger(parent):
+        return parent.evidence[AUTHORIZED].get("validator_recovery")
+    return None
+
+
+def validator_recovery_refusal(view: LedgerView, group: Mapping[str, Any], *, branch: str) -> str | None:
+    """ADR 0039 L10: why this repair of a signed pre-publication Ruff failure may not be claimed, or ``None``.
+
+    The one rule both ``authorize`` and the ledger fold apply. The repair binds the parent's exact signed failure
+    (result digest, validator run, attempt and job, diagnostic digest), the same base and the same branch, and
+    shares the lineage's one repair budget with L9.
+    """
+
+    parent_id = group["parent_authorization_id"]
+    parent = view.authorizations.get(parent_id)
+    if parent is None:
+        return "the recovery parent is not an authorization of this Issue"
+    if parent.binding("execution_branch") != branch:
+        return "a recovery runs only on its parent authorization's branch"
+    source = validator_failure_source(parent)
+    if source is None:
+        return "the recovery parent carries no signed pre-publication Ruff failure"
+    if parent.evidence[AUTHORIZED].get("remediation") is not None or (
+        parent.evidence[AUTHORIZED].get("preflight_recovery") is not None
+    ):
+        return "only a candidate that was never published is repaired before publication"
+    if parent.binding("base_sha") != group["bound_base_sha"]:
+        return "the bound base is not the parent's exact base"
+    if any(group[field] != source[field] for field in _RUFF_FAILURE_FIELDS):
+        return "the recovery does not bind the parent's exact signed failure"
+    if not _ruff_failure_conforms(group):
+        return "the recovery diagnostics do not conform to their digest"
+    lineage = [
+        identity for identity in view.claimed if view.authorizations[identity].binding("execution_branch") == branch
+    ]
+    if not lineage or lineage[-1] != parent_id:
+        return "the recovery parent is not the newest authorization on its branch"
+    done = preflight_recoveries(view, branch)
+    if any(_recovers(item, parent_id) for item in done):
+        return "this failed validation was already recovered"
+    if group["attempt"] != len(done) + 1:
+        return "the recovery attempt is not the next attempt of this lineage"
+    return preflight_recovery_budget_refusal(done)
 
 
 def preflight_recovery_refusal(
@@ -1063,7 +1202,9 @@ def preflight_recovery_refusal(
         and failure.get("code") == PREFLIGHT_RECOVERY_TRIGGER
         and failure.get("failed_from_state") == PUBLISHED
     )
-    interrupted_recovery = recovery_unstarted_on_ledger(parent)
+    interrupted_recovery = (
+        recovery_unstarted_on_ledger(parent) and parent.evidence[AUTHORIZED].get("preflight_recovery") is not None
+    )
     if parent.state != FAILED or not (original_preflight_failure or interrupted_recovery):
         return "the recovery parent did not fail its exact-head Pre-PR Preflight from PUBLISHED or an authorized recovery before execution"
     if parent.evidence[AUTHORIZED].get("remediation") is not None:
@@ -1085,10 +1226,7 @@ def preflight_recovery_refusal(
     if not lineage or lineage[-1] != parent_authorization_id:
         return "the recovery parent is not the newest authorization on its branch"
     done = preflight_recoveries(view, branch)
-    if any(
-        item.evidence[AUTHORIZED]["preflight_recovery"]["parent_authorization_id"] == parent_authorization_id
-        for item in done
-    ):
+    if any(_recovers(item, parent_authorization_id) for item in done):
         return "this failed preflight was already recovered"
     if attempt != len(done) + 1:
         return "the recovery attempt is not the next attempt of this lineage"
@@ -1100,7 +1238,18 @@ def _check_authorized_bindings(record: Mapping[str, Any], view: LedgerView | Non
     authorization_id = record["authorization_id"]
     remediation = evidence.get("remediation")
     recovery = evidence.get("preflight_recovery")
-    if recovery is not None:
+    validator = evidence.get("validator_recovery")
+    if validator is not None:
+        if remediation is not None or recovery is not None:
+            raise LedgerCorruptError("an authorization carries exactly one recovery or remediation group")
+        if view is None:
+            raise LedgerCorruptError("a validator recovery needs the Issue ledger it recovers")
+        refusal = validator_recovery_refusal(view, validator, branch=evidence["execution_branch"])
+        if refusal is not None:
+            raise LedgerCorruptError(refusal)
+        if evidence["base_sha"] != validator["bound_base_sha"]:
+            raise LedgerCorruptError("a validator recovery's base is not its parent's exact base")
+    elif recovery is not None:
         if remediation is not None:
             raise LedgerCorruptError("an authorization is either a finding remediation or a preflight recovery")
         if view is None:
@@ -1163,6 +1312,20 @@ def _check_authorized_bindings(record: Mapping[str, Any], view: LedgerView | Non
             raise LedgerCorruptError("the fallback handoff is not sealed to a distinct recipient")
         if second["run_id"] != primary["run_id"] or second["artifact_id"] == primary["artifact_id"]:
             raise LedgerCorruptError("the fallback handoff is not a distinct artifact of the authorize run")
+
+
+def _check_failed_bindings(view: AuthorizationView, evidence: Mapping[str, Any]) -> None:
+    """ADR 0039 L10: only ``PRE_PUSH_RUFF_FAILED`` carries findings, and they bind the result it refused."""
+
+    ruff = evidence.get("ruff_failure")
+    if (evidence["code"] == VALIDATOR_RECOVERY_TRIGGER) != (ruff is not None):
+        raise LedgerCorruptError("a Ruff failure and its signed diagnostics come together or not at all")
+    if ruff is not None and (
+        evidence["failed_from_state"] != RESULT_BOUND
+        or ruff["result_sha256"] != view.evidence[RESULT_BOUND]["result_plaintext_sha256"]
+        or not _ruff_failure_conforms(ruff)
+    ):
+        raise LedgerCorruptError("the signed Ruff failure does not bind the validated result and its digest")
 
 
 def _check_cross_bindings(view: AuthorizationView, record: Mapping[str, Any]) -> None:
@@ -1259,7 +1422,9 @@ def apply_record(
             assert current is not None
             if state == FAILED and record["evidence"]["failed_from_state"] != current.state:
                 raise LedgerCorruptError("failure does not name the state it left")
-            if state != FAILED:
+            if state == FAILED:
+                _check_failed_bindings(current, record["evidence"])
+            else:
                 _check_cross_bindings(current, record)
             current.state = state
             current.pending_resume = None

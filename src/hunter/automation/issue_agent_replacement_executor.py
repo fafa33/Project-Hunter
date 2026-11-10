@@ -44,6 +44,14 @@ class ReplacementExecutorError(RuntimeError):
     pass
 
 
+class RuffSafetyFailure(ReplacementExecutorError):
+    """ADR 0039 L10: Ruff alone failed, and trusted Ruff reproduced the findings on files the result wrote."""
+
+    def __init__(self, diagnostics: tuple[dict[str, Any], ...]) -> None:
+        super().__init__("candidate pre-push safety failed: gates=Ruff")
+        self.diagnostics = diagnostics
+
+
 @dataclass(frozen=True, slots=True)
 class CandidateFile:
     path: str
@@ -819,6 +827,94 @@ def failed_safety_gates(output: str) -> tuple[str, ...]:
     return tuple(names)
 
 
+_RUFF_RULE = re.compile(r"[A-Z]{1,4}[0-9]{1,4}")
+_MAX_RUFF_FINDINGS = 32
+
+
+def parse_trusted_ruff_report(
+    report: bytes, *, root: Path, changed_paths: frozenset[str]
+) -> tuple[dict[str, Any], ...] | None:
+    """Closed findings from ``ruff check --output-format=json``, or ``None`` when anything is unexpected.
+
+    Only the rule, the repository-relative path and the position survive. The message is dropped because it can
+    quote candidate source. A finding on a file the result did not write, a rule-less finding (a syntax error), or
+    more findings than the bound is not a repair this lane may start.
+    """
+    try:
+        document = json.loads(report)
+    except ValueError:
+        return None
+    if not isinstance(document, list) or not 1 <= len(document) <= _MAX_RUFF_FINDINGS:
+        return None
+    findings: set[tuple[str, int, int, str]] = set()
+    for item in document:
+        location = item.get("location") if isinstance(item, Mapping) else None
+        if not isinstance(item, Mapping) or not isinstance(location, Mapping):
+            return None
+        code, filename, row, column = (
+            item.get("code"),
+            item.get("filename"),
+            location.get("row"),
+            location.get("column"),
+        )
+        if not isinstance(code, str) or _RUFF_RULE.fullmatch(code) is None or not isinstance(filename, str):
+            return None
+        if type(row) is not int or type(column) is not int or row < 1 or column < 1:
+            return None
+        try:
+            path = Path(filename).resolve().relative_to(root.resolve()).as_posix()
+        except (ValueError, OSError):
+            return None
+        if path not in changed_paths:
+            return None
+        findings.add((path, row, column, code))
+    return tuple(
+        {"path": path, "code": code, "row": row, "column": column} for path, row, column, code in sorted(findings)
+    )
+
+
+def _trusted_ruff_diagnostics(
+    repo: Path, *, validated: ValidatedReplacementResult, ref: str, head: str, root: Path, home: Path, user: str
+) -> tuple[dict[str, Any], ...] | None:
+    """Reproduce a claimed Ruff failure with the pinned Ruff binary and the trusted base's configuration.
+
+    The safety lane above is candidate-controlled, so its report only *names* Ruff. This reruns the check in a
+    fresh clone the lane never touched, with the base's ``pyproject.toml`` replacing the candidate's and passed
+    explicitly (which turns off nested configuration discovery). Ruff parses files and executes none of them.
+    """
+    binary = shutil.which("ruff")
+    if binary is None or not Path(binary).is_absolute():
+        return None
+    lint = root / "lint"
+    _git_plumbing(
+        repo, "-c", "core.hooksPath=/dev/null", "clone", "--quiet", "--no-hardlinks", "--no-checkout", str(repo), str(lint)
+    )  # fmt: skip
+    _git_plumbing(lint, "-c", "core.hooksPath=/dev/null", "fetch", "--quiet", "origin", ref)
+    _git_plumbing(lint, "-c", "core.hooksPath=/dev/null", "checkout", "--quiet", "--detach", head)
+    (lint / "pyproject.toml").write_bytes(git_blob(repo, f"{validated.base_sha}:pyproject.toml"))
+    run_privileged("chown", "-R", user, str(lint))
+    try:
+        completed = subprocess.run(
+            isolated_command(
+                user,
+                untrusted_environment(os.environ, home=home, pythonpath=lint / "src"),
+                (binary, "check", "--config", "pyproject.toml", "--no-cache", "--no-fix", "--output-format=json", "."),
+            ),
+            cwd=lint,
+            env=dict(SUDO_ENVIRONMENT),
+            capture_output=True,
+            check=False,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    if completed.returncode != 1:
+        return None
+    return parse_trusted_ruff_report(
+        completed.stdout, root=lint, changed_paths=frozenset(item.path for item in validated.files)
+    )
+
+
 def _candidate_origin(validated: ValidatedReplacementResult, push_url: str) -> str:
     """The credential-free GitHub URL of exactly the authorized repository, or refuse.
 
@@ -897,6 +993,15 @@ def _run_pre_push_safety(
             )
             summary = ",".join(gates) or "UNCLASSIFIED"
             print(f"candidate pre-push safety failed: gates={summary} exit={completed.returncode}", flush=True)
+            if gates == ("Ruff",):
+                diagnostics = _trusted_ruff_diagnostics(
+                    repo, validated=validated, ref=ref, head=head, root=root, home=home, user=user
+                )
+                print(
+                    f"candidate trusted ruff findings: {len(diagnostics) if diagnostics else 'unconfirmed'}", flush=True
+                )
+                if diagnostics:
+                    raise RuffSafetyFailure(diagnostics)
             raise ReplacementExecutorError(f"candidate pre-push safety failed: gates={summary}")
     finally:
         try:

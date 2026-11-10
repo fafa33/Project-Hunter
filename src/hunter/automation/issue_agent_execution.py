@@ -79,6 +79,7 @@ from hunter.automation.agent_fallback_runtime import (
     AgentFallbackRuntimeError,
     AgentFallbackRuntimeReceipt,
 )
+from hunter.automation.issue_agent_state import ruff_diagnostics_conform, ruff_diagnostics_digest
 from hunter.automation.n8n_handoff import PromptAutomationHandoffError, serialize_prompt_automation_handoff
 from hunter.evidence_intelligence.engineering_context_authority import EngineeringContextAuthority
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
@@ -613,6 +614,19 @@ class IssueAgentAuthorization:
         return authorization
 
 
+VALIDATOR_RECOVERY_GROUP_FIELDS: Final = frozenset(
+    {"parent_authorization_id", "branch", "bound_head_sha", "attempt", "validator_failure"}
+)
+_VALIDATOR_FAILURE_FIELDS: Final = frozenset(
+    {
+        "result_sha256",
+        "validator_run_id",
+        "validator_run_attempt",
+        "validator_job_id",
+        "diagnostics_sha256",
+        "diagnostics",
+    }
+)
 PREFLIGHT_RECOVERY_GROUP_FIELDS: Final = frozenset(
     {"parent_authorization_id", "branch", "bound_head_sha", "attempt", "preflight_failure"}
 )
@@ -623,6 +637,50 @@ def is_preflight_recovery(remediation: object) -> bool:
     """Whether a remediation group is the ADR 0039 L9 preflight-recovery shape (else the L4 finding shape)."""
 
     return isinstance(remediation, Mapping) and "preflight_failure" in remediation
+
+
+def is_validator_recovery(remediation: object) -> bool:
+    """Whether a remediation group is the ADR 0039 L10 pre-publication Ruff repair shape."""
+
+    return isinstance(remediation, Mapping) and "validator_failure" in remediation
+
+
+def _validate_validator_recovery_group(remediation: dict[str, Any], *, issue_number: int) -> dict[str, Any]:
+    """ADR 0039 L10: the closed repair group; ``bound_head_sha`` is the parent's exact, unchanged base."""
+
+    if set(remediation) != VALIDATOR_RECOVERY_GROUP_FIELDS:
+        raise IssueAgentAuthorizationError("validator recovery group schema mismatch")
+    parent = remediation["parent_authorization_id"]
+    prefix, separator, digest = parent.partition(":") if isinstance(parent, str) else ("", "", "")
+    if (
+        prefix != ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX
+        or not separator
+        or not _AUTHORIZATION_DIGEST_RE.fullmatch(digest)
+    ):
+        raise IssueAgentAuthorizationError("validator recovery parent is not a canonical authorization identity")
+    branch = remediation["branch"]
+    match = _ISSUE_BRANCH_RE.fullmatch(branch) if isinstance(branch, str) else None
+    if match is None or int(match.group(1)) != issue_number:
+        raise IssueAgentAuthorizationError("validator recovery branch is not an Issue-agent branch of this Issue")
+    attempt = remediation["attempt"]
+    if type(attempt) is not int or not 1 <= attempt <= MAX_PREFLIGHT_RECOVERY_AUTHORIZATIONS:
+        raise IssueAgentAuthorizationError("validator recovery attempt is outside the approved budget")
+    head = remediation["bound_head_sha"]
+    if not isinstance(head, str) or not _COMMIT_SHA_RE.fullmatch(head):
+        raise IssueAgentAuthorizationError("validator recovery must bind the exact base")
+    failure = remediation["validator_failure"]
+    if not isinstance(failure, dict) or set(failure) != _VALIDATOR_FAILURE_FIELDS:
+        raise IssueAgentAuthorizationError("validator failure evidence schema mismatch")
+    for name in ("validator_run_id", "validator_run_attempt", "validator_job_id"):
+        if type(failure[name]) is not int or failure[name] < 1:
+            raise IssueAgentAuthorizationError(f"validator failure {name} must be a positive integer")
+    if not isinstance(failure["result_sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", failure["result_sha256"]):
+        raise IssueAgentAuthorizationError("validator failure must bind the parent result digest")
+    if not ruff_diagnostics_conform(failure["diagnostics"]) or failure["diagnostics_sha256"] != ruff_diagnostics_digest(
+        failure["diagnostics"]
+    ):
+        raise IssueAgentAuthorizationError("validator failure diagnostics do not conform to their digest")
+    return remediation
 
 
 def _validate_preflight_recovery_group(remediation: dict[str, Any], *, issue_number: int) -> dict[str, Any]:
@@ -685,6 +743,8 @@ def validate_remediation_group(remediation: object, *, issue_number: int) -> dic
     ADR 0039 L9 admits exactly one other closed shape, the preflight-recovery group; the two never mix.
     """
 
+    if isinstance(remediation, dict) and is_validator_recovery(remediation):
+        return _validate_validator_recovery_group(remediation, issue_number=issue_number)
     if isinstance(remediation, dict) and is_preflight_recovery(remediation):
         return _validate_preflight_recovery_group(remediation, issue_number=issue_number)
     expected = {"parent_authorization_id", "pull_request_number", "branch", "bound_head_sha", "attempt", "findings"}
@@ -846,7 +906,17 @@ def issue_agent_task_text(authorization: IssueAgentAuthorization) -> str:
     }
     if isinstance(authorization, IssueAgentRemediationAuthorization):
         assert authorization.remediation is not None
-        if is_preflight_recovery(authorization.remediation):
+        if is_validator_recovery(authorization.remediation):
+            # ADR 0039 L10: the task again from the same base, plus the exact trusted findings of the failed attempt.
+            text["validator_ruff_recovery_of_branch"] = authorization.remediation["branch"]
+            text["validator_ruff_failed_base_sha"] = authorization.remediation["bound_head_sha"]
+            text["validator_ruff_findings"] = authorization.remediation["validator_failure"]["diagnostics"]
+            text["validator_ruff_instruction"] = (
+                "A previous attempt at this task was refused before publication because Ruff reported these findings "
+                "on the files it wrote. That attempt is not available. Complete the task from the base and do not "
+                "reintroduce these findings."
+            )
+        elif is_preflight_recovery(authorization.remediation):
             # ADR 0039 L9: a bounded recovery task -- the exact failing tests of the exact failed head.
             text["preflight_recovery_of_branch"] = authorization.remediation["branch"]
             text["preflight_failed_head_sha"] = authorization.remediation["bound_head_sha"]

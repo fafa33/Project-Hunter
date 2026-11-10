@@ -11,6 +11,8 @@ plus the A-3 live evidence and zero open architecture blockers). Governed by Iss
   (Railway deletion, revocation) happens before its slice's prerequisites hold.
 - **Gate status.** ADR 0037 and [ADR 0038](0038-source-handling-github-native-authority-store.md) are
   accepted, and every item in [Blocker status](#blocker-status) is closed.
+- **Amended 2026-11-10 by [ADR 0039 L10](0039-review-knowledge-remediation-loop.md)** (a signed, bounded repair of a
+  pre-publication validator Ruff failure, Issue #706).
 - **Amended 2026-11-09 by [ADR 0039 L9](0039-review-knowledge-remediation-loop.md)** (owner decisions D1–D3,
   Issue #706). `FAILED` stays terminal for its own authorization. A `FAILED(CANDIDATE_PREFLIGHT_FAILED)` from
   `PUBLISHED` may now be followed by at most two signed, budgeted recovery authorizations on the **same** branch,
