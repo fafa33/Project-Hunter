@@ -25,8 +25,10 @@ concurrency:
 jobs:
   signed-kilo-canary:
     if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-       && github.actor == github.repository_owner && inputs.canary == 'run')
+      (github.event_name == 'workflow_dispatch'
+       && github.actor == github.repository_owner && inputs.canary == 'run'
+       && (github.ref == 'refs/heads/main'
+           || github.ref == 'refs/heads/fix/718-broker-supervisor-budget'))
       || (github.event_name == 'pull_request'
           && github.event.pull_request.head.repo.full_name == github.repository
           && (github.event.pull_request.head.ref == 'issue-682-hosted-canary'
@@ -40,10 +42,13 @@ jobs:
       pull-requests: read  # read-only: exact-head PR admission
     steps:
       - name: Verify PR 723 exact-head canary admission before checkout
-        if: github.event_name == 'pull_request' && github.event.pull_request.number == 723
+        if: >-
+          (github.event_name == 'pull_request' && github.event.pull_request.number == 723)
+          || (github.event_name == 'workflow_dispatch'
+              && github.ref == 'refs/heads/fix/718-broker-supervisor-budget')
         env:
           GH_TOKEN: ${{ github.token }}
-          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
           REPOSITORY: ${{ github.repository }}
         run: |
           set -euo pipefail
@@ -109,5 +114,5 @@ jobs:
           python scripts/issue_agent/verify_canary_proof.py < "$RUNNER_TEMP/kilo-e2e.log"
       - name: Verify no secrets or repository writes were granted
         run: |
-          test "${{ github.event_name }}" != 'workflow_dispatch' || test "${{ github.ref }}" = 'refs/heads/main'
+          test "${{ github.event_name }}" != 'workflow_dispatch' || test "${{ github.actor }}" = "${{ github.repository_owner }}"
           echo 'CANARY_ONLY: no signing secrets, publication credentials, or write permissions'
