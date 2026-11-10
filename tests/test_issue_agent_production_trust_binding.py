@@ -66,6 +66,7 @@ def test_canary_workflow_grants_no_secrets_and_no_write_permission() -> None:
     workflow = yaml.safe_load((ROOT / ".github/workflows/hunter-issue682-hosted-canary.yml").read_text())
     assert workflow["permissions"] == {}
     job = workflow["jobs"]["signed-kilo-canary"]
-    assert job["permissions"] == {"actions": "read"}
+    assert job["permissions"] == {"actions": "read", "pull-requests": "read"}
+    assert all(permission == "read" for permission in job["permissions"].values())
     text = json.dumps(workflow)
     assert "secrets." not in text and "environment" not in job

@@ -127,6 +127,12 @@ def test_signed_authorization_real_kilo_sealed_result_independent_validator(
     if os.environ.get("GITHUB_EVENT_PATH"):
         event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
     pull_request = event.get("pull_request", {})
+    # workflow_dispatch has no pull_request payload; admission verifies this exact
+    # owner-controlled PR/head against GitHub before running the isolated agent.
+    if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
+        assert event.get("inputs", {}).get("canary") == "run"
+        assert os.environ.get("GITHUB_REF") == "refs/heads/fix/718-broker-supervisor-budget"
+        pull_request = {"number": 723, "head": {"sha": os.environ["GITHUB_SHA"]}}
     proof = {
         "repository": os.environ.get("GITHUB_REPOSITORY"),
         "pull_request": pull_request.get("number"),

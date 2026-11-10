@@ -92,7 +92,8 @@ def test_prepared_containers_have_no_docker_socket_host_home_or_privileges(tmp_p
     assert f"type=bind,src={workspace},dst=/workspace,readonly" in broker_run  # broker cannot write the workspace
     assert f"HUNTER_BROKER_MAX_COMMANDS={kilo_port.BROKER_MAX_COMMANDS}" in broker_run
     assert f"HUNTER_BROKER_DEADLINE_SECONDS={kilo_port.BROKER_DEADLINE_SECONDS}" in broker_run
-    assert kilo_port.BROKER_DEADLINE_SECONDS < 12 * 60  # strictly inside the model wall clock
+    assert kilo_port.KILO_HARD_CEILING_SECONDS < kilo_port.BROKER_DEADLINE_SECONDS < 20 * 60
+    # Regression: the broker must never expire before the progress-aware supervisor.
     sources = {part.split("src=")[1].split(",")[0] for part in broker_run if part.startswith("type=bind")}
     assert sources == {
         str(workspace),

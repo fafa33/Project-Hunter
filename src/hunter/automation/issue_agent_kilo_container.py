@@ -31,7 +31,10 @@ KILO_IMAGE = "hunter-682-kilo-canary:local"
 BROKER_IMAGE = "hunter-682-broker-canary:local"
 # Explicit repair-loop budgets enforced by the broker (fail closed on exhaustion).
 BROKER_MAX_COMMANDS = 32
-BROKER_DEADLINE_SECONDS = 660  # strictly below the 12 minute model timeout
+# The broker must outlive the progress-aware model supervisor (900s). Previously
+# 660s silently disabled the supervisor while Kilo was still using the broker.
+# A 60s margin covers broker startup and shutdown; the hosted 1200s job remains the backstop.
+BROKER_DEADLINE_SECONDS = 960
 PYTHON_IMAGE = "python@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea"
 
 # Issue #705: hosted run 42739368326 was killed by the flat MODEL_TIMEOUT_SECONDS wall clock while Kilo was still
@@ -47,6 +50,7 @@ KILO_IDLE_STALL_SECONDS: Final = 360.0
 # trusted collection and diagnostics that follow still have time to run.
 KILO_HARD_CEILING_SECONDS: Final = 900.0
 KILO_POLL_INTERVAL_SECONDS: Final = 10.0
+assert KILO_HARD_CEILING_SECONDS < BROKER_DEADLINE_SECONDS < 1200
 
 
 #: ADR 0041 F8: the gateway's content-free refusal line (``model_egress_gateway.REFUSED_HOST_MARKER``).
