@@ -19,6 +19,15 @@ def getter(*, sha=HEAD, issues=None, total=None):
     def get(url: str):
         if "project_pull_requests" in url:
             return {"pullRequests": [{"key": "494", "commit": {"sha": sha}}]}
+        if "measures/component" in url:
+            return {
+                "component": {
+                    "measures": [
+                        {"metric": "new_duplicated_lines_density", "periods": [{"value": "0.0"}]},
+                        {"metric": "new_duplicated_lines", "periods": [{"value": "0"}]},
+                    ]
+                }
+            }
         return {"issues": issue_list, "total": len(issue_list) if total is None else total}
 
     return get
@@ -72,6 +81,15 @@ def test_analysis_sha_is_revalidated_after_issue_fetch():
     calls = {"meta": 0}
 
     def get(url: str):
+        if "measures/component" in url:
+            return {
+                "component": {
+                    "measures": [
+                        {"metric": "new_duplicated_lines_density", "periods": [{"value": "0"}]},
+                        {"metric": "new_duplicated_lines", "periods": [{"value": "0"}]},
+                    ]
+                }
+            }
         if "project_pull_requests" in url:
             calls["meta"] += 1
             sha = HEAD if calls["meta"] == 1 else "c" * 40
@@ -168,3 +186,35 @@ def test_sonar_observation_enters_existing_signed_ledger_ingestion_contract():
             trusted_reviewers=frozenset(),
         )["finding_id"]
     )
+
+
+def test_duplication_quality_gate_failure_is_ingested_without_claiming_authority():
+    def get(url: str):
+        if "measures/component" in url:
+            return {
+                "component": {
+                    "measures": [
+                        {"metric": "new_duplicated_lines_density", "periods": [{"value": "6.9"}]},
+                        {"metric": "new_duplicated_lines", "periods": [{"value": "33"}]},
+                    ]
+                }
+            }
+        return getter()(url)
+
+    rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=get)
+    assert len(rows) == 1
+    assert rows[0]["event_id"] == f"sonar-duplication-{HEAD}"
+    assert "6.9%" in rows[0]["message"]
+    assert rows[0]["classification"] is None
+    assert rows[0]["claimed_family_id"] is None
+
+
+def test_missing_duplication_metrics_cannot_be_reported_as_clean():
+    def get(url: str):
+        if "measures/component" in url:
+            return {"component": {"measures": []}}
+        return getter()(url)
+
+    rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=get)
+    assert rows[0]["availability"] == "unavailable"
+    assert "duplication" in rows[0]["message"]

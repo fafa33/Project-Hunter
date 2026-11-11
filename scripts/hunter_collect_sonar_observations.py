@@ -92,6 +92,34 @@ def collect(project: str, pr: int, head: str, base: str, *, get_json: JsonGetter
             return _unavailable(pr, head, base, "Sonar issue payload contains a malformed issue")
         combined = {item["key"]: item for item in raw_issues}
         issues_payload = {"issues": list(combined.values()), "total": len(combined)}
+        # Sonar quality-gate duplication is a metric, not an issues/search issue.
+        # Capture it as an observation, never as independent remediation authority.
+        measures = get_json(
+            _url(
+                "measures/component",
+                component=project,
+                pullRequest=pr,
+                metricKeys="new_duplicated_lines_density,new_duplicated_lines",
+            )
+        )
+        raw_measures = measures.get("component", {}).get("measures") if isinstance(measures, dict) else None
+        if not isinstance(raw_measures, list):
+            return _unavailable(pr, head, base, "Sonar duplication measures unavailable")
+        metrics = {}
+        for measure in raw_measures:
+            if not isinstance(measure, dict):
+                return _unavailable(pr, head, base, "Sonar duplication measure malformed")
+            periods = measure.get("periods")
+            if not isinstance(periods, list) or len(periods) != 1 or not isinstance(periods[0], dict):
+                return _unavailable(pr, head, base, "Sonar duplication period unavailable")
+            metrics[measure.get("metric")] = periods[0].get("value")
+        try:
+            density = float(metrics["new_duplicated_lines_density"])
+            duplicated = int(metrics["new_duplicated_lines"])
+            if not (0 <= density <= 100 and 0 <= duplicated <= 1000000):
+                raise ValueError("invalid duplication metric")
+        except (ValueError, TypeError, KeyError, OverflowError):
+            return _unavailable(pr, head, base, "Sonar duplication measures invalid")
         # Close the TOCTOU window: a newer Sonar analysis can replace the PR
         # issue view between the first metadata read and issues/search.
         refreshed = get_json(_url("project_pull_requests/list", project=project))
@@ -148,6 +176,28 @@ def collect(project: str, pr: int, head: str, base: str, *, get_json: JsonGetter
                 "path": path,
                 "line": line,
                 "message": f"[{severity}] {rule}: {message} [sonar_status={issue_status}]",
+                "availability": "available",
+                "classification": None,
+                "invariant": None,
+                "affected_paths": [],
+                "fix_reference": None,
+                "regression_evidence": [],
+                "claimed_family_id": None,
+            }
+        )
+    if density > 3.0:
+        observations.append(
+            {
+                "source": "sonar",
+                "provider": "sonar",
+                "event_id": f"sonar-duplication-{head}",
+                "source_pr": pr,
+                "reviewed_head_sha": head,
+                "reviewed_base_sha": base,
+                "reviewer": "sonarqube-cloud",
+                "path": None,
+                "line": None,
+                "message": f"Sonar new-code duplication gate failed: {density}% > 3.0% ({duplicated} lines)",
                 "availability": "available",
                 "classification": None,
                 "invariant": None,
