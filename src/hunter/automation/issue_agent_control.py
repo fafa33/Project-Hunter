@@ -1212,33 +1212,18 @@ def eligible_preflight_recovery(
     )
 
 
-@dataclass(frozen=True, slots=True)
-class ValidatorRecoveryCandidate:
-    """One signed, repairable pre-publication Ruff failure (ADR 0039 L10). Every field is a ledger fact."""
+def _prepublication_recovery_facts(
+    github: GitHub,
+    configuration: Configuration,
+    view: state.LedgerView,
+    issue: int,
+    parent: state.AuthorizationView,
+) -> tuple[str, str, int] | PreflightFailureClass | None:
+    """Shared fail-closed live admission for signed pre-publication recovery.
 
-    branch: str
-    bound_base_sha: str
-    parent_authorization_id: str
-    attempt: int
-    failure: Mapping[str, Any]
-
-
-def eligible_validator_recovery(
-    github: GitHub, configuration: Configuration, view: state.LedgerView, issue: int
-) -> ValidatorRecoveryCandidate | PreflightFailureClass | None:
-    """ADR 0039 L10: the one repairable Ruff failure of this Issue, why it stays terminal, or ``None``.
-
-    Only the signed ledger names the failure: no log, comment or receipt is read here. The live facts can only
-    narrow it. A branch that now exists, a pull request, a base no longer on main, or an edited Issue is stale, and
-    every indefinite read stops the pass. ``authorize`` and the ledger fold re-apply the binding rules under CAS.
+    Validator and executor-timeout recovery must not drift in budget, branch,
+    base, Issue claims, or unknown-fact handling.
     """
-
-    if view.active is not None or not view.claimed:
-        return None
-    parent = view.authorizations[view.claimed[-1]]
-    source = state.validator_failure_source(parent)
-    if source is None:
-        return None
     bound = parent.evidence[state.AUTHORIZED]
     if bound.get("remediation") is not None or bound.get("preflight_recovery") is not None:
         return PreflightFailureClass("unknown", reason="a published lineage is never repaired before publication")
@@ -1270,11 +1255,45 @@ def eligible_validator_recovery(
         or state.sha256_hex(str(live.get("body") or "").encode("utf-8")) != claims["body_sha256"]
     ):
         return PreflightFailureClass("unknown", reason="the Issue changed after the failed authorization")
+    return branch, base, len(done) + 1
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatorRecoveryCandidate:
+    """One signed, repairable pre-publication Ruff failure (ADR 0039 L10). Every field is a ledger fact."""
+
+    branch: str
+    bound_base_sha: str
+    parent_authorization_id: str
+    attempt: int
+    failure: Mapping[str, Any]
+
+
+def eligible_validator_recovery(
+    github: GitHub, configuration: Configuration, view: state.LedgerView, issue: int
+) -> ValidatorRecoveryCandidate | PreflightFailureClass | None:
+    """ADR 0039 L10: the one repairable Ruff failure of this Issue, why it stays terminal, or ``None``.
+
+    Only the signed ledger names the failure: no log, comment or receipt is read here. The live facts can only
+    narrow it. A branch that now exists, a pull request, a base no longer on main, or an edited Issue is stale, and
+    every indefinite read stops the pass. ``authorize`` and the ledger fold re-apply the binding rules under CAS.
+    """
+
+    if view.active is not None or not view.claimed:
+        return None
+    parent = view.authorizations[view.claimed[-1]]
+    source = state.validator_failure_source(parent)
+    if source is None:
+        return None
+    admitted = _prepublication_recovery_facts(github, configuration, view, issue, parent)
+    if not isinstance(admitted, tuple):
+        return admitted
+    branch, base, attempt = admitted
     return ValidatorRecoveryCandidate(
         branch=branch,
         bound_base_sha=base,
         parent_authorization_id=parent.authorization_id,
-        attempt=len(done) + 1,
+        attempt=attempt,
         failure=dict(source),
     )
 
@@ -1307,42 +1326,15 @@ def eligible_timeout_recovery(
     source = state.timeout_failure_source(parent)
     if source is None:
         return None
-    bound = parent.evidence[state.AUTHORIZED]
-    if bound.get("remediation") is not None or bound.get("preflight_recovery") is not None:
-        return PreflightFailureClass("unknown", reason="a published lineage is never repaired before publication")
-    branch, base = str(parent.binding("execution_branch")), str(parent.binding("base_sha"))
-    done = state.preflight_recoveries(view, branch)
-    proven = {
-        item.authorization_id
-        for item in done
-        if state.recovery_unstarted_on_ledger(item) and execution_never_scheduled(github, configuration, item)
-    }
-    if state.recovery_unstarted_on_ledger(parent) and parent.authorization_id not in proven:
-        return PreflightFailureClass("unknown", reason="execution of the interrupted recovery cannot be ruled out")
-    if state.preflight_recovery_budget_refusal(done, unstarted=lambda item: item.authorization_id in proven):
-        return PreflightFailureClass("unknown", reason="RECOVERY_BUDGET_EXHAUSTED")
-    repository = configuration.repository
-    if definitive(github.get(f"/repos/{repository}/git/ref/heads/{branch}")) is not None:
-        return PreflightFailureClass("unknown", reason="the never-published branch exists")
-    if _pull_requests(github, configuration, branch):
-        return None
-    compare = definitive(github.get(f"/repos/{repository}/compare/{base}...main"))
-    if not isinstance(compare, Mapping) or compare.get("status") not in {"ahead", "identical"}:
-        return PreflightFailureClass("unknown", reason="the bound base is no longer on main")
-    live = definitive(github.get(f"/repos/{repository}/issues/{issue}"))
-    if not isinstance(live, Mapping):
-        raise FactsUnavailable("the governing Issue is not observable")
-    claims = bound["claims"]
-    if (
-        state.sha256_hex(str(live.get("title") or "").encode("utf-8")) != claims["title_sha256"]
-        or state.sha256_hex(str(live.get("body") or "").encode("utf-8")) != claims["body_sha256"]
-    ):
-        return PreflightFailureClass("unknown", reason="the Issue changed after the failed authorization")
+    admitted = _prepublication_recovery_facts(github, configuration, view, issue, parent)
+    if not isinstance(admitted, tuple):
+        return admitted
+    branch, base, attempt = admitted
     return TimeoutRecoveryCandidate(
         branch=branch,
         bound_base_sha=base,
         parent_authorization_id=parent.authorization_id,
-        attempt=len(done) + 1,
+        attempt=attempt,
         failed_run_id=int(source["failed_run_id"]),
     )
 
