@@ -83,6 +83,14 @@ jobs:
           # Canonicalization pushes cross the repository pre-push safety lane.
           # Provision that lane's tools in the setup-python interpreter instead of
           # inheriting same-named, non-executable shims from the self-hosted runner.
+          # Issue #559: upstream cryptography has published no Intel macOS (x86_64) wheel for any
+          # release patched against GHSA-g6cj-pr64-35w5/-jwv3-5hgf-82ww/-m2h6-j472-rp4c (all three
+          # fixed only at 49.0.0+, which is arm64-only on macOS) -- so pinning an older wheel-having
+          # release would trade the install failure for known, unpatched CVEs instead. This runner's
+          # pinned Homebrew Rust toolchain (verified: a fresh, uncached `pip install --no-binary
+          # cryptography` build succeeds in under a minute) builds exactly this one package from
+          # source at the same patched 50.0.0 the rest of the fleet uses on wheels; every other
+          # dependency, and every other platform, stays strictly binary-only.
           python -m pip install --only-binary ':all:' --no-binary cryptography -c requirements/ci-constraints.txt '.[dev]'
           python - <<'PYTOOLS' >> "$GITHUB_PATH"
           import sysconfig
