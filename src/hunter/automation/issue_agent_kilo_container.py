@@ -498,6 +498,14 @@ def gateway_tunnel_summary(log: str, *, origin: float | None = None) -> dict[str
     }
 
 
+def _session_diagnostic_cause(session: Mapping[str, str]) -> str:
+    """Classify closed session telemetry for logs only; never authorize fallback."""
+
+    if session.get("error") == "APIError" and session.get("status") == "429":
+        return "RATE_LIMIT"
+    return "UNCLASSIFIED"
+
+
 class KiloContainerIsolation:
     """Bounded Docker implementation of the Runner's existing Isolation protocol."""
 
@@ -844,14 +852,19 @@ class KiloContainerIsolation:
         )
         self.last_stderr_category = stderr_category(result.stderr[:65536])
         if result.returncode != 0:
+            # Kilo can report a structured provider HTTP failure only in its private
+            # session store, leaving stderr unclassified. This is diagnostic only:
+            # never promote model-writable session data to fallback authorization.
+            session = self.session_outcome()
+            session_cause = _session_diagnostic_cause(session)
+            print("isolated Kilo session diagnostic cause=" + session_cause, flush=True)
             print(
                 "isolated Kilo stderr structure: "
                 + " ".join(f"{name}={value}" for name, value in stderr_structure(result.stderr).items()),
                 flush=True,
             )
             print(
-                "isolated Kilo session outcome: "
-                + " ".join(f"{name}={value}" for name, value in self.session_outcome().items()),
+                "isolated Kilo session outcome: " + " ".join(f"{name}={value}" for name, value in session.items()),
                 flush=True,
             )
         print(

@@ -19,7 +19,9 @@ on:
   workflow_dispatch:
     inputs:
       pr:
-        description: "Optional merged PR for bounded historical finding backfill (579, 581 or 582)"
+        description: >-
+          Optional merged PR for bounded historical finding backfill (579, 581 or 582), or the
+          owner-approved #577 positive-outcome backfill (703, ADR 0039 L2 D3, Issue #705)
         required: false
         type: number
 
@@ -67,6 +69,9 @@ jobs:
             case "$BACKFILL_PR" in
               579|581|582)
                 python scripts/hunter_issue_agent_lifecycle.py historical-assess --pr "$BACKFILL_PR"
+                ;;
+              703)
+                python scripts/hunter_issue_agent_lifecycle.py verified-e2e-outcome --issue 577 --pr "$BACKFILL_PR"
                 ;;
               *) echo "Unsupported historical PR scope" >&2; exit 1 ;;
             esac
