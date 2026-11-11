@@ -833,8 +833,43 @@ def test_canonicalization_provisions_github_ssh_host_key_before_push() -> None:
 
     # Never a blind TOFU accept, and never a weakened/disabled host-key check.
     assert "ssh-keyscan" not in script
-    assert "StrictHostKeyChecking" not in script
+    assert "StrictHostKeyChecking=no" not in script
+    assert "StrictHostKeyChecking=accept-new" not in script
     assert "UserKnownHostsFile=/dev/null" not in script
+
+
+def test_canonicalization_binds_the_push_to_the_exact_known_hosts_file_it_just_verified() -> None:
+    """Regression: `ssh`'s own tilde expansion ignored this job's `$HOME` on the fallback runner.
+
+    Hosted evidence (12 real runs across PRs #592-#723) showed the provisioning step reporting
+    `github.com` present, immediately followed by the push step's `git fetch` still failing
+    `Host key verification failed`. Reproduced the exact mechanism directly (not assumed): macOS's
+    OpenSSH resolves the default `UserKnownHostsFile ~/.ssh/known_hosts` directive's `~` from the
+    invoking account's password-database home, not from the `$HOME` environment variable --
+    confirmed live with `dscl . -read ... NFSHomeDirectory` and `ssh -G github.com` disagreeing with
+    an overridden `$HOME`. The self-hosted fleet's fallback runner account has its `$HOME`
+    overridden by its own launchd service definition, so this divergence is exactly its situation.
+    The fix: pass the exact file this step just verified as an explicit `-o UserKnownHostsFile=`
+    value (never subject to `~` resolution) rather than letting the next step's `ssh` invocation
+    fall back to its own default, ambient lookup.
+    """
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    path = root / ".github" / "workflows" / "hunter-canonicalization-auto.yml"
+    workflow = yaml.safe_load(path.read_text())
+    steps = [step for job in workflow["jobs"].values() for step in job.get("steps", [])]
+    (provision,) = (s for s in steps if s.get("name") == "Provision GitHub SSH host key for canonicalization push")
+    script = provision["run"]
+
+    assert 'core.sshCommand "ssh -o UserKnownHostsFile=$HOME/.ssh/known_hosts' in script
+    assert "StrictHostKeyChecking=yes" in script
+
+    # Applies to both the already-provisioned and the freshly-provisioned path: the fetch in the
+    # next step runs unconditionally either way, so this binding must not live inside the `if`/`else`.
+    lines = script.splitlines()
+    binding_index = next(i for i, line in enumerate(lines) if line.lstrip().startswith("git config core.sshCommand"))
+    assert not lines[binding_index].startswith(" "), "the binding must run unconditionally, not inside if/else"
 
 
 def test_governed_review_request_rejects_missing_issue_criteria(tmp_path: Path) -> None:
