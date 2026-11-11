@@ -720,11 +720,17 @@ def test_capture_reviewer_findings_never_promotes_validation_state() -> None:
 def test_canonicalization_python_setup_is_portable_across_runner_accounts():
     """The self-hosted macOS canonicalization job must not assume `/Users/runner`.
 
-    `actions/setup-python` with `cache: pip` resolves its cache directory from the
-    runner account's home. On a self-hosted macOS runner whose account is not
-    `runner`, that step failed with `mkdir: /Users/runner: Permission denied` and
-    canonicalization never ran. The step now pins the cache to `runner.temp`,
-    which every runner supplies, so no user-specific home is assumed.
+    `actions/setup-python` with `cache: pip` resolves its *pip* cache directory from
+    the runner account's home -- fixed below via `PIP_CACHE_DIR`. That is a separate
+    mechanism from the action's own tool-cache installer, which downloads and installs
+    the Python interpreter itself (before pip ever runs) into whatever `RUNNER_TOOL_CACHE`
+    names, asserting that variable is defined (confirmed directly from the action's own
+    vendored source) and otherwise falling back to a runner-agent default that is not
+    guaranteed writable by this runner's actual account. The quoted production failure --
+    `Creating Python hostedtoolcache folder... mkdir: /Users/runner: Permission denied` --
+    is exactly that tool-cache path, not the pip cache; a prior fix that pinned only
+    `PIP_CACHE_DIR` left this one, real failure mode unguarded. Both are now pinned to
+    `runner.temp`, which every runner supplies, so no user-specific home is assumed.
     """
 
     import yaml
@@ -742,9 +748,15 @@ def test_canonicalization_python_setup_is_portable_across_runner_accounts():
     )
 
     assert (setup.get("with") or {}).get("cache") == "pip"
-    pip_cache = (setup.get("env") or {}).get("PIP_CACHE_DIR")
+    env = setup.get("env") or {}
+    pip_cache = env.get("PIP_CACHE_DIR")
     assert pip_cache, "the pip-caching step must pin a portable cache directory"
     assert "${{ runner.temp }}" in pip_cache
+
+    tool_cache = env.get("RUNNER_TOOL_CACHE")
+    assert tool_cache, "the Python interpreter tool-cache installer must pin a portable directory too"
+    assert "${{ runner.temp }}" in tool_cache
+    assert tool_cache != pip_cache, "the tool cache and the pip cache must not collide on one directory"
 
     # No absolute user-home path is assumed by any executable statement. Comments
     # are excluded deliberately: this test guards the runner configuration, and the

@@ -72,6 +72,15 @@ jobs:
           # never runs. runner.temp is supplied by the runner and is portable
           # across hosted and self-hosted images.
           PIP_CACHE_DIR: ${{ runner.temp }}/pip-cache
+          # Issue #551: PIP_CACHE_DIR only relocates pip's own download cache. The action's
+          # separate tool-cache installer (where it downloads and installs the Python
+          # interpreter itself, before pip ever runs) reads RUNNER_TOOL_CACHE directly --
+          # confirmed from its own vendored source, which asserts this variable is defined
+          # and otherwise falls back to a runner-agent default that is not guaranteed to be
+          # writable by this runner's actual account. Pinning it here, the same way as the
+          # pip cache above, removes that assumption instead of relying on a directory that
+          # happens to already exist on one specific machine.
+          RUNNER_TOOL_CACHE: ${{ runner.temp }}/hostedtoolcache
         with:
           python-version: "3.11"
           cache: pip
