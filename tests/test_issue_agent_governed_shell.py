@@ -2,7 +2,7 @@
 
 import pytest
 
-from hunter.automation.issue_agent_governed_shell import ShellDenied, parse_command, run_governed
+from hunter.automation.issue_agent_governed_shell import ShellDenied, is_broad_discovery, parse_command, run_governed
 
 
 @pytest.mark.parametrize(
@@ -71,3 +71,44 @@ def test_unpinned_image_rejected(tmp_path, monkeypatch):
     monkeypatch.setenv("HUNTER_GOVERNED_SHELL_ENABLED", "1")
     with pytest.raises(ShellDenied, match="digest"):
         run_governed("git status --short", workspace=tmp_path)
+
+
+# --- Issue #718: bounded repository discovery ------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls",
+        "ls -la",
+        "ls src",
+        "ls tests",
+        "ls .",
+        "rg error",
+        "rg -n error",
+        "rg error src",
+        "rg -n error tests",
+        "rg --files",
+        "rg --files src",
+    ],
+)
+def test_broad_discovery_is_identified(command):
+    assert is_broad_discovery(parse_command(command))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ls src/hunter/automation",
+        "ls tests/fixtures",
+        "rg error src/hunter/automation",
+        "rg -n error tests/test_issue_agent_knowledge.py",
+        "rg --files src/hunter/automation",
+        "cat src/hunter/automation/issue_agent_knowledge.py",
+        "python -m pytest -q",
+        "python3 -m ruff check .",
+        "git status --short",
+    ],
+)
+def test_targeted_reads_are_not_broad_discovery(command):
+    assert not is_broad_discovery(parse_command(command))

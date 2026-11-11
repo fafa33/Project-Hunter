@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 
 ALLOWED = {
@@ -81,6 +82,25 @@ def parse_command(command: str) -> list[str]:
         if any(c in arg for c in ("*", "?", "[", "]", "$")):
             raise ShellDenied("shell expansion forbidden")
     return args
+
+
+def is_broad_discovery(args: Sequence[str]) -> bool:
+    """Issue #718: a discovery command whose scope is the whole workspace or a bare top-level directory.
+
+    The model is told not to re-survey the repository, but that is prose, not enforcement: hosted
+    evidence showed it doing exactly this (``ls src``, ``ls tests``, an unscoped ``rg``) regardless.
+    This names the deterministic shape of that failure so a caller can bound it with an explicit
+    budget. ``cat`` always names one specific file and never counts, and neither does any
+    non-discovery tool: this is about survey breadth, not command frequency.
+    """
+    if args[0] not in {"ls", "rg"}:
+        return False
+    paths = [arg for arg in args[1:] if not arg.startswith("-")]
+    if args[0] == "rg" and "--files" not in args:
+        paths = paths[1:]  # the first non-flag argument is the search pattern, not a path
+    if not paths:
+        return True
+    return any(len(Path(path).parts) <= 1 for path in paths)
 
 
 def run_governed(

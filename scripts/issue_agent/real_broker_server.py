@@ -9,6 +9,7 @@ Repair-loop budgets are explicit and fail closed:
 * ``MAX_REQUESTS``  - all requests, including denied probes
 * ``DEADLINE_SECONDS`` - wall clock for the whole session; after it nothing runs
 * ``COMMAND_TIMEOUT`` - per command, with CPU / file-size / process rlimits
+* ``MAX_BROAD_DISCOVERY`` - whole-workspace or bare top-level ``ls``/``rg`` calls (Issue #718)
 """
 
 from __future__ import annotations
@@ -26,9 +27,13 @@ import time
 from pathlib import Path
 
 try:
-    from hunter.automation.issue_agent_governed_shell import ShellDenied, parse_command
+    from hunter.automation.issue_agent_governed_shell import ShellDenied, is_broad_discovery, parse_command
 except ImportError:  # container: the policy module is bind-mounted flat and PYTHONPATH points at it
-    from issue_agent_governed_shell import ShellDenied, parse_command  # type: ignore[import-not-found,no-redef]
+    from issue_agent_governed_shell import (  # type: ignore[import-not-found,no-redef]
+        ShellDenied,
+        is_broad_discovery,
+        parse_command,
+    )
 
 AGENT_UID = 65534
 BROKER_UID = 65533
@@ -36,6 +41,10 @@ SHARED_GID = 65532
 MAX_REQUEST = 4096
 MAX_COMMANDS = max(1, min(int(os.environ.get("HUNTER_BROKER_MAX_COMMANDS", "16")), 32))
 MAX_REQUESTS = 4 * MAX_COMMANDS
+# Issue #718: bounded repository discovery. A handful of broad surveys is normal orientation; an
+# unbounded number is the re-discovery failure mode the owner observed hosted. Targeted, specific
+# reads (``cat``, a deep ``ls``/``rg`` path) never charge this budget, so it only bites breadth.
+MAX_BROAD_DISCOVERY = max(0, min(int(os.environ.get("HUNTER_BROKER_MAX_BROAD_DISCOVERY", "3")), 8))
 DEADLINE_SECONDS = max(1, min(int(os.environ.get("HUNTER_BROKER_DEADLINE_SECONDS", "960")), 1020))
 COMMAND_TIMEOUT = 30
 CPU_GRACE_SECONDS = 5  # CPU backstop sits above the wall timeout so the timeout deterministically wins
@@ -107,10 +116,17 @@ class BudgetExhausted(PermissionError):
 class Budget:
     """Mutable session budget; a fresh instance per broker process."""
 
-    def __init__(self, commands: int = MAX_COMMANDS, requests: int = MAX_REQUESTS, deadline: float | None = None):
+    def __init__(
+        self,
+        commands: int = MAX_COMMANDS,
+        requests: int = MAX_REQUESTS,
+        deadline: float | None = None,
+        discovery: int = MAX_BROAD_DISCOVERY,
+    ):
         self.commands = commands
         self.requests = requests
         self.deadline = time.monotonic() + DEADLINE_SECONDS if deadline is None else deadline
+        self.discovery = discovery
 
     def charge_request(self) -> None:
         self.requests -= 1
@@ -121,6 +137,11 @@ class Budget:
         self.commands -= 1
         if self.commands < 0:
             raise BudgetExhausted("repair attempt budget exhausted")
+
+    def charge_discovery(self) -> None:
+        self.discovery -= 1
+        if self.discovery < 0:
+            raise BudgetExhausted("repository rediscovery budget exhausted")
 
 
 def _limits() -> None:  # runs in the child between fork and exec
@@ -219,6 +240,8 @@ def handle(conn: socket.socket, budget: Budget | None = None) -> None:
         args = parsed = parse_command(command)
         if args[0] not in BROKER_TOOLS:
             raise ShellDenied("tool not provided in broker")
+        if is_broad_discovery(args):
+            budget.charge_discovery()
         env = {
             "PATH": TOOL_PATH,
             "PYTHONDONTWRITEBYTECODE": "1",

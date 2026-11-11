@@ -247,6 +247,7 @@ def test_host_secrets_never_reach_command_environment(monkeypatch):
 def test_budget_constants_are_bounded():
     assert 1 <= broker.MAX_COMMANDS <= 32
     assert broker.MAX_REQUESTS >= broker.MAX_COMMANDS
+    assert 0 <= broker.MAX_BROAD_DISCOVERY <= 8
     # The broker must outlive the supervised model ceiling, while remaining
     # bounded inside the hosted 20-minute execute job.
     from hunter.automation.issue_agent_kilo_container import (
@@ -256,6 +257,51 @@ def test_budget_constants_are_bounded():
 
     assert KILO_HARD_CEILING_SECONDS < broker.DEADLINE_SECONDS < 1200
     assert broker.DEADLINE_SECONDS == BROKER_DEADLINE_SECONDS
+
+
+# --- Issue #718: bounded repository discovery ------------------------------------------------------------
+
+
+def test_broad_discovery_budget_exhaustion_fails_closed(monkeypatch):
+    monkeypatch.setattr(broker, "assert_no_symlinks", lambda: None)
+    budget = broker.Budget(commands=10, requests=50, discovery=2)
+    with patch(RUN) as run:
+        run.return_value.returncode, run.return_value.stdout, run.return_value.stderr = 0, "ok", ""
+        results = [_send(command, budget)["exit"] for command in ["ls src", "rg error", "ls tests", "ls docs"]]
+        # Two broad surveys spend the discovery budget; the third and fourth are denied before execution.
+        assert run.call_count == 2
+    assert results == [0, 0, 126, 126]
+    assert budget.discovery == -2
+
+
+def test_targeted_reads_never_spend_the_discovery_budget(monkeypatch):
+    monkeypatch.setattr(broker, "assert_no_symlinks", lambda: None)
+    budget = broker.Budget(commands=10, requests=50, discovery=0)
+    with patch(RUN) as run:
+        run.return_value.returncode, run.return_value.stdout, run.return_value.stderr = 0, "ok", ""
+        for command in (
+            "cat src/hunter/automation/issue_agent_governed_shell.py",
+            "ls src/hunter/automation",
+            "rg -n error tests/test_real_broker_security.py",
+            "rg --files src/hunter/automation",
+            "python -m pytest -q",
+            "python3 -m ruff check .",
+        ):
+            assert _send(command, budget)["exit"] == 0, command
+        assert run.call_count == 6
+    # A budget that started already exhausted (0) never had to be charged: targeted reads are free.
+    assert budget.discovery == 0
+
+
+def test_a_depleted_discovery_budget_does_not_block_non_discovery_execution(monkeypatch):
+    monkeypatch.setattr(broker, "assert_no_symlinks", lambda: None)
+    budget = broker.Budget(commands=10, requests=50, discovery=0)
+    with patch(RUN) as run:
+        run.return_value.returncode, run.return_value.stdout, run.return_value.stderr = 0, "ok", ""
+        assert _send("ls src", budget)["exit"] == 126  # the one broad survey this session can afford is denied
+        assert _send("python -m pytest -q", budget)["exit"] == 0
+        assert _send("python -m ruff check .", budget)["exit"] == 0
+    assert run.call_count == 2
 
 
 def test_black_cache_is_private_unique_and_removed(monkeypatch):
