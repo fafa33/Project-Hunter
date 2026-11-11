@@ -1390,3 +1390,16 @@ def test_a_store_without_assistant_turns_reports_no_timing(tmp_path: Path) -> No
 
 def test_every_unreadable_outcome_keeps_the_same_closed_shape(tmp_path: Path) -> None:
     assert set(kilo_port.kilo_session_outcome(tmp_path)) == set(kilo_port._NO_SESSION)
+
+
+@pytest.mark.parametrize(
+    "error,status,expected",
+    [
+        ("APIError", "429", "RATE_LIMIT"),
+        ("APIError", "503", "UNCLASSIFIED"),
+        ("UNREADABLE", "429", "UNCLASSIFIED"),
+        ("APIError", "none", "UNCLASSIFIED"),
+    ],
+)
+def test_session_rate_limit_diagnostic_is_closed_and_fail_closed(error: str, status: str, expected: str) -> None:
+    assert kilo_port._session_diagnostic_cause({"error": error, "status": status}) == expected
