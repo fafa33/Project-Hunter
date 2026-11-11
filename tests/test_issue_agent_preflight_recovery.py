@@ -1762,3 +1762,216 @@ def test_a_candidate_configuration_cannot_shape_the_trusted_rerun(
         repo, validated=validated, ref=ref, head=head, root=root, home=home, user="u"
     )
     assert found == ({"path": "a.py", "code": "F401", "row": 1, "column": 8},)
+
+
+# --- Issue #705: a signed executor timeout before publication (never an L9 preflight recovery) ----------------
+
+
+FAILED_RUN = 100  # the shared harness binds every ledger record to run 100
+
+
+def _fail_timeout(ledger: rt.Ledger, authorization_id: str) -> None:
+    ledger.write(
+        authorization_id,
+        state.FAILED,
+        {"code": "EXECUTOR_RESULT_TIMEOUT", "failed_from_state": "AUTHORIZED"},
+        "bind",
+    )
+
+
+@pytest.fixture
+def timeout_failed(repos: dict[str, Any]) -> tuple[rt.Ledger, str]:
+    ledger = rt.Ledger(repos)
+    _authorize_parent(ledger, repos["base"])
+    _fail_timeout(ledger, PARENT)
+    return ledger, repos["base"]
+
+
+def _timeout_evidence(
+    authorization_id: str, base: str, *, parent: str = PARENT, attempt: int = 1, failed_run_id: int = FAILED_RUN
+) -> dict[str, Any]:
+    scope = _ruff_scope(authorization_id, base)
+    handoff, handoff_sha = rt._handoff(authorization_id, scope, base)
+    evidence = rt._evidence(authorization_id, scope, base, handoff, handoff_sha, None)
+    evidence["timeout_recovery"] = {
+        "parent_authorization_id": parent,
+        "bound_base_sha": base,
+        "attempt": attempt,
+        "failed_run_id": failed_run_id,
+    }
+    return evidence
+
+
+def _timeout_refusal(view: state.LedgerView, base: str, **changes: Any) -> str | None:
+    group = {"parent_authorization_id": PARENT, "bound_base_sha": base, "attempt": 1, "failed_run_id": FAILED_RUN}
+    group.update(changes)
+    return state.timeout_recovery_refusal(view, group, branch=rt.BRANCH)
+
+
+def test_the_signed_timeout_names_its_exact_failed_run(timeout_failed: tuple[rt.Ledger, str]) -> None:
+    ledger, base = timeout_failed
+    source = state.timeout_failure_source(ledger.view.authorizations[PARENT])
+    assert source == {"failed_run_id": FAILED_RUN}
+    assert _timeout_refusal(ledger.view, base) is None
+    ledger.write(RECOVERY, state.AUTHORIZED, _timeout_evidence(RECOVERY, base), "authorize")
+
+
+def test_a_timeout_from_authorized_is_never_an_l9_preflight_recovery(timeout_failed: tuple[rt.Ledger, str]) -> None:
+    ledger, base = timeout_failed
+    assert (
+        control.eligible_preflight_recovery(
+            GitHubFacts("c" * 40), ct.CONFIG, ledger.view, ISSUE, job_log=lambda _job: control.Read("unknown")
+        )
+        is None
+    )
+    refusal = state.preflight_recovery_refusal(
+        ledger.view, parent_authorization_id=PARENT, branch=rt.BRANCH, bound_head_sha=base, attempt=1
+    )
+    assert refusal is not None and "did not fail its exact-head Pre-PR Preflight" in refusal
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        {"code": "EXECUTOR_RESULT_TIMEOUT", "failed_from_state": "RESULT_BOUND"},
+        {"code": "EXECUTION_NOT_COMPLETED", "failed_from_state": "AUTHORIZED"},
+        {"code": "SECRET_IN_RESULT", "failed_from_state": "AUTHORIZED"},
+    ],
+)
+def test_no_other_executor_failure_is_a_timeout_recovery_trigger(
+    repos: dict[str, Any], evidence: dict[str, Any]
+) -> None:
+    ledger = rt.Ledger(repos)
+    _authorize_parent(ledger, repos["base"])
+    if evidence["failed_from_state"] == "RESULT_BOUND":
+        _bind_result(ledger, PARENT)
+    ledger.write(PARENT, state.FAILED, evidence, "bind")
+    assert state.timeout_failure_source(ledger.view.authorizations[PARENT]) is None
+    assert "no signed pre-publication executor timeout" in str(_timeout_refusal(ledger.view, repos["base"]))
+    assert control.eligible_timeout_recovery(GitHubFacts("c" * 40), ct.CONFIG, ledger.view, ISSUE) is None
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"failed_run_id": 999},  # not the signed run that recorded the failure
+        {"bound_base_sha": "9" * 40},  # not the parent's exact base
+        {"attempt": 2},  # not the next attempt of this lineage
+        {"parent_authorization_id": RECOVERY},  # not an authorization of this Issue
+    ],
+)
+def test_every_forged_timeout_binding_is_refused_by_the_fold(
+    timeout_failed: tuple[rt.Ledger, str], changes: dict[str, Any]
+) -> None:
+    ledger, base = timeout_failed
+    assert _timeout_refusal(ledger.view, base, **changes) is not None
+    evidence = _timeout_evidence(RECOVERY, base)
+    evidence["timeout_recovery"].update(changes)
+    if "bound_base_sha" in changes:
+        evidence["timeout_recovery"]["bound_base_sha"] = base  # the group rule, then the base cross-check
+        with pytest.raises(state.LedgerError):
+            bad = _timeout_evidence(RECOVERY, base)
+            bad["timeout_recovery"]["bound_base_sha"] = "9" * 40
+            ledger.write(RECOVERY, state.AUTHORIZED, bad, "authorize")
+        return
+    with pytest.raises(state.LedgerError):
+        ledger.write(RECOVERY, state.AUTHORIZED, evidence, "authorize")
+
+
+def test_a_timeout_recovery_and_a_ruff_repair_spend_one_budget(timeout_failed: tuple[rt.Ledger, str]) -> None:
+    ledger, base = timeout_failed
+    ledger.write(RECOVERY, state.AUTHORIZED, _timeout_evidence(RECOVERY, base), "authorize")
+    _fail_ruff(ledger, RECOVERY)
+    ledger.write(SECOND, state.AUTHORIZED, _validator_evidence(SECOND, base, parent=RECOVERY, attempt=2), "authorize")
+    _fail_timeout(ledger, SECOND)
+    assert "budget of this lineage is exhausted" in str(
+        _timeout_refusal(ledger.view, base, parent_authorization_id=SECOND, attempt=3)
+    )
+    found = control.eligible_timeout_recovery(GitHubFacts("c" * 40), ct.CONFIG, ledger.view, ISSUE)
+    assert found == control.PreflightFailureClass("unknown", reason="RECOVERY_BUDGET_EXHAUSTED")
+
+
+def test_a_published_lineage_is_never_timeout_recovered(failed: tuple[rt.Ledger, str]) -> None:
+    ledger, head = failed
+    first, _, _ = recovery_evidence(RECOVERY, head)
+    ledger.write(RECOVERY, state.AUTHORIZED, first, "authorize")
+    _fail_timeout(ledger, RECOVERY)
+    group = {"parent_authorization_id": RECOVERY, "bound_base_sha": head, "attempt": 2, "failed_run_id": FAILED_RUN}
+    assert "never published" in str(state.timeout_recovery_refusal(ledger.view, group, branch=rt.BRANCH))
+    found = control.eligible_timeout_recovery(GitHubFacts("c" * 40), ct.CONFIG, ledger.view, ISSUE)
+    assert isinstance(found, control.PreflightFailureClass) and "published lineage" in found.reason
+
+
+def test_the_signed_timeout_is_eligible_with_its_exact_identity(
+    timeout_failed: tuple[rt.Ledger, str], issue_claims: None
+) -> None:
+    ledger, base = timeout_failed
+    found = control.eligible_timeout_recovery(_ruff_facts(base), ct.CONFIG, ledger.view, ISSUE)
+    assert isinstance(found, control.TimeoutRecoveryCandidate)
+    assert (found.branch, found.bound_base_sha, found.attempt) == (rt.BRANCH, base, 1)
+    assert (found.parent_authorization_id, found.failed_run_id) == (PARENT, FAILED_RUN)
+    group = remediation.timeout_recovery_group(found, issue_number=ISSUE)
+    assert group["timeout_failure"] == {"failed_run_id": FAILED_RUN}
+    assert group["bound_head_sha"] == base
+
+
+@pytest.mark.parametrize(
+    ("facts_changes", "reason"),
+    [
+        ({"branch": {"object": {"sha": "9" * 40}}}, "never-published branch exists"),
+        ({"status": "diverged"}, "no longer on main"),
+        ({"title": "edited"}, "Issue changed"),
+    ],
+)
+def test_stale_live_facts_keep_the_timeout_terminal(
+    timeout_failed: tuple[rt.Ledger, str], issue_claims: None, facts_changes: dict[str, Any], reason: str
+) -> None:
+    ledger, base = timeout_failed
+    found = control.eligible_timeout_recovery(_ruff_facts(base, **facts_changes), ct.CONFIG, ledger.view, ISSUE)
+    assert isinstance(found, control.PreflightFailureClass) and reason in found.reason
+
+
+def test_an_open_pull_request_stops_the_timeout_recovery(
+    timeout_failed: tuple[rt.Ledger, str], issue_claims: None
+) -> None:
+    ledger, base = timeout_failed
+    facts = _ruff_facts(base)
+    facts.routes[f"/repos/{rt.REPOSITORY}/pulls?state=open&head=fafa33%3A{rt.BRANCH}&per_page=100"] = [
+        {"number": 7, "head": {"ref": rt.BRANCH}}
+    ]
+    assert control.eligible_timeout_recovery(facts, ct.CONFIG, ledger.view, ISSUE) is None
+
+
+def test_an_indefinite_read_never_admits_a_timeout_recovery(
+    timeout_failed: tuple[rt.Ledger, str], issue_claims: None
+) -> None:
+    ledger, base = timeout_failed
+    facts = _ruff_facts(base)
+    del facts.routes[f"/repos/{rt.REPOSITORY}/compare/{base}...main"]
+    with pytest.raises(control.FactsUnavailable):
+        control.eligible_timeout_recovery(facts, ct.CONFIG, ledger.view, ISSUE)
+
+
+def test_the_closed_timeout_group_shape_is_exact() -> None:
+    from hunter.automation import issue_agent_execution as execution
+
+    group = {
+        "parent_authorization_id": PARENT,
+        "branch": rt.BRANCH,
+        "bound_head_sha": "1" * 40,
+        "attempt": 1,
+        "timeout_failure": {"failed_run_id": FAILED_RUN},
+    }
+    assert execution.is_timeout_recovery(group) and not execution.is_validator_recovery(group)
+    assert execution.validate_remediation_group(dict(group), issue_number=ISSUE) == group
+    for broken in (
+        {**group, "attempt": 0},
+        {**group, "attempt": state.MAX_PREFLIGHT_RECOVERY_AUTHORIZATIONS + 1},
+        {**group, "bound_head_sha": "not-a-sha"},
+        {**group, "timeout_failure": {"failed_run_id": 0}},
+        {**group, "timeout_failure": {"failed_run_id": FAILED_RUN, "extra": 1}},
+        {**group, "extra": True},
+        {**group, "branch": f"issue-{ISSUE + 1}-{'a' * 16}"},
+    ):
+        with pytest.raises(IssueAgentAuthorizationError):
+            execution.validate_remediation_group(broken, issue_number=ISSUE)

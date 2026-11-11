@@ -136,6 +136,22 @@ def validator_recovery_group(candidate: Any, *, issue_number: int) -> dict[str, 
         raise RemediationRefused("NOT_ELIGIBLE", str(error)) from None
 
 
+def timeout_recovery_group(candidate: Any, *, issue_number: int) -> dict[str, Any]:
+    """Issue #705: the closed recovery group for one signed pre-publication executor timeout."""
+
+    group = {
+        "parent_authorization_id": candidate.parent_authorization_id,
+        "branch": candidate.branch,
+        "bound_head_sha": candidate.bound_base_sha,
+        "attempt": candidate.attempt,
+        "timeout_failure": {"failed_run_id": candidate.failed_run_id},
+    }
+    try:
+        return validate_remediation_group(group, issue_number=issue_number)
+    except IssueAgentAuthorizationError as error:
+        raise RemediationRefused("NOT_ELIGIBLE", str(error)) from None
+
+
 def remediation_authorization(
     issue: Mapping[str, Any], *, repository: str, owner_login: str, remediation: Mapping[str, Any]
 ) -> IssueAgentRemediationAuthorization:
@@ -595,6 +611,7 @@ __all__ = [
     "proven_writes",
     "read_promotion_inputs",
     "preflight_recovery_group",
+    "timeout_recovery_group",
     "validator_recovery_group",
     "remediation_authorization",
     "remediation_writes",

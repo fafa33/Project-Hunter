@@ -51,6 +51,7 @@ from hunter.automation.issue_agent_execution import (
     compose_governed_compilation,
     derive_execution_target,
     is_preflight_recovery,
+    is_timeout_recovery,
     is_validator_recovery,
     issue_agent_intake_reference,
     issue_agent_task_request,
@@ -270,6 +271,17 @@ def _plus(timestamp: str, delta: timedelta) -> str:
     return (state._instant(timestamp) + delta).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _timeout_recovery_evidence(remediation: Mapping[str, Any]) -> dict[str, Any]:
+    """The ledger's flat ``timeout_recovery`` group for one closed Issue #705 authorization group."""
+
+    return {
+        "parent_authorization_id": remediation["parent_authorization_id"],
+        "bound_base_sha": remediation["bound_head_sha"],
+        "attempt": remediation["attempt"],
+        "failed_run_id": remediation["timeout_failure"]["failed_run_id"],
+    }
+
+
 def _validator_recovery_evidence(remediation: Mapping[str, Any]) -> dict[str, Any]:
     """The ledger's flat ``validator_recovery`` group for one closed L10 authorization group."""
 
@@ -347,6 +359,14 @@ def prepare(
         refusal = state.validator_recovery_refusal(
             view, _validator_recovery_evidence(remediation), branch=target.branch
         )
+        if refusal is not None:
+            raise AuthorizeRefused("NOT_ELIGIBLE", refusal)
+        if _definitive(lambda: dependencies.open_issue_agent_pull_request(issue), "ISSUE_HAS_ACTIVE_DRAFT_PR"):
+            raise AuthorizeRefused("ISSUE_HAS_ACTIVE_DRAFT_PR", "an Issue-Agent pull request is open for this Issue")
+    elif remediation is not None and is_timeout_recovery(remediation):
+        # Issue #705: the same rule the ledger fold applies, read before the claim. Nothing was published,
+        # so like L10 the branch must not exist and no Issue-Agent pull request may be open.
+        refusal = state.timeout_recovery_refusal(view, _timeout_recovery_evidence(remediation), branch=target.branch)
         if refusal is not None:
             raise AuthorizeRefused("NOT_ELIGIBLE", refusal)
         if _definitive(lambda: dependencies.open_issue_agent_pull_request(issue), "ISSUE_HAS_ACTIVE_DRAFT_PR"):
@@ -577,6 +597,8 @@ def prepare(
     }
     if remediation is not None and is_validator_recovery(remediation):
         unsigned_evidence["validator_recovery"] = _validator_recovery_evidence(remediation)
+    elif remediation is not None and is_timeout_recovery(remediation):
+        unsigned_evidence["timeout_recovery"] = _timeout_recovery_evidence(remediation)
     elif remediation is not None and is_preflight_recovery(remediation):
         failure = remediation["preflight_failure"]
         unsigned_evidence["preflight_recovery"] = {
