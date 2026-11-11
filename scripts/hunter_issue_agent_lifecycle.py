@@ -843,6 +843,8 @@ def _recover_failed_preflight(
 
     found: Any = control.eligible_validator_recovery(github, configuration, ledger_view, issue)
     if found is None:
+        found = control.eligible_timeout_recovery(github, configuration, ledger_view, issue)
+    if found is None:
         found = control.eligible_preflight_recovery(github, configuration, ledger_view, issue, job_log=github.job_log)
     if found is None:
         print(f"issue {issue}: no eligible remediation")
@@ -860,7 +862,11 @@ def _recover_failed_preflight(
         builder = (
             remediation.validator_recovery_group
             if isinstance(found, control.ValidatorRecoveryCandidate)
-            else remediation.preflight_recovery_group
+            else (
+                remediation.timeout_recovery_group
+                if isinstance(found, control.TimeoutRecoveryCandidate)
+                else remediation.preflight_recovery_group
+            )
         )
         group = builder(found, issue_number=issue)
         authorization = remediation.remediation_authorization(
@@ -881,6 +887,13 @@ def _recover_failed_preflight(
             f"issue {issue}: dispatched validator Ruff recovery {authorization.authorization_id} attempt "
             f"{found.attempt} on {found.branch} at base {found.bound_base_sha[:12]} for validator run "
             f"{found.failure['validator_run_id']} ({len(found.failure['diagnostics'])} finding(s))"
+        )
+        return True
+    if isinstance(found, control.TimeoutRecoveryCandidate):
+        print(
+            f"issue {issue}: dispatched executor timeout recovery {authorization.authorization_id} attempt "
+            f"{found.attempt} on {found.branch} at base {found.bound_base_sha[:12]} for signed failed run "
+            f"{found.failed_run_id}"
         )
         return True
     print(

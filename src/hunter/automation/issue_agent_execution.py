@@ -631,6 +631,10 @@ PREFLIGHT_RECOVERY_GROUP_FIELDS: Final = frozenset(
     {"parent_authorization_id", "branch", "bound_head_sha", "attempt", "preflight_failure"}
 )
 _PREFLIGHT_FAILURE_FIELDS: Final = frozenset({"run_id", "run_attempt", "job_id", "failed_tests"})
+TIMEOUT_RECOVERY_GROUP_FIELDS: Final = frozenset(
+    {"parent_authorization_id", "branch", "bound_head_sha", "attempt", "timeout_failure"}
+)
+_TIMEOUT_FAILURE_FIELDS: Final = frozenset({"failed_run_id"})
 
 
 def is_preflight_recovery(remediation: object) -> bool:
@@ -643,6 +647,43 @@ def is_validator_recovery(remediation: object) -> bool:
     """Whether a remediation group is the ADR 0039 L10 pre-publication Ruff repair shape."""
 
     return isinstance(remediation, Mapping) and "validator_failure" in remediation
+
+
+def is_timeout_recovery(remediation: object) -> bool:
+    """Whether a remediation group is the Issue #705 pre-publication executor-timeout recovery shape."""
+
+    return isinstance(remediation, Mapping) and "timeout_failure" in remediation
+
+
+def _validate_timeout_recovery_group(remediation: dict[str, Any], *, issue_number: int) -> dict[str, Any]:
+    """Issue #705: the closed timeout-recovery group; ``bound_head_sha`` is the parent's exact, unchanged base."""
+
+    if set(remediation) != TIMEOUT_RECOVERY_GROUP_FIELDS:
+        raise IssueAgentAuthorizationError("timeout recovery group schema mismatch")
+    parent = remediation["parent_authorization_id"]
+    prefix, separator, digest = parent.partition(":") if isinstance(parent, str) else ("", "", "")
+    if (
+        prefix != ISSUE_AGENT_AUTHORIZATION_IDENTITY_PREFIX
+        or not separator
+        or not _AUTHORIZATION_DIGEST_RE.fullmatch(digest)
+    ):
+        raise IssueAgentAuthorizationError("timeout recovery parent is not a canonical authorization identity")
+    branch = remediation["branch"]
+    match = _ISSUE_BRANCH_RE.fullmatch(branch) if isinstance(branch, str) else None
+    if match is None or int(match.group(1)) != issue_number:
+        raise IssueAgentAuthorizationError("timeout recovery branch is not an Issue-agent branch of this Issue")
+    attempt = remediation["attempt"]
+    if type(attempt) is not int or not 1 <= attempt <= MAX_PREFLIGHT_RECOVERY_AUTHORIZATIONS:
+        raise IssueAgentAuthorizationError("timeout recovery attempt is outside the approved budget")
+    head = remediation["bound_head_sha"]
+    if not isinstance(head, str) or not _COMMIT_SHA_RE.fullmatch(head):
+        raise IssueAgentAuthorizationError("timeout recovery must bind the exact base")
+    failure = remediation["timeout_failure"]
+    if not isinstance(failure, dict) or set(failure) != _TIMEOUT_FAILURE_FIELDS:
+        raise IssueAgentAuthorizationError("timeout failure evidence schema mismatch")
+    if type(failure["failed_run_id"]) is not int or failure["failed_run_id"] < 1:
+        raise IssueAgentAuthorizationError("timeout failure failed_run_id must be a positive integer")
+    return remediation
 
 
 def _validate_validator_recovery_group(remediation: dict[str, Any], *, issue_number: int) -> dict[str, Any]:
@@ -745,6 +786,8 @@ def validate_remediation_group(remediation: object, *, issue_number: int) -> dic
 
     if isinstance(remediation, dict) and is_validator_recovery(remediation):
         return _validate_validator_recovery_group(remediation, issue_number=issue_number)
+    if isinstance(remediation, dict) and is_timeout_recovery(remediation):
+        return _validate_timeout_recovery_group(remediation, issue_number=issue_number)
     if isinstance(remediation, dict) and is_preflight_recovery(remediation):
         return _validate_preflight_recovery_group(remediation, issue_number=issue_number)
     expected = {"parent_authorization_id", "pull_request_number", "branch", "bound_head_sha", "attempt", "findings"}
@@ -915,6 +958,15 @@ def issue_agent_task_text(authorization: IssueAgentAuthorization) -> str:
                 "A previous attempt at this task was refused before publication because Ruff reported these findings "
                 "on the files it wrote. That attempt is not available. Complete the task from the base and do not "
                 "reintroduce these findings."
+            )
+        elif is_timeout_recovery(authorization.remediation):
+            # Issue #705: the task again from the same base; the timed-out attempt left no result to continue.
+            text["timeout_recovery_of_branch"] = authorization.remediation["branch"]
+            text["timeout_failed_base_sha"] = authorization.remediation["bound_head_sha"]
+            text["timeout_instruction"] = (
+                "A previous attempt at this task reached its execution time budget before producing a result. "
+                "That attempt is not available. Complete the task from the base, favouring the smallest change "
+                "that satisfies the Issue."
             )
         elif is_preflight_recovery(authorization.remediation):
             # ADR 0039 L9: a bounded recovery task -- the exact failing tests of the exact failed head.

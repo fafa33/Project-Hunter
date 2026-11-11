@@ -634,6 +634,15 @@ EVIDENCE_SCHEMAS: Final[Mapping[str, Validator]] = {
                     **_RUFF_FAILURE,
                 }
             ),
+            # Issue #705: present only on a recovery of the parent's signed pre-publication executor timeout.
+            "timeout_recovery": _object(
+                {
+                    "parent_authorization_id": AUTHORIZATION_ID,
+                    "bound_base_sha": SHA40,
+                    "attempt": _int(1),
+                    "failed_run_id": POSITIVE,
+                }
+            ),
             # ADR 0039 L4: present only on a finding-driven remediation of the parent's open PR.
             "remediation": _object(
                 {
@@ -1026,6 +1035,9 @@ MAX_PREFLIGHT_RECOVERY_AUTHORIZATIONS: Final = MAX_PREFLIGHT_RECOVERY_ATTEMPTS +
 PREFLIGHT_RECOVERY_TRIGGER: Final = "CANDIDATE_PREFLIGHT_FAILED"
 #: ADR 0039 L10: the one validator refusal a repair may start from, before anything was published.
 VALIDATOR_RECOVERY_TRIGGER: Final = "PRE_PUSH_RUFF_FAILED"
+#: Issue #705: the one signed executor failure a timeout recovery may start from. It fails from AUTHORIZED,
+#: so nothing was ever published: it is never an L9 preflight recovery, which starts from PUBLISHED.
+TIMEOUT_RECOVERY_TRIGGER: Final = "EXECUTOR_RESULT_TIMEOUT"
 _RUFF_FAILURE_FIELDS: Final = tuple(_RUFF_FAILURE)
 
 
@@ -1058,11 +1070,14 @@ def _ruff_failure_conforms(group: Mapping[str, Any]) -> bool:
 
 
 def recovery_group(item: AuthorizationView) -> Mapping[str, Any] | None:
-    """This authorization's automated-repair group (ADR 0039 L9 or L10), or ``None``."""
+    """This authorization's automated-repair group (ADR 0039 L9 or L10, or Issue #705), or ``None``."""
 
     bound = item.evidence[AUTHORIZED]
-    group = bound.get("preflight_recovery")
-    return bound.get("validator_recovery") if group is None else group
+    for name in ("preflight_recovery", "validator_recovery", "timeout_recovery"):
+        group = bound.get(name)
+        if group is not None:
+            return group
+    return None
 
 
 def preflight_recoveries(view: LedgerView, branch: str) -> list[AuthorizationView]:
@@ -1177,6 +1192,69 @@ def validator_recovery_refusal(view: LedgerView, group: Mapping[str, Any], *, br
     return preflight_recovery_budget_refusal(done)
 
 
+def timeout_failure_source(parent: AuthorizationView) -> Mapping[str, Any] | None:
+    """Issue #705: the signed executor timeout this parent carries, or ``None`` when it is not recoverable.
+
+    Either the parent itself failed ``EXECUTOR_RESULT_TIMEOUT`` from ``AUTHORIZED`` (so nothing was published and
+    no branch exists), or it is a recovery the ledger shows never reached execution, in which case the signed
+    failure it was authorized for still stands. The source names the signed run that recorded the exact failure.
+    """
+
+    failure = parent.evidence.get(FAILED)
+    if (
+        parent.state == FAILED
+        and failure is not None
+        and failure.get("code") == TIMEOUT_RECOVERY_TRIGGER
+        and failure.get("failed_from_state") == AUTHORIZED
+    ):
+        failed = [record for record in parent.records if record.get("state") == FAILED]
+        if len(failed) != 1:
+            return None
+        return {"failed_run_id": failed[0]["recorded_by"]["run_id"]}
+    if recovery_unstarted_on_ledger(parent):
+        group = parent.evidence[AUTHORIZED].get("timeout_recovery")
+        return None if group is None else {"failed_run_id": group["failed_run_id"]}
+    return None
+
+
+def timeout_recovery_refusal(view: LedgerView, group: Mapping[str, Any], *, branch: str) -> str | None:
+    """Issue #705: why this recovery of a signed executor timeout may not be claimed, or ``None``.
+
+    The one rule both ``authorize`` and the ledger fold apply. The recovery binds the parent's exact signed
+    failed run, the same base and the same branch, and shares the lineage's one repair budget (owner D1) with
+    L9 and L10. A published lineage (a remediation or an L9 recovery) is never repaired here.
+    """
+
+    parent_id = group["parent_authorization_id"]
+    parent = view.authorizations.get(parent_id)
+    if parent is None:
+        return "the recovery parent is not an authorization of this Issue"
+    if parent.binding("execution_branch") != branch:
+        return "a recovery runs only on its parent authorization's branch"
+    source = timeout_failure_source(parent)
+    if source is None:
+        return "the recovery parent carries no signed pre-publication executor timeout"
+    if parent.evidence[AUTHORIZED].get("remediation") is not None or (
+        parent.evidence[AUTHORIZED].get("preflight_recovery") is not None
+    ):
+        return "only a candidate that was never published is repaired before publication"
+    if parent.binding("base_sha") != group["bound_base_sha"]:
+        return "the bound base is not the parent's exact base"
+    if group["failed_run_id"] != source["failed_run_id"]:
+        return "the recovery does not bind the parent's exact signed failed run"
+    lineage = [
+        identity for identity in view.claimed if view.authorizations[identity].binding("execution_branch") == branch
+    ]
+    if not lineage or lineage[-1] != parent_id:
+        return "the recovery parent is not the newest authorization on its branch"
+    done = preflight_recoveries(view, branch)
+    if any(_recovers(item, parent_id) for item in done):
+        return "this failed execution was already recovered"
+    if group["attempt"] != len(done) + 1:
+        return "the recovery attempt is not the next attempt of this lineage"
+    return preflight_recovery_budget_refusal(done)
+
+
 def preflight_recovery_refusal(
     view: LedgerView, *, parent_authorization_id: str, branch: str, bound_head_sha: str, attempt: int
 ) -> str | None:
@@ -1239,7 +1317,18 @@ def _check_authorized_bindings(record: Mapping[str, Any], view: LedgerView | Non
     remediation = evidence.get("remediation")
     recovery = evidence.get("preflight_recovery")
     validator = evidence.get("validator_recovery")
-    if validator is not None:
+    timeout = evidence.get("timeout_recovery")
+    if timeout is not None:
+        if remediation is not None or recovery is not None or validator is not None:
+            raise LedgerCorruptError("an authorization carries exactly one recovery or remediation group")
+        if view is None:
+            raise LedgerCorruptError("a timeout recovery needs the Issue ledger it recovers")
+        refusal = timeout_recovery_refusal(view, timeout, branch=evidence["execution_branch"])
+        if refusal is not None:
+            raise LedgerCorruptError(refusal)
+        if evidence["base_sha"] != timeout["bound_base_sha"]:
+            raise LedgerCorruptError("a timeout recovery's base is not its parent's exact base")
+    elif validator is not None:
         if remediation is not None or recovery is not None:
             raise LedgerCorruptError("an authorization carries exactly one recovery or remediation group")
         if view is None:

@@ -1279,6 +1279,74 @@ def eligible_validator_recovery(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class TimeoutRecoveryCandidate:
+    """One signed, recoverable pre-publication executor timeout (Issue #705). Every field is a ledger fact."""
+
+    branch: str
+    bound_base_sha: str
+    parent_authorization_id: str
+    attempt: int
+    failed_run_id: int
+
+
+def eligible_timeout_recovery(
+    github: GitHub, configuration: Configuration, view: state.LedgerView, issue: int
+) -> TimeoutRecoveryCandidate | PreflightFailureClass | None:
+    """Issue #705: the one recoverable executor timeout of this Issue, why it stays terminal, or ``None``.
+
+    Only the signed ledger names the failure: the exact signed run that recorded ``EXECUTOR_RESULT_TIMEOUT``
+    from ``AUTHORIZED``. Nothing was published, so this is never an L9 preflight recovery: the branch must not
+    exist, no pull request may be open, the bound base must still be on main and the Issue unchanged. Every
+    indefinite read stops the pass; ``authorize`` and the ledger fold re-apply the binding rules under CAS.
+    """
+
+    if view.active is not None or not view.claimed:
+        return None
+    parent = view.authorizations[view.claimed[-1]]
+    source = state.timeout_failure_source(parent)
+    if source is None:
+        return None
+    bound = parent.evidence[state.AUTHORIZED]
+    if bound.get("remediation") is not None or bound.get("preflight_recovery") is not None:
+        return PreflightFailureClass("unknown", reason="a published lineage is never repaired before publication")
+    branch, base = str(parent.binding("execution_branch")), str(parent.binding("base_sha"))
+    done = state.preflight_recoveries(view, branch)
+    proven = {
+        item.authorization_id
+        for item in done
+        if state.recovery_unstarted_on_ledger(item) and execution_never_scheduled(github, configuration, item)
+    }
+    if state.recovery_unstarted_on_ledger(parent) and parent.authorization_id not in proven:
+        return PreflightFailureClass("unknown", reason="execution of the interrupted recovery cannot be ruled out")
+    if state.preflight_recovery_budget_refusal(done, unstarted=lambda item: item.authorization_id in proven):
+        return PreflightFailureClass("unknown", reason="RECOVERY_BUDGET_EXHAUSTED")
+    repository = configuration.repository
+    if definitive(github.get(f"/repos/{repository}/git/ref/heads/{branch}")) is not None:
+        return PreflightFailureClass("unknown", reason="the never-published branch exists")
+    if _pull_requests(github, configuration, branch):
+        return None
+    compare = definitive(github.get(f"/repos/{repository}/compare/{base}...main"))
+    if not isinstance(compare, Mapping) or compare.get("status") not in {"ahead", "identical"}:
+        return PreflightFailureClass("unknown", reason="the bound base is no longer on main")
+    live = definitive(github.get(f"/repos/{repository}/issues/{issue}"))
+    if not isinstance(live, Mapping):
+        raise FactsUnavailable("the governing Issue is not observable")
+    claims = bound["claims"]
+    if (
+        state.sha256_hex(str(live.get("title") or "").encode("utf-8")) != claims["title_sha256"]
+        or state.sha256_hex(str(live.get("body") or "").encode("utf-8")) != claims["body_sha256"]
+    ):
+        return PreflightFailureClass("unknown", reason="the Issue changed after the failed authorization")
+    return TimeoutRecoveryCandidate(
+        branch=branch,
+        bound_base_sha=base,
+        parent_authorization_id=parent.authorization_id,
+        attempt=len(done) + 1,
+        failed_run_id=int(source["failed_run_id"]),
+    )
+
+
 #: ADR 0039 L7 (RD-6): the one GraphQL mutation a control job may perform. It resolves exactly one thread, and
 #: the repository has no other review-mutation path, so a review can never be edited, dismissed or approved here.
 RESOLVE_THREAD_MUTATION: Final = """
@@ -2169,6 +2237,7 @@ __all__ = [
     "dispatch_remediation",
     "eligible_preflight_recovery",
     "eligible_validator_recovery",
+    "eligible_timeout_recovery",
     "eligible_remediation",
     "classify_preflight_log",
     "lineage_branch_unpublished",
