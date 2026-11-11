@@ -206,29 +206,36 @@ def test_sonar_observation_enters_existing_signed_ledger_ingestion_contract():
     )
 
 
-def test_duplication_quality_gate_failure_is_ingested_without_claiming_authority():
+def duplication_getter(*, density="6.9", duplicated="33", missing=False):
+    """One reusable Sonar metric fixture; individual tests vary only the evidence."""
+
     def get(url: str):
         if "measures/component_tree" in url:
             return {
                 "components": [
                     {
                         "key": "fafa33_Project-Hunter:src/x.py",
-                        "measures": [{"metric": "new_duplicated_lines", "periods": [{"value": "33"}]}],
+                        "measures": [{"metric": "new_duplicated_lines", "periods": [{"value": duplicated}]}],
                     }
                 ]
             }
         if "measures/component" in url:
-            return {
-                "component": {
-                    "measures": [
-                        {"metric": "new_duplicated_lines_density", "periods": [{"value": "6.9"}]},
-                        {"metric": "new_duplicated_lines", "periods": [{"value": "33"}]},
-                    ]
-                }
-            }
+            measures = (
+                []
+                if missing
+                else [
+                    {"metric": "new_duplicated_lines_density", "periods": [{"value": density}]},
+                    {"metric": "new_duplicated_lines", "periods": [{"value": duplicated}]},
+                ]
+            )
+            return {"component": {"measures": measures}}
         return getter()(url)
 
-    rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=get)
+    return get
+
+
+def test_duplication_quality_gate_failure_is_ingested_without_claiming_authority():
+    rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=duplication_getter())
     assert len(rows) == 1
     assert rows[0]["event_id"].startswith(f"sonar-issue-duplication-{HEAD}-")
     assert rows[0]["path"] == "src/x.py"
@@ -238,21 +245,7 @@ def test_duplication_quality_gate_failure_is_ingested_without_claiming_authority
 
 
 def test_missing_duplication_metrics_cannot_be_reported_as_clean():
-    def get(url: str):
-        if "measures/component_tree" in url:
-            return {
-                "components": [
-                    {
-                        "key": "fafa33_Project-Hunter:src/x.py",
-                        "measures": [{"metric": "new_duplicated_lines", "periods": [{"value": "33"}]}],
-                    }
-                ]
-            }
-        if "measures/component" in url:
-            return {"component": {"measures": []}}
-        return getter()(url)
-
-    rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=get)
+    rows = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=duplication_getter(missing=True))
     assert rows[0]["availability"] == "unavailable"
     assert "duplication" in rows[0]["message"]
 
@@ -260,28 +253,7 @@ def test_missing_duplication_metrics_cannot_be_reported_as_clean():
 def test_duplication_observation_is_accepted_by_canonical_finding_contract():
     from hunter.automation import issue_agent_knowledge as knowledge
 
-    def get(url: str):
-        if "measures/component_tree" in url:
-            return {
-                "components": [
-                    {
-                        "key": "fafa33_Project-Hunter:src/x.py",
-                        "measures": [{"metric": "new_duplicated_lines", "periods": [{"value": "33"}]}],
-                    }
-                ]
-            }
-        if "measures/component" in url:
-            return {
-                "component": {
-                    "measures": [
-                        {"metric": "new_duplicated_lines_density", "periods": [{"value": "6.9"}]},
-                        {"metric": "new_duplicated_lines", "periods": [{"value": "33"}]},
-                    ]
-                }
-            }
-        return getter()(url)
-
-    observation = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=get)[0]
+    observation = module.collect("fafa33_Project-Hunter", 494, HEAD, BASE, get_json=duplication_getter())[0]
     evidence = knowledge.finding_from_observation(observation, repository_id=1292945327, trusted_reviewers=frozenset())
     assert evidence["provenance"]["provider"] == "sonar"
     assert evidence["provenance"]["path"] == "src/x.py"
