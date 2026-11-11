@@ -866,6 +866,33 @@ class RemediationCandidate:
     attempts: tuple[int, ...]
 
 
+def _verified_sonar_duplication_failure(github: GitHub, repository: str, head: str) -> bool:
+    """Only the official Sonar app's failed exact-head check authorizes a sensor remediation.
+
+    Signed knowledge supplies the path/claim, never the execution authority. An
+    unavailable or ambiguous check list fails closed, without a speculative retry.
+    """
+    try:
+        payload = definitive(github.get(f"/repos/{repository}/commits/{head}/check-runs?per_page=100"))
+    except FactsUnavailable:
+        return False
+    if not isinstance(payload, Mapping) or type(payload.get("total_count")) is not int:
+        return False
+    checks = payload.get("check_runs")
+    if not isinstance(checks, list) or payload["total_count"] != len(checks):
+        return False
+    matches = [
+        run
+        for run in checks
+        if isinstance(run, Mapping)
+        and run.get("name") == "SonarCloud Code Analysis"
+        and isinstance(run.get("app"), Mapping)
+        and run["app"].get("slug") == "sonarqubecloud"
+        and run.get("head_sha") == head
+    ]
+    return len(matches) == 1 and matches[0].get("conclusion") == "failure"
+
+
 def eligible_remediation(
     github: GitHub,
     configuration: Configuration,
@@ -922,7 +949,17 @@ def eligible_remediation(
             continue
         # Ingestion is reviewer-independent, execution authority is not.
         # Missing trusted reviewer configuration fails closed.
-        if str(item.ingested["provenance"]["reviewer"]).lower().removesuffix("[bot]") not in {
+        provider = item.ingested["provenance"].get("provider")
+        sonar_duplication = (
+            provider == "sonar"
+            and item.ingested["provenance"].get("reviewer") == "sonarqube-cloud"
+            and str(item.ingested["provenance"].get("source_issue_key", "")).startswith("duplication-")
+            and str(item.ingested["claim"]).startswith("sonar new-code duplication gate failed:")
+        )
+        if sonar_duplication:
+            if not _verified_sonar_duplication_failure(github, configuration.repository, head):
+                continue
+        elif str(item.ingested["provenance"]["reviewer"]).lower().removesuffix("[bot]") not in {
             name.lower().removesuffix("[bot]") for name in trusted_reviewers
         }:
             continue
