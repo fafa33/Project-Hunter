@@ -122,6 +122,54 @@ jobs:
           python scripts/hunter_collect_learning_observations.py \
             --repository "${REPOSITORY}" --pr "${PR_NUMBER}" --head "${HEAD_SHA}" --base "${BASE_SHA}" \
             > hunter-finding-lifecycle.json
+      - name: Provision GitHub SSH host key for canonicalization push
+        if: steps.engine.outputs.available == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          touch "$HOME/.ssh/known_hosts"
+          if ssh-keygen -F github.com -f "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then
+            echo "github.com already present in known_hosts; no provisioning needed."
+          else
+            # Issue #551: this job's push step authenticates to github.com over SSH (see the
+            # next step), which depends on the executing account's own known_hosts -- not on
+            # anything `actions/checkout` configures. The self-hosted fleet schedules this job
+            # across more than one macOS runner account, and a dedicated non-interactive
+            # service account has never made an interactive SSH connection, so it fails closed
+            # with "Host key verification failed" before ever reaching the push. Confirmed from
+            # real hosted evidence: 12 consecutive canonicalization runs (PRs #691-#729) failed
+            # here. Fetching GitHub's own current host keys from its Meta API over HTTPS --
+            # GitHub's documented non-interactive provisioning path -- repairs this without ever
+            # relaxing host-key verification itself.
+            if ! curl -fsSL --proto '=https' --proto-redir '=https' https://api.github.com/meta -o "$RUNNER_TEMP/github-meta.json"; then
+              echo "INFRA_PROVISIONING_FAILURE: could not fetch GitHub's published SSH host keys" >&2
+              exit 86
+            fi
+            if ! python3 - "$RUNNER_TEMP/github-meta.json" "$HOME/.ssh/known_hosts" <<'PYEOF'
+          import json
+          import sys
+
+          meta_path, known_hosts_path = sys.argv[1], sys.argv[2]
+          with open(meta_path, encoding="utf-8") as handle:
+              meta = json.load(handle)
+          keys = meta.get("ssh_keys")
+          if not keys:
+              raise SystemExit("GitHub Meta API response had no ssh_keys")
+          with open(known_hosts_path, "a", encoding="utf-8") as handle:
+              for key in keys:
+                  handle.write(f"github.com {key}\n")
+          PYEOF
+            then
+              echo "INFRA_PROVISIONING_FAILURE: could not write GitHub's published host keys to known_hosts" >&2
+              exit 86
+            fi
+            if ! ssh-keygen -F github.com -f "$HOME/.ssh/known_hosts" >/dev/null 2>&1; then
+              echo "INFRA_PROVISIONING_FAILURE: github.com still missing from known_hosts after provisioning" >&2
+              exit 86
+            fi
+            echo "Provisioned github.com host key(s) from GitHub's own published Meta API."
+          fi
       - name: Propose canonical knowledge when replayable evidence exists
         if: steps.engine.outputs.available == 'true'
         env:

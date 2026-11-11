@@ -784,6 +784,59 @@ def test_canonicalization_provisions_pre_push_toolchain_from_setup_python():
     assert '>> "$GITHUB_PATH"' in command
 
 
+def test_canonicalization_provisions_github_ssh_host_key_before_push() -> None:
+    """The push step authenticates over SSH; a fresh runner account must not fail closed forever.
+
+    Hosted evidence (12 consecutive canonicalization runs, PRs #691-#729) showed
+    `[Hunter Canonicalization Candidate PR] FAIL: fetch base branch failed: Host key
+    verification failed.` -- the self-hosted fleet schedules this job across more than
+    one macOS runner account, and a dedicated non-interactive service account had never
+    made an interactive SSH connection, so `github.com` was absent from its own
+    `known_hosts`. This asserts the dedicated provisioning step's real text: it skips
+    work when `github.com` is already known, otherwise fetches GitHub's own published
+    host keys over HTTPS (never a blind `ssh-keyscan`/TOFU accept) and fails closed,
+    classifiable, on any step of that provisioning -- and never relaxes host-key
+    verification itself.
+    """
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    path = root / ".github" / "workflows" / "hunter-canonicalization-auto.yml"
+    workflow = yaml.safe_load(path.read_text())
+    steps = [step for job in workflow["jobs"].values() for step in job.get("steps", [])]
+    (provision,) = (s for s in steps if s.get("name") == "Provision GitHub SSH host key for canonicalization push")
+    script = provision["run"]
+
+    # Runs before the step that actually pushes over SSH.
+    names = [s.get("name") for s in steps]
+    assert names.index("Provision GitHub SSH host key for canonicalization push") < names.index(
+        "Propose canonical knowledge when replayable evidence exists"
+    )
+
+    assert "ssh-keygen -F github.com" in script
+    assert "already present in known_hosts" in script
+    assert "https://api.github.com/meta" in script
+    assert "ssh_keys" in script
+
+    # SonarCloud (PR #731): `curl -L` without pinning the protocol lets a compromised or
+    # misconfigured endpoint redirect the fetch to a cleartext http:// URL. Restrict both
+    # the initial connection and any redirect target to https explicitly.
+    assert "--proto '=https'" in script
+    assert "--proto-redir '=https'" in script
+
+    assert script.count("INFRA_PROVISIONING_FAILURE") >= 1
+    lines = script.splitlines()
+    for index, line in enumerate(lines):
+        if "INFRA_PROVISIONING_FAILURE" in line:
+            following = "\n".join(lines[index : index + 3])
+            assert "exit 86" in following, following
+
+    # Never a blind TOFU accept, and never a weakened/disabled host-key check.
+    assert "ssh-keyscan" not in script
+    assert "StrictHostKeyChecking" not in script
+    assert "UserKnownHostsFile=/dev/null" not in script
+
+
 def test_governed_review_request_rejects_missing_issue_criteria(tmp_path: Path) -> None:
     """Never reuse inherited review claims when trusted Issue evidence is empty."""
 

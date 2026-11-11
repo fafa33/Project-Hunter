@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -229,6 +230,7 @@ def test_draft_success_marks_ready_exact_head(monkeypatch):
     monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
     monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
     monkeypatch.setattr(admission, "mark_ready", lambda token, node: calls.append(node) or True)
+    monkeypatch.setattr(admission, "request_external_code_review", lambda *_: True)
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, HEAD) == 0
     assert calls == ["PR_test_node"]
 
@@ -300,6 +302,60 @@ def test_mark_ready_requires_graphql_confirmation(monkeypatch):
     assert admission.mark_ready("token", "PR_test_node") is False
 
 
+def test_automatic_ready_transition_requests_external_code_review(monkeypatch):
+    """Regression: the external reviewer app never reacted to this App's own Ready
+    mutation (verified: zero reviews across every automatically-admitted PR since
+    PR #704 gave this App write access, versus a review every time before that, when
+    a human performed the same transition). Restore dispatch via the app's own
+    documented comment trigger on the one path that stopped working, without
+    touching the Ready mutation or anything a human-performed transition already does.
+    """
+    requested = []
+    states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: True)
+    monkeypatch.setattr(
+        admission,
+        "request_external_code_review",
+        lambda token, repository, pr_number: requested.append((token, repository, pr_number)) or True,
+    )
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, HEAD) == 0
+    assert requested == [("token", "fafa33/Project-Hunter", 616)]
+
+
+def test_external_code_review_request_posts_the_documented_comment_trigger(monkeypatch):
+    posted = {}
+
+    def fake_rest(*, url, method, headers, data, token, **_):
+        posted["url"] = url
+        posted["method"] = method
+        posted["body"] = json.loads(data)
+        posted["token"] = token
+        return None
+
+    monkeypatch.setattr(admission.transport, "request_rest_json", fake_rest)
+    assert admission.request_external_code_review("token", "fafa33/Project-Hunter", 731) is True
+    assert posted["url"] == "https://api.github.com/repos/fafa33/Project-Hunter/issues/731/comments"
+    assert posted["method"] == "POST"
+    assert posted["body"] == {"body": "@codex review"}
+    assert posted["token"] == "token"
+
+
+def test_external_code_review_request_failure_is_best_effort_and_never_undoes_ready(monkeypatch):
+    def boom(**_):
+        raise RuntimeError("rate limited")
+
+    monkeypatch.setattr(admission.transport, "request_rest_json", boom)
+    assert admission.request_external_code_review("token", "fafa33/Project-Hunter", 731) is False
+
+    states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: True)
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, HEAD) == 0
+
+
 def test_issue_616_policy_authorizes_automatic_ready_without_owner_comment(monkeypatch):
     """Canonical exact-head proof, not a per-HEAD owner comment, authorizes Ready."""
     states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
@@ -312,6 +368,7 @@ def test_issue_616_policy_authorizes_automatic_ready_without_owner_comment(monke
     )
     called = []
     monkeypatch.setattr(admission, "mark_ready", lambda _token, node: (called.append(node), True)[1])
+    monkeypatch.setattr(admission, "request_external_code_review", lambda *_: True)
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, HEAD) == 0
     assert called == ["PR_test_node"]
 
