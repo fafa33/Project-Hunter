@@ -513,3 +513,60 @@ def test_a_minted_remediation_document_is_verifiable_and_binds_the_exact_head(
     # A second pass over the same facts mints the identical identity, so a duplicate dispatch loses the claim.
     again = remediation.remediation_authorization(issue, repository=REPOSITORY, owner_login="fafa33", remediation=group)
     assert again.authorization_id == authorization.authorization_id
+
+
+def test_sonar_duplication_requires_official_failed_exact_head_check():
+    facts = Facts()
+    endpoint = f"/repos/{REPOSITORY}/commits/{HEAD}/check-runs"
+    run = {
+        "name": "SonarCloud Code Analysis",
+        "app": {"slug": "sonarqubecloud"},
+        "head_sha": HEAD,
+        "conclusion": "failure",
+    }
+    assert not control._verified_sonar_duplication_failure(facts, REPOSITORY, HEAD)
+    facts.routes[endpoint] = {"total_count": 1, "check_runs": [run]}
+    assert control._verified_sonar_duplication_failure(facts, REPOSITORY, HEAD)
+    for altered in ({**run, "head_sha": "f" * 40}, {**run, "app": {"slug": "other"}}, {**run, "conclusion": "success"}):
+        facts.routes[endpoint] = {"total_count": 1, "check_runs": [altered]}
+        assert not control._verified_sonar_duplication_failure(facts, REPOSITORY, HEAD)
+    facts.routes[endpoint] = {"total_count": 2, "check_runs": [run]}
+    assert not control._verified_sonar_duplication_failure(facts, REPOSITORY, HEAD)
+
+
+def test_sonar_duplication_dispatch_admission_requires_failed_check(
+    store: state.GitLedgerStore, completed: state.LedgerView
+) -> None:
+    head = completed.authorizations[AUTH].evidence[state.PUBLISHED]["head_sha"]
+    facts = Facts().open_pr(head=head)
+    observation = {
+        "source": "sonar",
+        "provider": "sonar",
+        "event_id": f"sonar-issue-duplication-{head}-a1b2c3d4",
+        "source_pr": PULL_REQUEST,
+        "reviewed_head_sha": head,
+        "reviewed_base_sha": "b" * 40,
+        "reviewer": "sonarqube-cloud",
+        "path": GUARD,
+        "line": None,
+        "message": "Sonar new-code duplication gate failed: 6.9% > 3.0% (33 duplicated lines in file)",
+        "availability": "available",
+    }
+    known = ingested(store, observation)
+    assert len(known.findings) == 1
+    assert eligible(facts, completed, known) is None
+    facts.routes[f"/repos/{REPOSITORY}/commits/{head}/check-runs"] = {
+        "total_count": 1,
+        "check_runs": [
+            {
+                "name": "SonarCloud Code Analysis",
+                "app": {"slug": "sonarqubecloud"},
+                "head_sha": head,
+                "conclusion": "failure",
+            }
+        ],
+    }
+    candidate = eligible(facts, completed, known)
+    assert candidate is not None
+    assert candidate.findings[0]["path"] == GUARD
+    assert candidate.bound_head_sha == head

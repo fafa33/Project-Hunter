@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import urllib.parse
 import urllib.request
@@ -13,6 +14,10 @@ from typing import Any
 SONAR_API = "https://sonarcloud.io/api"
 MAX_ISSUES = 100
 JsonGetter = Callable[[str], Any]
+
+
+def sha256_path(path: str) -> str:
+    return hashlib.sha256(path.encode("utf-8")).hexdigest()[:16]
 
 
 def _get_json(url: str) -> Any:
@@ -92,6 +97,76 @@ def collect(project: str, pr: int, head: str, base: str, *, get_json: JsonGetter
             return _unavailable(pr, head, base, "Sonar issue payload contains a malformed issue")
         combined = {item["key"]: item for item in raw_issues}
         issues_payload = {"issues": list(combined.values()), "total": len(combined)}
+        # Sonar quality-gate duplication is a metric, not an issues/search issue.
+        # Capture it as an observation, never as independent remediation authority.
+        measures = get_json(
+            _url(
+                "measures/component",
+                component=project,
+                pullRequest=pr,
+                metricKeys="new_duplicated_lines_density,new_duplicated_lines",
+            )
+        )
+        raw_measures = measures.get("component", {}).get("measures") if isinstance(measures, dict) else None
+        if not isinstance(raw_measures, list):
+            return _unavailable(pr, head, base, "Sonar duplication measures unavailable")
+        metrics = {}
+        for measure in raw_measures:
+            if not isinstance(measure, dict):
+                return _unavailable(pr, head, base, "Sonar duplication measure malformed")
+            periods = measure.get("periods")
+            if not isinstance(periods, list) or len(periods) != 1 or not isinstance(periods[0], dict):
+                return _unavailable(pr, head, base, "Sonar duplication period unavailable")
+            metrics[measure.get("metric")] = periods[0].get("value")
+        try:
+            density = float(metrics["new_duplicated_lines_density"])
+            duplicated = int(metrics["new_duplicated_lines"])
+            if not (0 <= density <= 100 and 0 <= duplicated <= 1000000):
+                raise ValueError("invalid duplication metric")
+        except (ValueError, TypeError, KeyError, OverflowError):
+            return _unavailable(pr, head, base, "Sonar duplication measures invalid")
+        duplicate_files: list[tuple[str, int]] = []
+        if density > 3.0:
+            tree = get_json(
+                _url(
+                    "measures/component_tree",
+                    component=project,
+                    pullRequest=pr,
+                    metricKeys="new_duplicated_lines",
+                    qualifiers="FIL",
+                    ps=500,
+                )
+            )
+            files = tree.get("components") if isinstance(tree, dict) else None
+            paging = tree.get("paging") if isinstance(tree, dict) else None
+            if (
+                not isinstance(files, list)
+                or len(files) > 500
+                or (isinstance(paging, dict) and paging.get("total", 0) > len(files))
+            ):
+                return _unavailable(pr, head, base, "Sonar duplicate-file evidence incomplete")
+            for file in files:
+                if not isinstance(file, dict) or not isinstance(file.get("key"), str):
+                    return _unavailable(pr, head, base, "Sonar duplicate-file evidence malformed")
+                values = file.get("measures")
+                if not isinstance(values, list):
+                    return _unavailable(pr, head, base, "Sonar duplicate-file metrics missing")
+                for value in values:
+                    if isinstance(value, dict) and value.get("metric") == "new_duplicated_lines":
+                        periods = value.get("periods")
+                        if not isinstance(periods, list) or len(periods) != 1:
+                            return _unavailable(pr, head, base, "Sonar duplicate-file period missing")
+                        try:
+                            count = int(periods[0]["value"])
+                        except (KeyError, ValueError, TypeError, IndexError):
+                            return _unavailable(pr, head, base, "Sonar duplicate-file count invalid")
+                        if count > 0:
+                            path = file["key"].removeprefix(project + ":")
+                            if path == file["key"] or path.startswith("/") or ".." in path.split("/"):
+                                return _unavailable(pr, head, base, "Sonar duplicate-file path invalid")
+                            duplicate_files.append((path, count))
+            if not duplicate_files:
+                return _unavailable(pr, head, base, "Sonar duplication gate failed without file evidence")
         # Close the TOCTOU window: a newer Sonar analysis can replace the PR
         # issue view between the first metadata read and issues/search.
         refreshed = get_json(_url("project_pull_requests/list", project=project))
@@ -152,6 +227,28 @@ def collect(project: str, pr: int, head: str, base: str, *, get_json: JsonGetter
                 "classification": None,
                 "invariant": None,
                 "affected_paths": [],
+                "fix_reference": None,
+                "regression_evidence": [],
+                "claimed_family_id": None,
+            }
+        )
+    for path, count in duplicate_files:
+        observations.append(
+            {
+                "source": "sonar",
+                "provider": "sonar",
+                "event_id": f"sonar-issue-duplication-{head}-{sha256_path(path)}",
+                "source_pr": pr,
+                "reviewed_head_sha": head,
+                "reviewed_base_sha": base,
+                "reviewer": "sonarqube-cloud",
+                "path": path,
+                "line": None,
+                "message": f"Sonar new-code duplication gate failed: {density}% > 3.0% ({count} duplicated lines in file)",
+                "availability": "available",
+                "classification": None,
+                "invariant": None,
+                "affected_paths": [path],
                 "fix_reference": None,
                 "regression_evidence": [],
                 "claimed_family_id": None,
