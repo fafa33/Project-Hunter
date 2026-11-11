@@ -73,6 +73,7 @@ WRITER_ROLES: Final[Mapping[str, frozenset[str]]] = {
     "historical_evidence_assessed": frozenset({"knowledge-ingest"}),
     "thread_resolved": frozenset({"reconcile"}),
     "recurrence": frozenset({"reconcile"}),
+    "verified_e2e_outcome": frozenset({"knowledge-ingest"}),
 }
 
 _PROVENANCE = _object(
@@ -101,6 +102,23 @@ _CLASSIFICATION = _object(
     }
 )
 EVIDENCE_SCHEMAS: Final = {
+    # Positive lifecycle evidence is not a finding and cannot authorize proof by itself.
+    "verified_e2e_outcome": _object(
+        {
+            "issue_number": POSITIVE,
+            "pull_request_number": POSITIVE,
+            "head_sha": SHA40,
+            "base_sha": SHA40,
+            "merge_commit_sha": SHA40,
+            "lifecycle_run_id": POSITIVE,
+            "lifecycle_run_attempt": POSITIVE,
+            "authoritative_job": _pattern(_PATH),
+            "proof_digest": SHA64,
+            "conclusion": _exact("success"),
+            "admission_run_id": POSITIVE,
+            "source": _exact("github-authenticated-canonical-proof"),
+        }
+    ),
     "finding_ingested": _object(
         {
             "finding_id": SHA64,
@@ -331,6 +349,7 @@ class Finding:
 class KnowledgeView:
     repository_id: int
     findings: dict[str, Finding] = field(default_factory=dict)
+    verified_e2e_outcomes: dict[str, dict[str, Any]] = field(default_factory=dict)
     candidates: dict[str, dict[str, Any]] = field(default_factory=dict)
     recurrences: set[tuple[str, str]] = field(default_factory=set)
     keys: dict[tuple[str, str], str] = field(default_factory=dict)  # (kind, key) -> evidence digest
@@ -358,6 +377,12 @@ def record_key(kind: str, evidence: Mapping[str, Any]) -> str:
 
     if kind in {"finding_ingested", "finding_proven", "thread_resolved", "historical_evidence_assessed"}:
         return str(evidence["finding_id"])
+    if kind == "verified_e2e_outcome":
+        return sha256_hex(
+            canonical_json(
+                {"issue_number": evidence["issue_number"], "pull_request_number": evidence["pull_request_number"]}
+            )
+        )
     if kind == "finding_classified":
         return sha256_hex(canonical_json({"finding_id": evidence["finding_id"], "basis": evidence["basis"]}))
     if kind == "family_candidate":
@@ -402,6 +427,11 @@ def apply(view: KnowledgeView, record: Mapping[str, Any], *, trust: TrustRoots, 
 
 
 def _fold(view: KnowledgeView, kind: str, evidence: dict[str, Any]) -> None:
+    if kind == "verified_e2e_outcome":
+        _require(evidence["head_sha"] != evidence["base_sha"], "positive outcome cannot use the base as head")
+        _require(evidence["lifecycle_run_attempt"] == 1, "rerun is not authoritative")
+        view.verified_e2e_outcomes[record_key(kind, evidence)] = dict(evidence)
+        return
     if kind == "finding_ingested":
         provenance = evidence["provenance"]
         if provenance["provider"] == "sonar":

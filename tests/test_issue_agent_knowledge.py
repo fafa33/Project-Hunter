@@ -681,3 +681,86 @@ def test_historical_legacy_binding_rejects_wrong_signed_ingestion_head(store: st
             historical_assessment(identity, reviewed_head_sha=LATER, ingested_head_sha="0" * 40),
             by={**BY, "role": "knowledge-ingest"},
         )
+
+
+def _positive_e2e_fixture() -> dict[str, Any]:
+    return {
+        "issue_number": 577,
+        "pull_request_number": 703,
+        "head_sha": "8077437e0b0e27547ac7b7bd2fb1520dd3c9d849",
+        "base_sha": "48f1ddfc306b576a1ede4c40c12588dc64c3ee9b",
+        "merge_commit_sha": "32b2db0a84d411143ad99e51fa7b547447c7a44c",
+        "lifecycle_run_id": 42510436813,
+        "lifecycle_run_attempt": 1,
+        "authoritative_job": "validate",
+        "proof_digest": "a" * 64,
+        "conclusion": "success",
+        "admission_run_id": 42526727825,
+        "source": "github-authenticated-canonical-proof",
+    }
+
+
+def test_positive_e2e_signed_record_replay_and_view(store: state.GitLedgerStore) -> None:
+    evidence = _positive_e2e_fixture()
+    by = {**BY, "role": "knowledge-ingest", "job": "knowledge-ingest"}
+    item = knowledge.Write("verified_e2e_outcome", evidence)
+    _, view, count = write(store, item, by=by)
+    assert count == 1
+    assert list(view.verified_e2e_outcomes.values()) == [evidence]
+    _, replayed, count = write(store, item, by=by)
+    assert count == 0 and replayed.next_seq == 1
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("head_sha", "48f1ddfc306b576a1ede4c40c12588dc64c3ee9b"),
+        ("lifecycle_run_attempt", 2),
+        ("conclusion", "failure"),
+        ("source", "untrusted-model"),
+    ],
+)
+def test_positive_e2e_rejects_invalid_evidence(store: state.GitLedgerStore, field: str, value: Any) -> None:
+    evidence = {**_positive_e2e_fixture(), field: value}
+    with pytest.raises(state.LedgerCorruptError):
+        write(store, knowledge.Write("verified_e2e_outcome", evidence), by={**BY, "role": "knowledge-ingest"})
+
+
+def test_positive_e2e_rejects_unprivileged_writer(store: state.GitLedgerStore) -> None:
+    with pytest.raises(state.LedgerCorruptError):
+        write(store, knowledge.Write("verified_e2e_outcome", _positive_e2e_fixture()))
+
+
+def test_a_ledger_with_no_positive_outcome_record_still_reads_as_before(store: state.GitLedgerStore) -> None:
+    """Legacy signed-record compatibility: a chain written before this extension is unaffected by it."""
+    view, written, refusals = ingest(store, observation())
+    assert written == 1 and not refusals
+    assert view.verified_e2e_outcomes == {}
+    overlay_before = knowledge.overlay_families(view)
+    _, replayed = knowledge.read(store, trust=TRUST, provenance=trusted)
+    assert replayed.verified_e2e_outcomes == {}
+    assert knowledge.overlay_families(replayed) == overlay_before
+
+
+def test_positive_e2e_outcome_reaches_the_same_view_without_duplicating_the_dpm_overlay(
+    store: state.GitLedgerStore,
+) -> None:
+    """SPM/DPM consumption (ADR 0039 L2): the positive record is readable on the same consumed ledger
+
+    and never becomes a defect-shaped overlay entry, so an existing open finding's DPM overlay is
+    byte-for-byte unaffected by its presence.
+    """
+    view, _, _ = ingest(store, observation())
+    by = {**BY, "role": "knowledge-ingest", "job": "knowledge-ingest"}
+    _, view, count = write(store, knowledge.Write("verified_e2e_outcome", _positive_e2e_fixture()), by=by)
+    assert count == 1
+    overlay = knowledge.overlay_families(view)
+    assert len(overlay) == 1  # only the pre-existing open finding; the outcome adds nothing to it
+    assert not any(
+        entry["id"].startswith(("KC-", "KF-")) and "verified_e2e_outcome" in entry["id"] for entry in overlay
+    )
+    assert list(view.verified_e2e_outcomes.values()) == [_positive_e2e_fixture()]
+    # Replaying the same write is still idempotent once a dissimilar kind already shares the chain.
+    _, replayed, count = write(store, knowledge.Write("verified_e2e_outcome", _positive_e2e_fixture()), by=by)
+    assert count == 0
+    assert knowledge.overlay_families(replayed) == overlay

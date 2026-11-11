@@ -81,11 +81,34 @@ key:
 | `finding_proven` | `finding_id` | RED→GREEN evidence at the remediated head (L5) |
 | `thread_resolved` | `finding_id` | reply id and exact head (L7) |
 | `recurrence` | `(family_id, finding_id)` | a proven finding of an already-promoted family |
+| `verified_e2e_outcome` | `(issue_number, pull_request_number)` | a positive lifecycle completion, never a finding (L2a) |
 
 **DPM overlay.** At compile time, `EngineeringContextAuthority` adds to the `main` registry families every
 `family_candidate`, and every ingested-but-unresolved finding, whose paths intersect the task's TaskScope. The
 overlay is bound in `dpm_context_sha256`, so prevention knowledge reaches every later task before its model runs.
 This is the fast path. Enrichment (classification, proof, promotion) follows without blocking PR progress.
+
+### L2a. Positive outcome evidence (owner decision D3, Issue #705, 2026-11-09/11)
+
+**Amendment, accepted 2026-11-11.** A successful end-to-end lifecycle completion is prevention-relevant
+knowledge too, but it is never a finding and can never authorize proof by itself. `verified_e2e_outcome`
+adds exactly one more insert-only kind to the existing anchored chain (L2); it adds no new ledger, writer,
+workflow or orchestrator.
+
+- **Writer.** The existing `knowledge-ingest` role (`scripts/hunter_issue_agent_lifecycle.py
+  verified-e2e-outcome`), dispatched manually through the existing `hunter-issue-agent-knowledge.yml`
+  `workflow_dispatch` input, the same bounded, no-payload-relay path already used for historical backfill.
+- **Evidence.** Every field is read back from three independent sources and never supplied by a caller:
+  the live GitHub pull request (merged state, exact head/base, merge commit), the signed Issue ledger's
+  own `COMPLETED` authorization for that issue/PR (`pull_request_head_sha`, `preflight_conclusion`, and the
+  `VALIDATED` transition's `result_sha256`/`validator_run_id`, bound as `proof_digest`/`lifecycle_run_id`),
+  and a live hosted admission run (`admission_run_id`). A mismatch on any of these fails closed.
+- **Scope.** The eligible issue/PR pair is a closed, owner-approved allowlist (currently #577/#703 alone);
+  this is a one-shot backfill, not a general ingestion mechanism.
+- **DPM/SPM consumption.** `overlay_families` (the function the SPM/DPM compile step reads) only ever
+  iterates registry-shaped family/finding entries; a `verified_e2e_outcome` record is readable on the same
+  consumed `KnowledgeView` but never enters that overlay, so it can never be misclassified as a defect
+  family and never duplicates or perturbs existing prevention entries.
 
 ### L3. Classification (RD-1)
 

@@ -456,6 +456,141 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
     return 0
 
 
+#: ADR 0039 L2 (owner decision D3, Issue #705, 2026-11-09/11): the one owner-approved positive-outcome
+#: backfill. This is a narrow, one-shot binding to an already-completed lifecycle, never a general mechanism.
+VERIFIED_E2E_OUTCOME_ISSUE: Final = 577
+VERIFIED_E2E_OUTCOME_PR: Final = 703
+VERIFIED_E2E_OUTCOME_ADMISSION_RUN_ID: Final = 42526727825
+VERIFIED_E2E_OUTCOME_ADMISSION_WORKFLOW: Final = "Hunter Candidate Admission"
+
+
+def _verified_e2e_outcome_evidence(
+    *,
+    issue: int,
+    pull_request: int,
+    pull: Mapping[str, Any],
+    authorization: state.AuthorizationView,
+    admission_run: Mapping[str, Any],
+) -> dict[str, Any]:
+    """ADR 0039 L2: bind a positive outcome only to independently observed facts.
+
+    Every field is read back from the live GitHub pull request, the signed Issue ledger's own
+    ``COMPLETED`` authorization, and a live hosted admission run -- never fabricated and never
+    supplied by a caller. The eligible issue/PR pair is the owner-approved #577/#703 outcome alone;
+    this is a one-shot backfill, not a general ingestion path.
+    """
+
+    if issue != VERIFIED_E2E_OUTCOME_ISSUE or pull_request != VERIFIED_E2E_OUTCOME_PR:
+        raise LifecycleRefused("INVALID_SCOPE", "only the owner-approved #577/#703 outcome is eligible")
+    if authorization.state != state.COMPLETED:
+        raise LifecycleRefused("COVERAGE_GAP", "the signed Issue ledger does not show a completed authorization")
+    completed = authorization.evidence.get(state.COMPLETED)
+    validated = authorization.evidence.get(state.VALIDATED)
+    if completed is None or validated is None:
+        raise LifecycleRefused("COVERAGE_GAP", "the signed Issue ledger is missing a required transition")
+    if completed.get("pull_request_number") != pull_request or completed.get("preflight_conclusion") != "success":
+        raise LifecycleRefused("COVERAGE_GAP", "the signed completion does not bind the expected PR and success")
+    validated_record = next((r for r in authorization.records if r.get("state") == state.VALIDATED), None)
+    completed_record = next((r for r in authorization.records if r.get("state") == state.COMPLETED), None)
+    if validated_record is None or completed_record is None:
+        raise LifecycleRefused("COVERAGE_GAP", "the signed VALIDATED/COMPLETED transitions are absent")
+    validated_by, completed_by = validated_record["recorded_by"], completed_record["recorded_by"]
+    if pull.get("number") != pull_request or not pull.get("merged_at"):
+        raise control.FactsUnavailable("the pull request is not authentically merged")
+    head_sha, base_sha = str(pull["head"]["sha"]), str(pull["base"]["sha"])
+    merge_commit_sha = str(pull.get("merge_commit_sha") or "")
+    if not merge_commit_sha:
+        raise control.FactsUnavailable("the merge commit identity is not observable")
+    if head_sha != str(completed["pull_request_head_sha"]):
+        raise LifecycleRefused(
+            "STALE_HISTORICAL_SOURCE", "the live pull request head does not match the signed completion"
+        )
+    if base_sha != str(validated_by["head_sha"]) or base_sha != str(completed_by["head_sha"]):
+        raise LifecycleRefused(
+            "STALE_HISTORICAL_SOURCE", "the live pull request base does not match the signed run checkout"
+        )
+    if int(validated["validator_run_id"]) != int(validated_by["run_id"]):
+        raise LifecycleRefused("COVERAGE_GAP", "the signed validator run identity is internally inconsistent")
+    if (
+        admission_run.get("id") != VERIFIED_E2E_OUTCOME_ADMISSION_RUN_ID
+        or admission_run.get("name") != VERIFIED_E2E_OUTCOME_ADMISSION_WORKFLOW
+        or admission_run.get("conclusion") != "success"
+    ):
+        raise LifecycleRefused("HISTORICAL_PROOF_GAP", "the trusted admission run cannot be authenticated")
+    return {
+        "issue_number": issue,
+        "pull_request_number": pull_request,
+        "head_sha": head_sha,
+        "base_sha": base_sha,
+        "merge_commit_sha": merge_commit_sha,
+        "lifecycle_run_id": int(validated["validator_run_id"]),
+        "lifecycle_run_attempt": int(validated_by["run_attempt"]),
+        "authoritative_job": str(validated_by["job"]),
+        "proof_digest": str(validated["result_sha256"]),
+        "conclusion": "success",
+        "admission_run_id": int(admission_run["id"]),
+        "source": "github-authenticated-canonical-proof",
+    }
+
+
+def cmd_verified_e2e_outcome(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
+    """ADR 0039 L2 (owner decision D3, Issue #705): publish the one owner-approved positive E2E record.
+
+    Reuses the existing ``knowledge-ingest`` writer role and signed CAS. Nothing here is a parallel
+    ledger, writer or proof authority: it is one more insert-only kind on the existing anchored chain.
+    """
+
+    writer = _writer("knowledge-ingest", "knowledge-ingest", control.KNOWLEDGE_WORKFLOW)
+    github = _github(configuration)
+    control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
+    control.require_anchor(github, configuration, state.ledger_ref(arguments.issue))
+    provenance = control.run_provenance(github, configuration)
+    issue_store = _store(configuration, authenticated=False)
+    _, ledger_view = control.load_ledger(issue_store, configuration, provenance, arguments.issue)
+    completed = [
+        view
+        for view in ledger_view.authorizations.values()
+        if view.state == state.COMPLETED
+        and view.evidence.get(state.COMPLETED, {}).get("pull_request_number") == arguments.pr
+    ]
+    if len(completed) != 1:
+        raise LifecycleRefused("COVERAGE_GAP", "exactly one completed authorization must bind that PR")
+    pull = control.definitive(github.get(f"/repos/{configuration.repository}/pulls/{arguments.pr}"))
+    if not isinstance(pull, Mapping):
+        raise control.FactsUnavailable("pull request metadata is not observable")
+    admission_run = control.definitive(
+        github.get(f"/repos/{configuration.repository}/actions/runs/{VERIFIED_E2E_OUTCOME_ADMISSION_RUN_ID}")
+    )
+    if not isinstance(admission_run, Mapping):
+        raise control.FactsUnavailable("the admission run is not observable")
+    evidence = _verified_e2e_outcome_evidence(
+        issue=arguments.issue,
+        pull_request=arguments.pr,
+        pull=pull,
+        authorization=completed[0],
+        admission_run=admission_run,
+    )
+    store = _store(configuration, authenticated=True)
+    try:
+        _, _, written = knowledge.append(
+            store,
+            [knowledge.Write("verified_e2e_outcome", evidence)],
+            trust=configuration.trust,
+            provenance=provenance,
+            signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+            recorded_by=writer.recorded_by(),
+            recorded_at=_timestamp(),
+        )
+    except state.LedgerConflictError:
+        raise control.FactsUnavailable("the knowledge ledger moved; the next run re-ingests") from None
+    except state.LedgerCorruptError as error:
+        raise control.Frozen("STATE_CORRUPT", str(error)) from None
+    print(
+        json.dumps({"issue": arguments.issue, "pull_request": arguments.pr, "records_written": written}, sort_keys=True)
+    )
+    return 0
+
+
 def cmd_historical_coverage(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     """Read live GitHub review threads and the anchored signed ledger; never synthesize proof."""
 
@@ -2038,6 +2173,9 @@ def _parser() -> argparse.ArgumentParser:
     publish.add_argument("--workroot", required=True)
     ingest = add("knowledge-ingest", cmd_knowledge_ingest)
     ingest.add_argument("--pr", type=int)
+    verified_outcome = add("verified-e2e-outcome", cmd_verified_e2e_outcome)
+    verified_outcome.add_argument("--issue", type=int, required=True)
+    verified_outcome.add_argument("--pr", type=int, required=True)
     assess = add("historical-assess", cmd_historical_assess)
     assess.add_argument("--pr", type=int, required=True)
     historical = add("historical-coverage", cmd_historical_coverage)
