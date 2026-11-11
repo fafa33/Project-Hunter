@@ -142,7 +142,7 @@ jobs:
             # here. Fetching GitHub's own current host keys from its Meta API over HTTPS --
             # GitHub's documented non-interactive provisioning path -- repairs this without ever
             # relaxing host-key verification itself.
-            if ! curl -fsSL https://api.github.com/meta -o "$RUNNER_TEMP/github-meta.json"; then
+            if ! curl -fsSL --proto '=https' --proto-redir '=https' https://api.github.com/meta -o "$RUNNER_TEMP/github-meta.json"; then
               echo "INFRA_PROVISIONING_FAILURE: could not fetch GitHub's published SSH host keys" >&2
               exit 86
             fi

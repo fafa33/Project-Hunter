@@ -818,6 +818,12 @@ def test_canonicalization_provisions_github_ssh_host_key_before_push() -> None:
     assert "https://api.github.com/meta" in script
     assert "ssh_keys" in script
 
+    # SonarCloud (PR #731): `curl -L` without pinning the protocol lets a compromised or
+    # misconfigured endpoint redirect the fetch to a cleartext http:// URL. Restrict both
+    # the initial connection and any redirect target to https explicitly.
+    assert "--proto '=https'" in script
+    assert "--proto-redir '=https'" in script
+
     assert script.count("INFRA_PROVISIONING_FAILURE") >= 1
     lines = script.splitlines()
     for index, line in enumerate(lines):
