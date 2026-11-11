@@ -90,13 +90,41 @@ jobs:
       - name: Provision and verify trusted network namespace
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y bubblewrap
+          # Prefer whatever the runner image already provides: this is the only network-dependent
+          # step in the job, so skipping it entirely when possible removes a fragile dependency on
+          # the hosted package archive without weakening anything -- bwrap itself is unchanged either way.
+          if [[ -x /usr/bin/bwrap ]]; then
+            echo "bwrap already provisioned on this runner image; no package installation needed."
+          else
+            # Bounded, documented apt retry/timeout tuning -- not a blind or unbounded retry loop --
+            # for the real, recurring "Temporary failure resolving ..." archive-mirror flakiness on
+            # hosted Ubuntu runners. A failure after this still fails closed, explicitly, below.
+            APT_OPTS=(-o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+            if ! sudo apt-get update -qq "${APT_OPTS[@]}"; then
+              echo "INFRA_PROVISIONING_FAILURE: apt-get update could not reach the package archive" >&2
+              exit 86
+            fi
+            if ! sudo apt-get install -y bubblewrap "${APT_OPTS[@]}"; then
+              echo "INFRA_PROVISIONING_FAILURE: the bubblewrap package could not be installed" >&2
+              exit 86
+            fi
+          fi
           test -x /usr/bin/bwrap
           # Ubuntu 24.04 runners restrict unprivileged user namespaces through AppArmor, which makes
           # `bwrap --unshare-net` fail while configuring loopback ("RTM_NEWADDR: Operation not permitted").
-          # Lift only that restriction on this ephemeral runner, then verify the namespace really denies egress.
-          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+          # This ephemeral, single-tenant runner is destroyed after this job, so lifting only that
+          # restriction here (never silently, now: a failed toggle fails the job instead of leaving the
+          # later bwrap invocation to fail with a confusing, unrelated permission error) is the narrowest
+          # practical fix -- an AppArmor-profile-scoped exception for just this binary would avoid touching
+          # the whole runner, but is materially more complex and error-prone to author correctly than this
+          # single, widely-documented sysctl toggle used for exactly this known runner/bwrap interaction.
+          current_restriction="$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo unset)"
+          if [[ "$current_restriction" != "0" ]]; then
+            if ! sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0; then
+              echo "INFRA_PROVISIONING_FAILURE: could not relax the unprivileged user namespace restriction" >&2
+              exit 86
+            fi
+          fi
           /usr/bin/bwrap --die-with-parent --unshare-net --unshare-pid --unshare-ipc --unshare-uts --new-session --cap-drop ALL --ro-bind / / --dev /dev --proc /proc --tmpfs /run -- \
             python -c 'import socket; s=socket.socket(); s.settimeout(1); exec("try:\n s.connect((\"1.1.1.1\", 443))\nexcept OSError:\n pass\nelse:\n raise SystemExit(1)")'
 
