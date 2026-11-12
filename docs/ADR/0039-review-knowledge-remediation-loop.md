@@ -356,8 +356,11 @@ status. It adds no new ledger, authority, workflow, or privileged execution path
   `ingestion_writes` only ever reads a tag from the *original* comment. `receipt_writes` now mints the same
   `finding_classified` record that path already would whenever its own `matched-family` outcome applies, so
   the match reaches DPM/SPM the same way either source names it. Skipped whenever a deterministic
-  classification already exists or the original message already carries its own tag -- first classification
-  always wins, and no two writes can ever conflict under the same `(finding_id, basis)` key.
+  classification already exists or the existing ingestion planner has planned one for that finding,
+  including a fingerprint-inherited match from a previous finding or this batch. A literal tag on a
+  non-authority reviewer's message cannot suppress the authenticated owner's classification. The same pure
+  ingestion planner decides precedence for both writers; no second classifier or authority is introduced.
+  First classification wins, without competing `(finding_id, basis)` writes.
 
 ### Bounded historical replay of PR #737 (Issue #586, owner execution authorization 2026-11-12)
 

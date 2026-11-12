@@ -947,6 +947,42 @@ def test_a_matched_family_receipt_never_reclassifies_an_already_classified_findi
     assert view2.findings[identity].classification["family_id"] == "DFF-049"
 
 
+@pytest.mark.parametrize("earlier_pass", [True, False])
+def test_receipt_preserves_classification_inherited_from_another_finding_in_the_batch(
+    store: state.GitLedgerStore, monkeypatch, earlier_pass: bool
+) -> None:
+    # Registry families can overlap. The fingerprint match is the ingestion planner's
+    # first deterministic classification, even though this finding's own text has no tag.
+    monkeypatch.setitem(globals(), "applicability", lambda family, _path: family in {"DFF-049", "DFF-028"})
+    original = observation(11, message="An exact-head invariant must hold. [family:DFF-049]")
+    later = receipt_observation(12, family="DFF-028", message="An exact-head invariant must hold.")
+    if earlier_pass:
+        ingest_with_receipt(store, original)
+        batch = (later,)
+    else:
+        batch = (original, later)
+    view, _, refusals = ingest_with_receipt(store, *batch)
+    assert not refusals
+    finding = view.findings[knowledge.finding_id(1, 561, 12)]
+    assert finding.classification["family_id"] == "DFF-049"
+    assert finding.receipt["family_id"] == "DFF-028"
+    # A replay is still insert-only: the two planners never fight over the same key.
+    _, written_again, refusals_again = ingest_with_receipt(store, *batch)
+    assert written_again == 0 and not refusals_again
+
+
+def test_untrusted_original_tag_cannot_suppress_authenticated_owner_receipt_classification(
+    store: state.GitLedgerStore,
+) -> None:
+    finding = receipt_observation(
+        family="DFF-049", reviewer="external-reviewer", message="An exact-head invariant must hold. [family:DFF-028]"
+    )
+    view, written, refusals = ingest_with_receipt(store, finding)
+    assert not refusals and written == 3
+    classified = view.findings[knowledge.finding_id(1, 561, 11)]
+    assert classified.classification["family_id"] == "DFF-049"
+
+
 def test_a_finding_without_complete_receipt_evidence_receives_no_receipt(store: state.GitLedgerStore) -> None:
     view, written, refusals = ingest_with_receipt(store, observation())
     assert written == 1 and not refusals  # only finding_ingested; receipt_eligible is absent

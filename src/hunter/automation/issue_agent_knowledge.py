@@ -759,6 +759,20 @@ def receipt_writes(
     reply already carried, never from an external provider or a history scan.
     """
 
+    # The two pure planners share an input view before append. Consult the real
+    # ingestion plan rather than guessing from a literal family tag: ingestion
+    # also inherits fingerprint matches, while tags from non-authority reviewers
+    # are captured without being allowed to classify a finding.
+    ingestion_plan, _ = ingestion_writes(
+        view,
+        observations,
+        repository_id=repository_id,
+        trusted_reviewers=trusted_reviewers,
+        applicability=applicability,
+    )
+    planned_classifications = {
+        item.evidence["finding_id"] for item in ingestion_plan if item.kind == "finding_classified"
+    }
     writes: list[Write] = []
     refusals: list[str] = []
     queued: set[str] = set()
@@ -826,14 +840,14 @@ def receipt_writes(
         # classification/DPM-overlay family enrichment entirely; ingestion_writes only ever reads
         # a tag from the *original* finding comment. Mint the same finding_classified record the
         # tag-in-message path already would, so the matched family reaches DPM/SPM the same way.
-        # Skipped whenever a deterministic classification already exists (first write wins, exactly
-        # like ingestion_writes's own rule) or the original comment already carries its own tag
-        # (ingestion_writes already owns that case) -- never two competing classifications.
+        # Existing and planned deterministic classifications have precedence. Merely
+        # seeing a tag is insufficient: only the ingestion planner knows whether
+        # that source has classification authority or inherits another fingerprint.
         if (
             outcome == "matched-family"
             and family_id is not None
             and (existing is None or existing.classifications.get("deterministic") is None)
-            and family_tag(str(observation.get("message", ""))) is None
+            and identity not in planned_classifications
         ):
             writes.append(
                 Write(
