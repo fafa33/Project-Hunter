@@ -41,7 +41,7 @@ jobs:
   knowledge-ingest:
     name: knowledge-ingest
     if: >-
-      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      github.ref == 'refs/heads/main' &&
       (github.event_name != 'workflow_run' || github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 15
