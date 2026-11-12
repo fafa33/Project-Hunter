@@ -359,6 +359,30 @@ status. It adds no new ledger, authority, workflow, or privileged execution path
   classification already exists or the original message already carries its own tag -- first classification
   always wins, and no two writes can ever conflict under the same `(finding_id, basis)` key.
 
+### Bounded historical replay of PR #737 (Issue #586, owner execution authorization 2026-11-12)
+
+The owner authorized a replay of the eight actual Copilot findings on PR #737, without authorizing merge,
+Issue closure, invented dispositions, or wider historical scope. The existing trusted-main knowledge workflow
+exposes a separate, default-off `replay_pr737` dispatch input, mutually exclusive with `pr`. It calls the existing
+`knowledge-ingest --replay-pr737` writer; the historical-assessment and positive-outcome allowlists are unchanged.
+
+Before any ledger append, the replay binds repository `1292945327` (`fafa33/Project-Hunter`), same-repository merged
+PR #737, base `080fd56b2653a5ce209d372aad7da1c061794b34`, correction head
+`2bb2bda4e183c89b139b85c349d8a3679a70b4ec`, merge commit `08f565fd14e9ded796a63c9fc45dce6f8997aeff`, and exactly
+comments `4553826778`, `4553826901`, `4553826979`, `4553827043`, `4553827094`, `4553827147`, `4553827202`,
+and `4553827261`. Their authenticated collector provenance must match the pinned paths and the
+original reviewed head `a16037419c0d067319c8edbb4f5ebfcbf3c4ae42` or GitHub's remapped correction head. Review
+summaries and other sensors cannot become extra historical findings. The existing canonical hosted-preflight
+selector must verify successful first-attempt push run `43276347921` at the correction head.
+
+Ingestion, owner-disposition parsing, receipt schema validation, signing, run provenance, insert-only keys and
+lease-CAS publication remain unchanged. Repeated dispatch resumes idempotently. Missing dispositions remain
+missing receipts and produce a failing receipt verdict; this route cannot create `finding_proven` or infer an
+original signed RED-to-GREEN receipt from historical GREEN results. The F1/F3 expiry tests establish a 45-minute
+stale-verdict bound, not elimination of the original merge window. They must not be reported as full correction.
+The owner must separately approve any new evidence-bound dispositions. Candidate code cannot execute this
+privileged replay: deployment to trusted main still requires explicit owner merge approval.
+
 ## Consequences
 
 - The knowledge ledger is a third anchored branch, and the anchor ruleset already covers it.

@@ -29,6 +29,11 @@ on:
           owner-approved #577 positive-outcome backfill (703, ADR 0039 L2 D3, Issue #705)
         required: false
         type: number
+      replay_pr737:
+        description: "Issue 586 owner-authorized replay of the eight pinned PR 737 findings only; no finding proof inferred"
+        required: false
+        default: false
+        type: boolean
 
 permissions: {}
 
@@ -69,8 +74,12 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
           BACKFILL_PR: ${{ inputs.pr || '' }}
+          REPLAY_PR737: ${{ inputs.replay_pr737 || false }}
         run: |
-          if [[ -n "$BACKFILL_PR" ]]; then
+          if [[ "$REPLAY_PR737" == "true" ]]; then
+            [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" && -z "$BACKFILL_PR" ]] || exit 1
+            python scripts/hunter_issue_agent_lifecycle.py knowledge-ingest --replay-pr737
+          elif [[ -n "$BACKFILL_PR" ]]; then
             [[ "$BACKFILL_PR" =~ ^[1-9][0-9]*$ ]] || exit 1
             case "$BACKFILL_PR" in
               579|581|582)

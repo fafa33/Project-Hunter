@@ -12,6 +12,182 @@ import hunter_issue_agent_lifecycle as lifecycle
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _pr737_replay_fixture():
+    from types import SimpleNamespace
+
+    config = SimpleNamespace(repository="fafa33/Project-Hunter", repository_id=1292945327)
+    pull = {
+        "number": 737,
+        "state": "closed",
+        "merged_at": "2026-11-12T18:29:55Z",
+        "merge_commit_sha": "08f565fd14e9ded796a63c9fc45dce6f8997aeff",
+        "head": {"sha": "2bb2bda4e183c89b139b85c349d8a3679a70b4ec", "repo": {"id": 1292945327}},
+        "base": {"sha": "080fd56b2653a5ce209d372aad7da1c061794b34", "repo": {"id": 1292945327}},
+    }
+    paths = {
+        4553826778: ".github/workflows/hunter-issue-agent-knowledge.yml",
+        4553826901: "scripts/hunter_collect_learning_observations.py",
+        4553826979: "scripts/hunter_issue_agent_lifecycle.py",
+        4553827043: "scripts/hunter_merge_readiness_v2.py",
+        4553827094: "scripts/hunter_merge_readiness_v2.py",
+        4553827147: "scripts/hunter_merge_readiness_v2.py",
+        4553827202: "src/hunter/automation/issue_agent_knowledge.py",
+        4553827261: "src/hunter/automation/issue_agent_knowledge.py",
+    }
+    observations = [
+        {
+            "event_id": f"review-comment-{identity}",
+            "source": "github-review",
+            "source_pr": 737,
+            "reviewed_head_sha": "2bb2bda4e183c89b139b85c349d8a3679a70b4ec",
+            "reviewed_base_sha": "080fd56b2653a5ce209d372aad7da1c061794b34",
+            "source_event_head_sha": "a16037419c0d067319c8edbb4f5ebfcbf3c4ae42",
+            "reviewer": "Copilot",
+            "path": path,
+        }
+        for identity, path in paths.items()
+    ]
+    return config, pull, observations
+
+
+def test_pr737_replay_selects_only_the_eight_authenticated_inline_findings():
+    config, pull, observations = _pr737_replay_fixture()
+    # A review summary is not a ninth finding and must never enter the replay batch.
+    summary = {"event_id": "review-5878890776", "source": "github-review"}
+    selected = lifecycle._pr737_replay_scope(config, pull, [*observations, summary])
+    assert [item["event_id"] for item in selected] == [item["event_id"] for item in observations]
+
+
+@pytest.mark.parametrize("change", ["repository", "fork", "head", "base", "merge", "open", "pr"])
+def test_pr737_replay_refuses_a_different_repository_or_historical_identity(change):
+    config, pull, observations = _pr737_replay_fixture()
+    if change == "repository":
+        config.repository_id = 1
+    elif change == "fork":
+        pull["head"]["repo"]["id"] = 1
+    elif change in {"head", "base"}:
+        pull[change]["sha"] = "f" * 40
+    elif change == "merge":
+        pull["merge_commit_sha"] = "f" * 40
+    elif change == "pr":
+        pull["number"] = 738
+    else:
+        pull["state"] = "open"
+    with pytest.raises(lifecycle.LifecycleRefused, match="INVALID_SCOPE"):
+        lifecycle._pr737_replay_scope(config, pull, observations)
+
+
+@pytest.mark.parametrize(
+    "change", ["missing", "duplicate", "extra", "provider", "path", "source_head", "pr", "head", "base"]
+)
+def test_pr737_replay_refuses_partial_duplicate_or_foreign_observations(change):
+    config, pull, observations = _pr737_replay_fixture()
+    if change == "missing":
+        observations.pop()
+    elif change == "duplicate":
+        observations.append(dict(observations[0]))
+    elif change == "extra":
+        observations.append({**observations[0], "event_id": "review-comment-1"})
+    else:
+        field, value = {
+            "provider": ("reviewer", "untrusted-substitute"),
+            "path": ("path", "scripts/unrelated.py"),
+            "source_head": ("source_event_head_sha", "f" * 40),
+            "pr": ("source_pr", 738),
+            "head": ("reviewed_head_sha", "f" * 40),
+            "base": ("reviewed_base_sha", "f" * 40),
+        }[change]
+        observations[0][field] = value
+    with pytest.raises(lifecycle.LifecycleRefused, match="INVALID_SCOPE"):
+        lifecycle._pr737_replay_scope(config, pull, observations)
+
+
+def test_pr737_replay_cannot_be_combined_with_an_arbitrary_pr():
+    with pytest.raises(SystemExit):
+        lifecycle._parser().parse_args(["knowledge-ingest", "--replay-pr737", "--pr", "738"])
+
+
+@pytest.mark.parametrize("preflight_success", [True, False])
+def test_pr737_replay_uses_existing_signed_ledger_and_never_invents_receipts(tmp_path, monkeypatch, preflight_success):
+    from types import SimpleNamespace
+
+    import hunter_collect_learning_observations as collector
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from hunter.automation import issue_agent_control as control
+    from hunter.automation import issue_agent_knowledge as knowledge
+    from hunter.automation import issue_agent_state as state
+
+    config, pull, observations = _pr737_replay_fixture()
+    key = Ed25519PrivateKey.generate()
+    config.trust = state.TrustRoots({state.public_key_id(key.public_key()): key.public_key()}, 1292945327)
+    for item in observations:
+        item.update(
+            provider="github-review", message="Verified historical finding, not completed proof", obligation=True
+        )
+    run = {
+        "id": 43276347921,
+        "run_attempt": 1,
+        "head_sha": pull["head"]["sha"],
+        "event": "push",
+        "head_branch": "feat/527-finding-knowledge-receipt-lifecycle",
+        "repository": {"id": 1292945327},
+        "head_repository": {"id": 1292945327},
+        "status": "completed",
+        "conclusion": "success" if preflight_success else "failure",
+    }
+
+    def get(path):
+        if path == "/repos/fafa33/Project-Hunter/pulls/737":
+            return control.Read("ok", pull)
+        if "/actions/workflows/hunter-pre-pr-preflight.yml/runs?" in path:
+            return control.Read("ok", {"workflow_runs": [run]})
+        raise AssertionError(f"unexpected GitHub read {path}")
+
+    remote = tmp_path / "remote.git"
+    subprocess.run(["git", "init", "--bare", "--quiet", str(remote)], check=True)
+    store = state.GitLedgerStore(str(remote), workdir=tmp_path / "reader")
+    by = {
+        "workflow_path": control.KNOWLEDGE_WORKFLOW,
+        "job": "knowledge-ingest",
+        "role": "knowledge-ingest",
+        "run_id": 100,
+        "run_attempt": 1,
+        "head_sha": "c" * 40,
+    }
+
+    def provenance(_by, _record):
+        return True
+
+    monkeypatch.setattr(lifecycle, "_writer", lambda *_args: SimpleNamespace(recorded_by=lambda: by))
+    monkeypatch.setattr(lifecycle, "_github", lambda _cfg: SimpleNamespace(get=get))
+    monkeypatch.setattr(lifecycle, "_secret", lambda _name: "unit-test-token")
+    monkeypatch.setattr(lifecycle, "_ed25519", lambda _name: key)
+    monkeypatch.setattr(lifecycle, "_store", lambda *_args, **_kw: store)
+    monkeypatch.setattr(control, "require_anchor", lambda *_args: None)
+    monkeypatch.setattr(control, "run_provenance", lambda *_args: provenance)
+    monkeypatch.setattr(collector, "collect", lambda *_args: observations)
+    published = []
+    monkeypatch.setattr(lifecycle, "_publish_knowledge_receipt_status", lambda *args: published.append(args))
+    args = lifecycle._parser().parse_args(["knowledge-ingest", "--replay-pr737"])
+    if not preflight_success:
+        with pytest.raises(lifecycle.LifecycleRefused, match="MISSING_EVIDENCE"):
+            lifecycle.cmd_knowledge_ingest(config, args)
+        assert store.ref_head(knowledge.KNOWLEDGE_LEDGER_REF) is None
+        assert published == []
+        return
+    assert lifecycle.cmd_knowledge_ingest(config, args) == 0
+    first_head, view = knowledge.read(store, trust=config.trust, provenance=provenance)
+    assert len(view.findings) == 8
+    assert all(finding.receipt is None and finding.proven is None for finding in view.findings.values())
+    assert published[-1][5] == "failure"  # eight genuine obligations remain unsatisfied
+    assert lifecycle.cmd_knowledge_ingest(config, args) == 0
+    second_head, repeated = knowledge.read(store, trust=config.trust, provenance=provenance)
+    assert second_head == first_head and len(repeated.findings) == 8
+
+
 AUTH = "hunter-issue-agent-authorization:" + "a" * 64
 COMMANDS = {
     "source-handling-bootstrap": [],

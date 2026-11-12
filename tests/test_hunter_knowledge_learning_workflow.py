@@ -711,3 +711,47 @@ def test_bounded_merged_pr_backfill_dispatch_is_explicit_and_main_only():
     assert "python scripts/hunter_issue_agent_lifecycle.py knowledge-ingest" in content
     assert "github.ref == 'refs/heads/main'" in content
     assert "HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY" in content
+
+
+@pytest.mark.parametrize(
+    ("replay", "pr", "event", "permitted"),
+    [
+        ("true", "", "workflow_dispatch", True),
+        ("true", "579", "workflow_dispatch", False),
+        ("true", "", "schedule", False),
+        ("false", "737", "workflow_dispatch", False),
+    ],
+)
+def test_pr737_dispatch_cannot_select_other_historical_scopes(tmp_path, replay, pr, event, permitted):
+    import os
+    import subprocess
+
+    import yaml
+
+    content = yaml.safe_load(Path(".github/workflows/hunter-issue-agent-knowledge.yml").read_text())
+    steps = content["jobs"]["knowledge-ingest"]["steps"]
+    script = next(step["run"] for step in steps if "BACKFILL_PR" in step.get("env", {}))
+    # Execute the actual dispatch shell, replacing only the external Python process.
+    executable = tmp_path / "python"
+    executable.write_text('#!/bin/sh\nprintf "%s\\n" "$*" >> "$CALLS"\n')
+    executable.chmod(0o755)
+    calls = tmp_path / "calls"
+    result = subprocess.run(
+        ["bash", "-e", "-c", script],
+        env={
+            **os.environ,
+            "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+            "CALLS": str(calls),
+            "BACKFILL_PR": pr,
+            "REPLAY_PR737": replay,
+            "GITHUB_EVENT_NAME": event,
+        },
+        capture_output=True,
+    )
+    assert (result.returncode == 0) is permitted
+    if permitted:
+        assert calls.read_text().splitlines() == [
+            "scripts/hunter_issue_agent_lifecycle.py knowledge-ingest --replay-pr737"
+        ]
+    else:
+        assert not calls.exists()

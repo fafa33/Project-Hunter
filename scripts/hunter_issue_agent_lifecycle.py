@@ -398,6 +398,64 @@ def _knowledge_view(configuration: control.Configuration, github: control.GitHub
     return view
 
 
+# Owner-authorized Issue #586 historical replay. This immutable inventory is deliberately
+# separate from the historical-assess allowlist: no caller can choose another PR/head/finding.
+PR737_REPLAY_HEAD: Final = "2bb2bda4e183c89b139b85c349d8a3679a70b4ec"
+PR737_REPLAY_BASE: Final = "080fd56b2653a5ce209d372aad7da1c061794b34"
+PR737_REVIEWED_HEAD: Final = "a16037419c0d067319c8edbb4f5ebfcbf3c4ae42"
+PR737_REPLAY_PATHS: Final = {
+    "review-comment-4553826778": ".github/workflows/hunter-issue-agent-knowledge.yml",
+    "review-comment-4553826901": "scripts/hunter_collect_learning_observations.py",
+    "review-comment-4553826979": "scripts/hunter_issue_agent_lifecycle.py",
+    "review-comment-4553827043": "scripts/hunter_merge_readiness_v2.py",
+    "review-comment-4553827094": "scripts/hunter_merge_readiness_v2.py",
+    "review-comment-4553827147": "scripts/hunter_merge_readiness_v2.py",
+    "review-comment-4553827202": "src/hunter/automation/issue_agent_knowledge.py",
+    "review-comment-4553827261": "src/hunter/automation/issue_agent_knowledge.py",
+}
+
+
+def _pr737_replay_scope(
+    configuration: control.Configuration,
+    pull: Mapping[str, Any],
+    observations: Sequence[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Bind authenticated collector data to the one approved historical source before any write.
+
+    No evidence is completed here: missing owner dispositions still produce missing receipts.
+    Replays use the existing insert-only writer and cannot mint retrospective finding proof.
+    """
+    if (
+        configuration.repository != "fafa33/Project-Hunter"
+        or configuration.repository_id != 1292945327
+        or pull.get("number") != 737
+        or pull.get("state") != "closed"
+        or not pull.get("merged_at")
+        or pull.get("merge_commit_sha") != "08f565fd14e9ded796a63c9fc45dce6f8997aeff"
+        or (pull.get("head") or {}).get("sha") != PR737_REPLAY_HEAD
+        or (pull.get("base") or {}).get("sha") != PR737_REPLAY_BASE
+        or ((pull.get("head") or {}).get("repo") or {}).get("id") != 1292945327
+        or ((pull.get("base") or {}).get("repo") or {}).get("id") != 1292945327
+    ):
+        raise LifecycleRefused("INVALID_SCOPE", "PR #737 historical identity does not match authorization")
+    selected = [item for item in observations if str(item.get("event_id", "")).startswith("review-comment-")]
+    if len(selected) != 8 or {item["event_id"] for item in selected} != set(PR737_REPLAY_PATHS):
+        raise LifecycleRefused("INVALID_SCOPE", "PR #737 requires exactly the eight authorized findings")
+    for item in selected:
+        if (
+            item.get("source") != "github-review"
+            or item.get("source_pr") != 737
+            or item.get("reviewed_head_sha") != PR737_REPLAY_HEAD
+            or item.get("reviewed_base_sha") != PR737_REPLAY_BASE
+            or item.get("source_event_head_sha") not in {PR737_REVIEWED_HEAD, PR737_REPLAY_HEAD}
+            or str(item.get("reviewer", "")).lower().removesuffix("[bot]")
+            not in {"copilot", "copilot-pull-request-reviewer"}
+            or item.get("path") != PR737_REPLAY_PATHS[item["event_id"]]
+        ):
+            raise LifecycleRefused("INVALID_SCOPE", "PR #737 finding provenance does not match authorization")
+    return selected
+
+
 def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     """ADR 0039 L1/L3.1: ingest authenticated inline findings independently of reviewer authority."""
 
@@ -408,7 +466,10 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
     github = _github(configuration)
     token = _secret("GITHUB_TOKEN")
     control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
-    if arguments.pr:
+    replay_pr737 = arguments.replay_pr737
+    if replay_pr737:
+        numbers = [737]
+    elif arguments.pr:
         numbers = [arguments.pr]
     else:
         listing = control.definitive(github.get(f"/repos/{configuration.repository}/pulls?state=open&per_page=100"))
@@ -423,11 +484,18 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
         pull = control.definitive(github.get(f"/repos/{configuration.repository}/pulls/{number}"))
         if not isinstance(pull, Mapping):
             raise control.FactsUnavailable("pull request metadata is not observable")
-        if pull.get("state") != "open" and not (arguments.pr and pull.get("merged_at")):
+        if pull.get("state") != "open" and not ((arguments.pr or replay_pr737) and pull.get("merged_at")):
             continue
         head, base = str(pull["head"]["sha"]), str(pull["base"]["sha"])
         observations = collector.collect(configuration.repository, token, number, head, base)
-        observations.extend(sonar_collector.collect("fafa33_Project-Hunter", number, head, base))
+        if replay_pr737:
+            observations = _pr737_replay_scope(configuration, pull, observations)
+            conclusion, run_id = control._preflight(github, configuration, PR737_REPLAY_HEAD)
+            if conclusion != "success" or run_id != 43276347921:
+                raise LifecycleRefused("MISSING_EVIDENCE", "PR #737 exact-head hosted preflight is not verified")
+            print(f"PR #737 bounded replay: hosted preflight {run_id}; no signed finding proof inferred")
+        else:
+            observations.extend(sonar_collector.collect("fafa33_Project-Hunter", number, head, base))
         try:
             _, view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
             writes, refusals = knowledge.ingestion_writes(
@@ -2241,7 +2309,9 @@ def _parser() -> argparse.ArgumentParser:
         child.add_argument("--out", required=True)
     publish.add_argument("--workroot", required=True)
     ingest = add("knowledge-ingest", cmd_knowledge_ingest)
-    ingest.add_argument("--pr", type=int)
+    ingest_scope = ingest.add_mutually_exclusive_group()
+    ingest_scope.add_argument("--pr", type=int)
+    ingest_scope.add_argument("--replay-pr737", action="store_true")
     verified_outcome = add("verified-e2e-outcome", cmd_verified_e2e_outcome)
     verified_outcome.add_argument("--issue", type=int, required=True)
     verified_outcome.add_argument("--pr", type=int, required=True)
