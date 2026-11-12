@@ -465,3 +465,63 @@ def test_main_without_app_mutation_token_falls_back(monkeypatch) -> None:
 
     assert admission.main() == 0
     assert captured == {"token": "read-token", "mutation_token": "read-token"}
+
+
+# --- Copilot F6 (PR #737): ready_checks must never default a missing Knowledge Receipt to success ---------
+
+
+def test_ready_checks_is_success_with_a_trusted_knowledge_receipt_status(monkeypatch) -> None:
+    receipt_status = {
+        "id": 1,
+        "context": "Hunter Knowledge Receipt / PR #371",
+        "state": "success",
+        "description": "no verified applicable receipt obligation",
+        "creator": {"login": "github-actions[bot]"},
+        "created_at": "2026-11-12T16:00:00Z",
+    }
+    monkeypatch.setattr(
+        admission.governance,
+        "request_json",
+        lambda *args: (
+            {
+                "check_runs": [
+                    {"id": n, "name": name, "status": "completed", "conclusion": "success"}
+                    for n, name in enumerate(("Quality Gates", "dependency-review", "CodeQL"), 1)
+                ]
+            }
+            if "check-runs" in args[-1]
+            else [receipt_status]
+        ),
+    )
+
+    def fixed_age(_status: dict) -> float:
+        return 1.0
+
+    import hunter_merge_readiness_v2 as readiness
+
+    monkeypatch.setattr(readiness, "_status_age_seconds", fixed_age)
+    state, _description = admission.ready_checks("fafa33/Project-Hunter", "token", HEAD, True, 371)
+    assert state == "success"
+
+
+def test_ready_checks_is_not_success_with_no_knowledge_receipt_status(monkeypatch) -> None:
+    """The gap Copilot found: StaticReadinessObservation no longer defaults this to success, so an
+
+    absent Knowledge Receipt status must leave ready_checks pending, never silently success.
+    """
+    monkeypatch.setattr(
+        admission.governance,
+        "request_json",
+        lambda *args: (
+            {
+                "check_runs": [
+                    {"id": n, "name": name, "status": "completed", "conclusion": "success"}
+                    for n, name in enumerate(("Quality Gates", "dependency-review", "CodeQL"), 1)
+                ]
+            }
+            if "check-runs" in args[-1]
+            else []
+        ),
+    )
+    state, _description = admission.ready_checks("fafa33/Project-Hunter", "token", HEAD, True, 371)
+    assert state == "pending"

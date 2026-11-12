@@ -2295,6 +2295,12 @@ def test_read_cycle_binds_pull_request_target_provenance(monkeypatch, case, expe
 #: derived from the dispatched ref, so a candidate cannot forge it by editing a
 #: workflow on its own branch.
 DEFAULT_BRANCH_REF_GUARD = "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+#: A hardcoded comparison against this repository's actual default branch is an
+#: equally unforgeable boundary (Issue #527): `github.ref` still reflects the real
+#: dispatched ref, and a candidate branch cannot make its own `github.ref` equal a
+#: literal it does not control either. Several already-canonical jobs (for example
+#: `hunter-issue-agent-knowledge.yml`'s `knowledge-ingest`) use this equivalent form.
+_HARDCODED_DEFAULT_BRANCH_REF_GUARD = "github.ref == 'refs/heads/main'"
 
 
 def _enforces_default_branch_ref(job):
@@ -2309,7 +2315,7 @@ def _enforces_default_branch_ref(job):
     condition = job.get("if")
     if not isinstance(condition, str):
         return False
-    return DEFAULT_BRANCH_REF_GUARD in condition
+    return DEFAULT_BRANCH_REF_GUARD in condition or _HARDCODED_DEFAULT_BRANCH_REF_GUARD in condition
 
 
 def _candidate_status_publishers(document):

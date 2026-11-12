@@ -3,7 +3,9 @@
 ## Status
 
 **Accepted** (2026-10-04, owner decisions RD-1…RD-6 on Issue #560). **Amended** 2026-11-09 by L9 (owner decisions
-D1–D3, Issue #706). This is a binding amendment of:
+D1–D3, Issue #706). **Amended** 2026-11-12 by L11 (owner decisions, Issue #527): every confirmed-and-corrected
+finding must carry a fast-path Knowledge Receipt before it can be treated as complete; the policy itself is this
+amendment plus the mandatory lifecycle it encodes below. This is a binding amendment of:
 
 - ADR 0037 D6 (publication becomes create-only **or fast-forward from the bound head** for a remediation);
 - ADR 0037 D9/D1, which add a knowledge ledger and a remediation authorization next to the Issue ledger;
@@ -303,6 +305,52 @@ orchestrator, and it does not change Ruff, the sealed result, or the parent auth
   stays generic and terminal. A terminal failure never starts the same-run publisher: only a signed `VALIDATED`
   transition sets `publication_eligible` (PR #722).
 
+### L11. Mandatory finding-to-knowledge lifecycle: the fast-path Knowledge Receipt (owner decisions, Issue #527)
+
+**Amendment, accepted 2026-11-12.** Every authenticated/validated review finding confirmed as a real defect must
+enter this knowledge lifecycle after correction; a finding is not fully resolved merely because code was fixed
+and the thread was resolved. This is the permanent policy itself (AC1): the mandatory lifecycle is
+
+```text
+finding -> validate -> root cause -> minimal fix -> regression test -> fast knowledge receipt
+        -> focused verification -> resolve -> asynchronous deep knowledge processing
+```
+
+L11 adds exactly one more insert-only ledger kind, one more deterministic writer pass, and one transport commit
+status. It adds no new ledger, authority, workflow, or privileged execution path, and it does not change L1–L10.
+
+- **Obligation (the receipt-required lifecycle).** A finding *enters* the obligation when its GitHub review
+  thread is resolved and the owner's structured disposition reply on that exact thread classifies it
+  `confirmed` (`split_owner_disposition`, reused unchanged from the historical-evidence collector). A resolved
+  thread alone is never sufficient: only this authoritative, authenticated owner evidence creates the
+  obligation, independent of whether a receipt yet exists for it.
+- **The receipt (L2 kind `knowledge_receipt`, key `finding_id`, insert-only).** Deterministic, bounded,
+  repository-local, no external-provider dependency (AC4): it is minted the moment the SAME confirmed
+  disposition reply additionally carries a correction commit, non-empty regression evidence and an invariant
+  summary -- fields the collector already parses, never invented. Deliberately independent of thread
+  resolution timing, because the mandated lifecycle writes the receipt *before* resolve, not after: a finding
+  ingested on an earlier pass becomes receipt-eligible on a later pass once that reply arrives
+  (`receipt_writes`, a pass over observations independent of `ingestion_writes`'s own dedup). The receipt's
+  outcome is `matched-family` (an applicable `[family:DFF-nnn]` tag on the same reply) or, explicitly,
+  `pending-adjudication` (AC2/AC3) -- never an absence. A `pending-adjudication` receipt is a complete, valid
+  receipt: deep family/recurrence adjudication is the unchanged L2/L3 slow path and never blocks on it.
+- **Fail-closed boundary (AC7).** An obligation without evidence complete enough to mint a receipt (for
+  example a bare "confirmed" with no cited commit) stays unsatisfiable until a follow-up reply supplies it --
+  this is the intended discipline, not a defect. A finding with no obligation (no disposition, or a
+  `false-positive`/`style`/`obsolete` disposition) needs no receipt and is never retroactively blocked (AC5 for
+  legacy PRs).
+- **Transport, never a second proof authority (AC2/AC6, owner decision on Issue #527).** The trusted
+  `knowledge-ingest` role, in the same signed batch as ingestion, derives a verdict (`receipt_verdict`) from
+  the ledger view it just appended to: `success` when every obligation on the PR's observations has a receipt
+  (including the legacy/no-obligation case), `failure` otherwise. It publishes that verdict, and nothing else,
+  as the `Hunter Knowledge Receipt` commit status on the PR's exact head -- idempotently, never republishing an
+  unchanged verdict. `hunter_merge_readiness_v2.evaluate()` consumes it as one more ordered, lazy
+  `ReadinessObservation` property, exactly like `candidate_admission`/`issue_acceptance`: it reads the status at
+  the exact head and trusted context only, never re-derives it, and absence or a read failure is `pending`,
+  never a silently satisfied obligation. This is how DPM/SPM's existing `overlay_families` (already including
+  every open finding, unchanged) and this merge-blocking check compose without a parallel knowledge or review
+  system (AC5/AC6/AC10): one signed ledger, one existing writer role, one existing consumer.
+
 ## Consequences
 
 - The knowledge ledger is a third anchored branch, and the anchor ruleset already covers it.
@@ -337,3 +385,54 @@ A pre-existing, unrelated condition is recorded for the owner: `hunter_governanc
 because `docs/DEVELOPMENT_GOVERNANCE.md`, `docs/AI_REVIEW_PROTOCOL.md` and `.github/pull_request_template.md`
 lack their canonical sentinels at this branch's head. None of those files is touched by ADR 0039, and the
 pre-push safety lane does not run that command.
+
+### L11 implementation status (Issue #527)
+
+Delivered: the `knowledge_receipt` ledger kind and its `_fold` invariants; `receipt_writes` (the fast-path
+writer, independent of `ingestion_writes`'s own dedup); `receipt_obligations`/`receipt_verdict` (the pure
+obligation and transport-verdict derivation); the collector's `obligation`/`receipt_eligible` observation
+fields (`hunter_collect_learning_observations.collect`); the `Hunter Knowledge Receipt` status publish, wired
+into `cmd_knowledge_ingest` as a best-effort step after the signed ledger append (a transient publish failure
+never aborts ingestion for the remaining PRs in the pass, since the ledger write it reports on already
+succeeded); the `knowledge_receipt` `ReadinessObservation` property and its ordered gate in
+`hunter_merge_readiness_v2.evaluate()`; the `statuses: write` permission this adds to the existing
+`hunter-issue-agent-knowledge.yml` job (no new workflow).
+
+**Verification actually performed.** 89 passed in `test_issue_agent_knowledge.py` (ledger schema, `_fold`
+invariants, insert-only/idempotency, the later-pass receipt-arrival case, forged/mismatched-fingerprint and
+inconsistent-outcome adversarial cases, writer-role enforcement, DPM-overlay non-interference, and the
+transport verdict's success/failure/legacy-no-obligation counting); 29 passed in
+`test_hunter_knowledge_learning_workflow.py` (the collector's `obligation`/`receipt_eligible` signal across
+resolved/unresolved/non-confirmed/incomplete-evidence dispositions); 69 passed in
+`test_hunter_merge_readiness_v2.py` (the new gate's ordering, fail-closed-on-missing/absent/producer-failure,
+pending-adjudication and legacy-no-obligation pass-through, and exact-head/trusted-context status binding);
+36 passed in `test_issue_agent_lifecycle_entry.py` (idempotent and changed-verdict status publication, the
+140-character GitHub description bound). Ruff, Black and mypy (full configured file list, 1033 source files)
+all green. This is local, focused evidence; the hosted exact-head `Hunter / Pre-PR Preflight` run remains the
+authoritative full-repository proof, and merge readiness continues to require it.
+
+**Hardening round (Copilot review, PR #737, 2026-11-12).** Eight High findings against the first version,
+all closed on the same branch:
+
+- `receipt_schema_problems`, the single source of truth for `knowledge_receipt` schema conformance, reused
+  by both the collector's eligibility gate and `receipt_writes`'s own last-line-of-defense check -- an
+  abbreviated SHA or a too-short invariant is refused, never silently receipt-eligible and never able to
+  abort an otherwise-valid batch.
+- `receipt_obligations` returns an unresolvable count separately from its finding-id list, so a
+  confirmed-and-resolved finding `finding_from_observation` refuses (malformed path/provenance) fails the
+  verdict closed instead of silently reading as "no obligation."
+- The transport status is PR-scoped (`Hunter Knowledge Receipt / PR #<N>`, never a bare SHA-scoped context),
+  authenticated (`creator.login == "github-actions[bot]"`, the same pattern `hunter_review_orchestrator.py`
+  already uses for its own trusted statuses), and freshness-bounded (`KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS`,
+  comfortably wider than the producer's own ~30-minute cadence -- GitHub Actions has no "thread resolved"
+  trigger, so this bounds, without eliminating, how long a cached verdict may be trusted before a fresher
+  one is required; staleness degrades to `pending` in either direction, never upgraded to a fabricated
+  `failure` either).
+- `StaticReadinessObservation.knowledge_receipt` no longer defaults to `success`; every production
+  constructor (`hunter_candidate_admission.ready_checks`, `hunter_workflow_state.observe_pull_request`,
+  `hunter_governance_shadow.project`) supplies it explicitly, reusing an already-fetched statuses list where
+  one exists rather than a duplicate network call.
+
+Verification: 860 passed across the fourteen affected test files (ledger, collector, merge-readiness,
+candidate-admission, workflow-state, governance-shadow, and the review-orchestrator guard this PR's own
+`statuses: write` grant exercised). Ruff, Black and mypy green again on the full configured file list.

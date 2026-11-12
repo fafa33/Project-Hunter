@@ -268,6 +268,7 @@ def test_hma1_canonical_readiness_evaluate_smoke():
         mergeable = True
         unresolved_review_threads = ()
         changes_requested = ()
+        knowledge_receipt = ("success", "no verified applicable receipt obligation")
         review_authority = ("VALID_AGENT_REVIEW", "approved")
         candidate_admission = ("success", "preflight passed")
         issue_acceptance = ("success", "ACCEPTANCE_NOT_GOVERNED: no Issue is registered.")

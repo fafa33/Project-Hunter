@@ -142,6 +142,11 @@ class PullRequestObservation:
     check_runs: tuple[dict[str, Any], ...] = ()
     governance_status: dict[str, Any] | None = None
     shared_open_prs: tuple[int, ...] = ()
+    # Copilot F6 (PR #737): StaticReadinessObservation no longer defaults this to success, so every
+    # caller must supply it explicitly. Fetched once in observe_pull_request() (like
+    # governance_status) through the same trusted, authenticated, PR-bound, freshness-bounded reader
+    # the live merge-readiness controller uses, so both observation builders below reuse one read.
+    knowledge_receipt: tuple[str, str] = ("pending", "no Knowledge Receipt evidence supplied")
 
     def readiness_observation(self) -> readiness.StaticReadinessObservation:
         return readiness.StaticReadinessObservation(
@@ -152,6 +157,7 @@ class PullRequestObservation:
             check_runs=self.check_runs,
             governance_status=self.governance_status,
             shared_open_prs=self.shared_open_prs,
+            knowledge_receipt=self.knowledge_receipt,
         )
 
     def checks_only_observation(self) -> readiness.StaticReadinessObservation:
@@ -161,6 +167,9 @@ class PullRequestObservation:
         ALL_CHECKS_GREEN mean exactly what merge readiness means by it --
         including, since Issue #417, that a governance status of pending is a
         real dependency wait and not a green check -- without restating it.
+        Knowledge Receipt evidence (Issue #527) is a real merge-blocking check, not a non-check
+        blocker, so it is deliberately passed through here too, like governance_status, never
+        neutralised to success.
         """
 
         return readiness.StaticReadinessObservation(
@@ -171,6 +180,7 @@ class PullRequestObservation:
             check_runs=self.check_runs,
             governance_status=self.governance_status,
             shared_open_prs=(),
+            knowledge_receipt=self.knowledge_receipt,
         )
 
 
@@ -623,6 +633,7 @@ def observe_pull_request(pr_number: int) -> PullRequestObservation | None:
         check_runs=tuple(readiness.all_check_runs(head_sha)),
         governance_status=readiness.latest_status(head_sha, readiness.GOVERNANCE_CONTEXT),
         shared_open_prs=tuple(number for number in readiness.open_prs_for_head(head_sha) if number != int(pr_number)),
+        knowledge_receipt=readiness.knowledge_receipt_state(head_sha, int(pr_number)),
     )
 
 

@@ -496,6 +496,31 @@ def test_an_open_finding_reaches_the_dpm_context_of_a_task_touching_its_path(sto
     assert dpm.canonical_json(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope(("src/hunter/automation/",))) != plain
 
 
+def test_a_confirmed_finding_missing_its_receipt_still_reaches_dpm_before_publication(
+    store: state.GitLedgerStore,
+) -> None:
+    """AC5/AC6/AC8 (Issue #527, replaying the DFF-029/#524 class): a confirmed finding that cannot yet
+
+    satisfy its Knowledge Receipt obligation (resolved, but no correction commit was ever cited) is
+    still an open finding, so the existing DPM overlay already warns a later implementation task
+    about it through the unchanged, mandatory SPM/DPM ingress -- the same canonical path PR #526
+    showed could be bypassed when an implementation originated outside it. The receipt mechanism
+    adds a merge-time check; it never weakens or replaces this pre-existing, unbypassable ingress.
+    """
+    confirmed_but_undocumented = observation(
+        comment=91, obligation=True, receipt_eligible=False, message="Something unsafe here."
+    )
+    view, written, refusals = ingest_with_receipt(store, confirmed_but_undocumented)
+    assert written == 1 and not refusals  # finding_ingested only; no receipt could be minted
+    identity = knowledge.finding_id(1, 561, 91)
+    assert view.findings[identity].receipt is None
+    assert view.findings[identity].open  # still open: DFF-029's hosted-preflight gate also still applies
+    overlay = knowledge.overlay_families(view)
+    dpm = EngineeringContextAuthority(knowledge_overlay=overlay)
+    context = dpm.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope(("src/hunter/automation/",)))
+    assert f"KF-{identity[:12]}" in {entry["id"] for entry in context["applicable_defect_families"]}
+
+
 def test_a_proven_resolved_finding_remains_in_prevention_overlay(store: state.GitLedgerStore) -> None:
     identity = seeded(store)
     _, view, _ = write(
@@ -764,3 +789,319 @@ def test_positive_e2e_outcome_reaches_the_same_view_without_duplicating_the_dpm_
     _, replayed, count = write(store, knowledge.Write("verified_e2e_outcome", _positive_e2e_fixture()), by=by)
     assert count == 0
     assert knowledge.overlay_families(replayed) == overlay
+
+
+# --- fast-path Knowledge Receipt (ADR 0039 L11, Issue #527) ------------------------------------------------
+
+
+def receipt_observation(comment: int = 11, *, family: str | None = None, **kw: Any) -> dict:
+    value = observation(
+        comment,
+        receipt_eligible=True,
+        receipt_invariant="A confirmed invariant description of the real defect.",
+        receipt_fix_reference="1" * 40,
+        receipt_affected_path="src/hunter/automation/issue_agent_state.py",
+        receipt_regression_evidence=[TEST],
+        receipt_family_id=family,
+    )
+    value.update(kw)
+    return value
+
+
+def ingest_with_receipt(store: state.GitLedgerStore, *observations: dict) -> tuple:
+    """The real ``cmd_knowledge_ingest`` wiring: ingestion and receipt writes in one signed batch."""
+    _, view = knowledge.read(store, trust=TRUST, provenance=trusted)
+    writes, refusals = knowledge.ingestion_writes(
+        view, observations, repository_id=1, trusted_reviewers=REVIEWERS, applicability=applicability
+    )
+    receipt_ws, receipt_refusals = knowledge.receipt_writes(
+        view, observations, repository_id=1, trusted_reviewers=REVIEWERS, applicability=applicability
+    )
+    _, view, written = write(store, *writes, *receipt_ws, by={**BY, "role": "knowledge-ingest"})
+    return view, written, refusals + receipt_refusals
+
+
+def receipt_of(view: knowledge.KnowledgeView, comment: int) -> Any:
+    return view.findings[knowledge.finding_id(1, 561, comment)].receipt
+
+
+def receipt_evidence(identity: str, fingerprint: str, **change: Any) -> dict:
+    evidence = {
+        "finding_id": identity,
+        "fingerprint": fingerprint,
+        "invariant": "An invariant long enough to pass the bounded text pattern check here.",
+        "affected_paths": ["src/hunter/automation/issue_agent_state.py"],
+        "correction_commit": "1" * 40,
+        "regression_evidence": [TEST],
+        "outcome": "pending-adjudication",
+        "family_id": None,
+    }
+    evidence.update(change)
+    return evidence
+
+
+def test_a_confirmed_finding_with_complete_evidence_receives_a_pending_adjudication_receipt_before_resolution(
+    store: state.GitLedgerStore,
+) -> None:
+    view, written, refusals = ingest_with_receipt(store, receipt_observation())
+    assert written == 2 and not refusals  # finding_ingested + knowledge_receipt; no [family] tag in the message text
+    receipt = receipt_of(view, 11)
+    assert receipt is not None
+    assert receipt["outcome"] == "pending-adjudication"
+    assert receipt["family_id"] is None
+    assert receipt["correction_commit"] == "1" * 40
+    assert receipt["affected_paths"] == ["src/hunter/automation/issue_agent_state.py"]
+    assert receipt["regression_evidence"] == [TEST]
+    # The mandated lifecycle writes the receipt before the thread is ever resolved.
+    assert view.findings[knowledge.finding_id(1, 561, 11)].resolved is None
+
+
+def test_a_confirmed_finding_whose_tag_matches_an_applicable_family_receives_a_matched_family_receipt(
+    store: state.GitLedgerStore,
+) -> None:
+    view, _, refusals = ingest_with_receipt(store, receipt_observation(family="DFF-049"))
+    assert not refusals
+    receipt = receipt_of(view, 11)
+    assert receipt["outcome"] == "matched-family"
+    assert receipt["family_id"] == "DFF-049"
+
+
+def test_a_confirmed_finding_whose_family_tag_is_inapplicable_falls_back_to_pending_adjudication(
+    store: state.GitLedgerStore,
+) -> None:
+    view, _, refusals = ingest_with_receipt(
+        store,
+        receipt_observation(
+            family="DFF-049", path="scripts/unrelated.py", receipt_affected_path="scripts/unrelated.py"
+        ),
+    )
+    assert not refusals
+    receipt = receipt_of(view, 11)
+    assert receipt["outcome"] == "pending-adjudication"
+    assert receipt["family_id"] is None
+
+
+def test_a_finding_without_complete_receipt_evidence_receives_no_receipt(store: state.GitLedgerStore) -> None:
+    view, written, refusals = ingest_with_receipt(store, observation())
+    assert written == 1 and not refusals  # only finding_ingested; receipt_eligible is absent
+    assert receipt_of(view, 11) is None
+
+
+def test_a_receipt_can_be_written_on_a_later_pass_after_the_finding_was_already_ingested(
+    store: state.GitLedgerStore,
+) -> None:
+    """The mandated lifecycle allows the owner's disposition reply to arrive after the finding was first observed.
+
+    A finding already ingested on an earlier pass (before any disposition reply existed) must still become
+    receipt-eligible on a later pass once the reply supplies complete evidence -- ingestion and receipt
+    emission are independent passes over the same observations, not a single ingest-or-never gate.
+    """
+    view1, written1, refusals1 = ingest_with_receipt(store, observation())
+    assert written1 == 1 and not refusals1
+    assert receipt_of(view1, 11) is None
+    view2, written2, refusals2 = ingest_with_receipt(store, receipt_observation())
+    assert written2 == 1 and not refusals2  # only the new knowledge_receipt; finding_ingested already exists
+    assert receipt_of(view2, 11) is not None
+
+
+def test_a_finding_receives_at_most_one_receipt_insert_only(store: state.GitLedgerStore) -> None:
+    view, _, _ = ingest_with_receipt(store, receipt_observation())
+    view2, written2, refusals2 = ingest_with_receipt(store, receipt_observation())
+    assert written2 == 0 and not refusals2
+    assert receipt_of(view2, 11) == receipt_of(view, 11)
+
+
+# --- the Knowledge Receipt transport verdict (the status hunter_merge_readiness_v2 consumes) --------------
+
+
+def test_the_verdict_is_success_with_no_verified_applicable_obligation(store: state.GitLedgerStore) -> None:
+    """Legacy PRs and PRs with no confirmed-and-resolved finding are success -- nothing to block."""
+    view, _, _ = ingest(store, observation())  # ingested, but no owner disposition at all
+    verdict_state, detail = knowledge.receipt_verdict(
+        view, [observation()], repository_id=1, trusted_reviewers=REVIEWERS
+    )
+    assert verdict_state == "success"
+    assert "no verified applicable receipt obligation" in detail
+
+
+def resolved_confirmed_observation(comment: int = 11, **kw: Any) -> dict:
+    """A thread that entered the receipt-required lifecycle: resolved, owner-confirmed, full evidence."""
+    value = receipt_observation(comment)
+    value["obligation"] = True
+    value.update(kw)
+    return value
+
+
+def test_the_verdict_is_success_once_the_obligation_has_a_receipt(store: state.GitLedgerStore) -> None:
+    obs = resolved_confirmed_observation()
+    view, written, refusals = ingest_with_receipt(store, obs)
+    assert written == 2 and not refusals
+    verdict_state, detail = knowledge.receipt_verdict(view, [obs], repository_id=1, trusted_reviewers=REVIEWERS)
+    assert verdict_state == "success"
+    assert "1 receipt(s) verified" in detail
+
+
+def test_the_verdict_fails_closed_when_the_obligation_has_no_receipt(store: state.GitLedgerStore) -> None:
+    """A thread resolved as confirmed, but whose receipt could never be minted (incomplete evidence)."""
+    obs = resolved_confirmed_observation(receipt_eligible=False)
+    view, written, refusals = ingest_with_receipt(store, obs)
+    assert written == 1 and not refusals  # finding_ingested only; no receipt could be minted
+    verdict_state, detail = knowledge.receipt_verdict(view, [obs], repository_id=1, trusted_reviewers=REVIEWERS)
+    assert verdict_state == "failure"
+    assert "1 of 1" in detail
+
+
+def test_an_interrupted_transport_publish_is_resumed_by_another_executor_from_durable_state(
+    store: state.GitLedgerStore,
+) -> None:
+    """AC9 (Issue #527): the ledger append (the durable fact) and the status publish (the transport
+
+    of that fact) are independent steps. Simulate "executor A" writing the signed receipt and then
+    becoming unavailable before it could publish the status -- then prove "executor B", an entirely
+    separate process with no shared in-memory state, re-derives byte-identical transport evidence
+    from a cold read of the same durable ledger, and the originating PR's signed records are
+    unaffected by the interruption (no duplicate, no corruption, no re-authorization needed).
+    """
+    obs = resolved_confirmed_observation()
+    # Executor A: the signed ledger append succeeds. It then becomes unavailable (crash, quota,
+    # timeout, billing failure -- the exact class AC9 names) before publishing the status.
+    view_a, written, refusals = ingest_with_receipt(store, obs)
+    assert written == 2 and not refusals
+    identity = knowledge.finding_id(1, 561, 11)
+    receipt_before = view_a.findings[identity].receipt
+    assert receipt_before is not None
+
+    # Executor B: a fully independent process, with no memory of executor A's run, reads the same
+    # durable signed ledger cold and resumes the only outstanding work -- the transport verdict.
+    _, view_b = knowledge.read(store, trust=TRUST, provenance=trusted)
+    assert view_b.findings[identity].receipt == receipt_before  # the originating write is unaffected
+    verdict_b = knowledge.receipt_verdict(view_b, [obs], repository_id=1, trusted_reviewers=REVIEWERS)
+    verdict_a = knowledge.receipt_verdict(view_a, [obs], repository_id=1, trusted_reviewers=REVIEWERS)
+    assert verdict_b == verdict_a == ("success", "1 receipt(s) verified")
+
+    # A third pass over the exact same observation is still idempotent: no duplicate, no new write.
+    view_c, written_c, refusals_c = ingest_with_receipt(store, obs)
+    assert written_c == 0 and not refusals_c
+    assert view_c.findings[identity].receipt == receipt_before
+
+
+def test_the_verdict_counts_every_missing_obligation_among_several(store: state.GitLedgerStore) -> None:
+    satisfied = resolved_confirmed_observation(11)
+    missing = resolved_confirmed_observation(12, receipt_eligible=False)
+    view, _, _ = ingest_with_receipt(store, satisfied, missing)
+    verdict_state, detail = knowledge.receipt_verdict(
+        view, [satisfied, missing], repository_id=1, trusted_reviewers=REVIEWERS
+    )
+    assert verdict_state == "failure"
+    assert "1 of 2" in detail
+
+
+def test_receipt_writes_refuses_an_abbreviated_sha_instead_of_building_an_invalid_write(
+    store: state.GitLedgerStore,
+) -> None:
+    """Copilot F7 (PR #737): even if a caller's eligibility gate is wrong or absent,
+
+    receipt_writes must never build a Write that append() would then reject, aborting the rest of
+    this batch's otherwise-valid ingestion -- it must refuse the one bad observation and continue.
+    """
+    bad = receipt_observation(11, receipt_fix_reference="1" * 7)
+    good = receipt_observation(12)
+    _, view = knowledge.read(store, trust=TRUST, provenance=trusted)
+    writes, refusals = knowledge.receipt_writes(
+        view, [bad, good], repository_id=1, trusted_reviewers=REVIEWERS, applicability=applicability
+    )
+    assert [write.kind for write in writes] == ["knowledge_receipt"]
+    assert writes[0].evidence["finding_id"] == knowledge.finding_id(1, 561, 12)
+    assert len(refusals) == 1 and "schema" in refusals[0] and "correction_commit" in refusals[0]
+
+
+def test_receipt_writes_refuses_a_short_invariant_instead_of_building_an_invalid_write(
+    store: state.GitLedgerStore,
+) -> None:
+    bad = receipt_observation(11, receipt_invariant="too short")
+    _, view = knowledge.read(store, trust=TRUST, provenance=trusted)
+    writes, refusals = knowledge.receipt_writes(
+        view, [bad], repository_id=1, trusted_reviewers=REVIEWERS, applicability=applicability
+    )
+    assert writes == []
+    assert len(refusals) == 1 and "invariant" in refusals[0]
+
+
+def test_an_obligation_refused_by_finding_identity_is_never_treated_as_no_obligation(
+    store: state.GitLedgerStore,
+) -> None:
+    """Copilot F8 (PR #737): a confirmed, resolved finding whose path/provenance is malformed is
+
+    refused by finding_from_observation -- but that must count as a permanently unsatisfiable
+    obligation, never silently drop out of the obligation set and let the verdict read as success.
+    """
+    malformed = resolved_confirmed_observation(path=None)  # finding_from_observation requires a path
+    view, _, _ = ingest_with_receipt(store, resolved_confirmed_observation(13))  # an unrelated satisfied one
+    verdict_state, detail = knowledge.receipt_verdict(view, [malformed], repository_id=1, trusted_reviewers=REVIEWERS)
+    assert verdict_state == "failure"
+    assert "malformed evidence" in detail
+
+
+def test_an_obligation_refused_alongside_a_satisfied_one_still_fails_closed(store: state.GitLedgerStore) -> None:
+    satisfied = resolved_confirmed_observation(11)
+    malformed = resolved_confirmed_observation(12, path=None)
+    view, _, _ = ingest_with_receipt(store, satisfied)
+    verdict_state, _detail = knowledge.receipt_verdict(
+        view, [satisfied, malformed], repository_id=1, trusted_reviewers=REVIEWERS
+    )
+    assert verdict_state == "failure"  # the one satisfied obligation cannot offset the refused one
+
+
+def test_a_knowledge_receipt_does_not_alter_the_dpm_overlay(store: state.GitLedgerStore) -> None:
+    """The receipt is finding-lifecycle evidence, not prevention knowledge; the DPM overlay is unaffected by it."""
+    view, _, _ = ingest(store, observation())
+    overlay_before = knowledge.overlay_families(view)
+    view, written, refusals = ingest_with_receipt(store, receipt_observation())
+    assert written == 1 and not refusals  # only the new knowledge_receipt; finding_ingested already exists
+    assert knowledge.overlay_families(view) == overlay_before
+
+
+def test_a_receipt_requires_an_existing_finding(store: state.GitLedgerStore) -> None:
+    with pytest.raises(knowledge.KnowledgeLedgerError, match="unknown finding"):
+        write(
+            store,
+            knowledge.Write("knowledge_receipt", receipt_evidence("0" * 64, "1" * 64)),
+            by={**BY, "role": "knowledge-ingest"},
+        )
+
+
+def test_receipt_fingerprint_must_match_its_finding(store: state.GitLedgerStore) -> None:
+    identity = seeded(store)
+    with pytest.raises(knowledge.KnowledgeLedgerError, match="fingerprint mismatch"):
+        write(
+            store,
+            knowledge.Write("knowledge_receipt", receipt_evidence(identity, "0" * 64)),
+            by={**BY, "role": "knowledge-ingest"},
+        )
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"affected_paths": []}, "at least one affected path"),
+        ({"regression_evidence": []}, "regression evidence"),
+        ({"outcome": "matched-family", "family_id": None}, "family id iff matched"),
+        ({"outcome": "pending-adjudication", "family_id": "DFF-049"}, "family id iff matched"),
+    ],
+)
+def test_a_receipt_must_be_internally_consistent(store: state.GitLedgerStore, change: dict, message: str) -> None:
+    identity = seeded(store)
+    fingerprint = knowledge.read(store, trust=TRUST, provenance=trusted)[1].findings[identity].ingested["fingerprint"]
+    with pytest.raises(knowledge.KnowledgeLedgerError, match=message):
+        write(
+            store,
+            knowledge.Write("knowledge_receipt", receipt_evidence(identity, fingerprint, **change)),
+            by={**BY, "role": "knowledge-ingest"},
+        )
+
+
+def test_knowledge_receipt_requires_the_knowledge_ingest_role(store: state.GitLedgerStore) -> None:
+    identity = seeded(store)
+    fingerprint = knowledge.read(store, trust=TRUST, provenance=trusted)[1].findings[identity].ingested["fingerprint"]
+    with pytest.raises(knowledge.KnowledgeLedgerError, match="may not write"):
+        write(store, knowledge.Write("knowledge_receipt", receipt_evidence(identity, fingerprint)))

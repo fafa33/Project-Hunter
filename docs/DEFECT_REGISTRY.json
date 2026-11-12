@@ -2870,6 +2870,49 @@
       "sources": [
         "Issue #551: production evidence across PR #730 (Python hostedtoolcache mkdir: /Users/runner: Permission denied), PR #731 (SSH host-key verification failed on the fallback runner), PR #732 (known_hosts present yet still failed -- ssh's own tilde expansion resolves the account's password-database home, confirmed directly with dscl and ssh -G, not $HOME), and PR #733 (Permission denied (publickey) once host-key verification passed -- the identical defect in ssh's default IdentityFile resolution); verified live on both self-hosted runner accounts after the fix, including the first-ever successful fallback-runner canonicalization runs (workflow runs 43147963574, 43148140320, 43148287464)."
       ]
+    },
+    {
+      "id": "DFF-057",
+      "title": "confirmed-and-corrected-finding-reaches-merge-without-a-knowledge-receipt",
+      "invariant": "A reviewer finding the owner's structured disposition reply classifies confirmed, on a thread that is then resolved, must carry a machine-readable Knowledge Receipt (finding identity, root-cause invariant, affected surface, correction commit, regression evidence, and either an existing-family link or an explicit pending-adjudication disposition) before that finding is treated as complete. A resolved thread without one is never silently equivalent to a verified, closed finding; a legacy PR or a thread with no confirmed disposition carries no such obligation and is never retroactively blocked. The receipt's own fields must satisfy the exact schema before being written (an abbreviated SHA or a too-short invariant is refused, never silently accepted or allowed to abort unrelated ingestion); a confirmed obligation whose finding identity cannot even be derived is never read as an absence of obligation; the transport status is bound to the exact PR identity and head, published only by the trusted workflow identity, and trusted only while fresh -- an untrusted, cross-PR, or stale status can never satisfy or fabricate the obligation.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-issue-agent-knowledge.yml",
+          "scripts/hunter_candidate_admission.py",
+          "scripts/hunter_collect_learning_observations.py",
+          "scripts/hunter_governance_shadow.py",
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "scripts/hunter_merge_readiness_v2.py",
+          "scripts/hunter_workflow_state.py",
+          "src/hunter/automation/issue_agent_knowledge.py"
+        ],
+        "rationale": "Changes to the knowledge ledger's evidence schemas, the collector's owner-disposition parsing, the knowledge-ingest writer, the merge-readiness consumer, or any other StaticReadinessObservation constructor (admission, workflow-state, or shadow comparison) can silently reopen the gap this family closes: a confirmed, resolved finding reaching merge with no receipt, or a stale/forged/cross-PR status being trusted as one."
+      },
+      "prevention": {
+        "mechanism": "The signed, insert-only `knowledge_receipt` ledger kind (ADR 0039 L11); `receipt_writes` mints it deterministically from the same authenticated owner disposition reply the collector already parses, independent of thread-resolution timing, and only after `receipt_schema_problems` -- the single source of truth for schema conformance, reused by the collector's own eligibility gate -- confirms every field already satisfies the ledger's exact patterns (an abbreviated SHA or a too-short invariant is refused before a write is ever built, never aborting the rest of the batch). `receipt_obligations` counts a confirmed-and-resolved finding `finding_from_observation` cannot even identify as a permanently unresolvable obligation, never as an absence. `receipt_verdict`, derived only from the already-applied signed ledger view, is published as the PR-scoped `Hunter Knowledge Receipt / PR #<N>` commit status by the trusted knowledge-ingest role (`github-actions[bot]`) -- a transport, never an independent proof authority. `hunter_merge_readiness_v2.evaluate()` fails closed when that status reports a missing obligation; accepts only an authenticated, PR-bound, fresh (bounded by the producer's own cadence) status; treats its absence, a read failure, an untrusted publisher, a cross-PR mismatch, or staleness as pending (never a silently satisfied obligation); and passes a legacy or no-obligation PR through unchanged. Every production `StaticReadinessObservation` constructor (candidate admission, workflow state, shadow comparison) supplies this evidence explicitly -- the dataclass itself no longer defaults it to success.",
+        "boundary": "merge-gate"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_candidate_admission.py::test_ready_checks_is_not_success_with_no_knowledge_receipt_status",
+        "tests/test_hunter_knowledge_learning_workflow.py::test_an_abbreviated_correction_sha_is_not_receipt_eligible",
+        "tests/test_hunter_merge_readiness_v2.py::test_a_different_prs_status_at_the_same_sha_is_never_consumed",
+        "tests/test_hunter_merge_readiness_v2.py::test_a_forged_status_cannot_bypass_a_genuinely_missing_receipt",
+        "tests/test_hunter_merge_readiness_v2.py::test_a_stale_success_past_the_freshness_bound_is_pending_not_success",
+        "tests/test_hunter_merge_readiness_v2.py::test_absent_knowledge_receipt_status_is_pending_not_success",
+        "tests/test_hunter_merge_readiness_v2.py::test_an_untrusted_publisher_is_never_consumed",
+        "tests/test_hunter_merge_readiness_v2.py::test_legacy_pr_with_no_verified_obligation_is_not_retroactively_blocked",
+        "tests/test_hunter_merge_readiness_v2.py::test_missing_knowledge_receipt_fails_closed",
+        "tests/test_issue_agent_knowledge.py::test_an_interrupted_transport_publish_is_resumed_by_another_executor_from_durable_state",
+        "tests/test_issue_agent_knowledge.py::test_an_obligation_refused_by_finding_identity_is_never_treated_as_no_obligation",
+        "tests/test_issue_agent_knowledge.py::test_receipt_writes_refuses_a_short_invariant_instead_of_building_an_invalid_write",
+        "tests/test_issue_agent_knowledge.py::test_receipt_writes_refuses_an_abbreviated_sha_instead_of_building_an_invalid_write",
+        "tests/test_issue_agent_knowledge.py::test_the_verdict_fails_closed_when_the_obligation_has_no_receipt"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #527: PR #526 showed a confirmed implementation gap reaching merge from outside the canonical SPM/DPM ingress, with no mechanical requirement that a confirmed, corrected finding produce durable knowledge before completion.",
+        "PR #737 Copilot review, 2026-11-12 (discussion_r4553826778, r4553826901, r4553826979, r4553827043, r4553827094, r4553827147, r4553827202, r4553827261): 8 High findings -- stale success surviving thread resolution or a failed status post, an abbreviated SHA/short invariant marked receipt-eligible and able to abort ingestion, a SHA-scoped status with no PR dimension, an unauthenticated publisher, a fail-open StaticReadinessObservation default, and a refused observation silently discarding its obligation -- all closed on the same branch before this family's lifecycle advanced."
+      ]
     }
   ]
 }

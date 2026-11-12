@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import hunter_merge_readiness_v2 as core
 import pytest
@@ -21,7 +22,7 @@ def _green_check(name: str, ident: int) -> dict:
     return {"id": ident, "name": name, "status": "completed", "conclusion": "success"}
 
 
-def _install_green(monkeypatch, pr: dict | None = None) -> None:
+def _install_green(monkeypatch, pr: dict | None = None, *, mock_knowledge_receipt: bool = True) -> None:
     pr_payload = pr or _pr()
     monkeypatch.setattr(core, "request_json", lambda method, path, payload=None: pr_payload)
     monkeypatch.setattr(core, "unresolved_review_threads", lambda _number: ())
@@ -32,6 +33,11 @@ def _install_green(monkeypatch, pr: dict | None = None) -> None:
         lambda _sha: [_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)],
     )
     monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"id": 99, "state": "success"})
+    if mock_knowledge_receipt:
+        # Callers exercising the real knowledge_receipt_state (its paged()/authentication/
+        # freshness mechanics) pass mock_knowledge_receipt=False to keep this fixture from
+        # shadowing the exact function under test.
+        monkeypatch.setattr(core, "knowledge_receipt_state", lambda _sha, _number: ("success", "verified"))
     monkeypatch.setattr(core, "open_prs_for_head", lambda _sha: (501,))
     monkeypatch.setattr(core, "review_authority_state", lambda _sha, _number: ("success", "reviewed"))
     monkeypatch.setattr(core, "candidate_admission_state", lambda _sha, _number: ("success", "admitted"))
@@ -158,6 +164,7 @@ def test_a_new_commit_after_codex_review_stales_readiness_again():
         check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
         governance_status={"id": 99, "state": "success"},
         review_authority=("success", "complete base->HEAD hostile review"),
+        knowledge_receipt=("success", ""),
     )
     assert core.evaluate(reviewed).state == "success"
 
@@ -165,6 +172,7 @@ def test_a_new_commit_after_codex_review_stales_readiness_again():
         check_runs=reviewed.check_runs,
         governance_status=reviewed.governance_status,
         review_authority=("failure", "the candidate was mutated after it was reviewed"),
+        knowledge_receipt=("success", ""),
     )
 
     decision = core.evaluate(mutated)
@@ -206,6 +214,7 @@ def test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again():
         check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
         governance_status={"id": 99, "state": "success"},
         review_authority=("success", "fallback hostile review verified"),
+        knowledge_receipt=("success", ""),
     )
     assert core.evaluate(reviewed).state == "success"
 
@@ -213,6 +222,7 @@ def test_a_new_commit_after_a_valid_fallback_review_stales_readiness_again():
         check_runs=reviewed.check_runs,
         governance_status=reviewed.governance_status,
         review_authority=("failure", "the candidate was mutated after it was reviewed"),
+        knowledge_receipt=("success", ""),
     )
 
     assert core.evaluate(mutated).state == "success"
@@ -263,6 +273,8 @@ def test_missing_required_check_waits(monkeypatch):
 
 
 def test_legacy_governance_status_is_not_a_second_merge_gate(monkeypatch):
+    # knowledge_receipt_state no longer shares latest_status with governance_status (Issue #527),
+    # so overriding it here exercises only the legacy GOVERNANCE_CONTEXT status, as intended.
     _install_green(monkeypatch)
     monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"id": 99, "state": "failure"})
     _sha, decision = core.decide(501)
@@ -275,6 +287,211 @@ def test_missing_legacy_governance_status_does_not_duplicate_current_evidence(mo
     monkeypatch.setattr(core, "latest_status", lambda _sha, _context: None)
     _sha, decision = core.decide(501)
     assert decision.state == "success"
+
+
+# --- ADR 0039 L11 (Issue #527): the fast-path Knowledge Receipt obligation --------------------------------
+
+TRUSTED_CREATOR = {"login": core.KNOWLEDGE_RECEIPT_TRUSTED_CREATOR}
+
+
+def _receipt_status(pr_number: int = 501, *, state: str = "success", description: str = "ok", **overrides: Any) -> dict:
+    status = {
+        "id": 99,
+        "context": f"{core.KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}{pr_number}",
+        "state": state,
+        "description": description,
+        "creator": TRUSTED_CREATOR,
+        "created_at": _now_iso(),
+    }
+    status.update(overrides)
+    return status
+
+
+def _now_iso() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def test_missing_knowledge_receipt_fails_closed(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(core, "knowledge_receipt_state", lambda _sha, _n: ("failure", "1 missing"))
+    _sha, decision = core.decide(501)
+    assert decision.state == "failure"
+    assert "Knowledge Receipt" in decision.description
+
+
+def test_absent_knowledge_receipt_status_is_pending_not_success(monkeypatch):
+    """No status yet at this exact head is a genuine unknown, never a silently satisfied obligation."""
+    _install_green(monkeypatch, mock_knowledge_receipt=False)
+    monkeypatch.setattr(core, "paged", lambda _path: [])
+    _sha, decision = core.decide(501)
+    assert decision.state == "pending"
+    assert "Knowledge Receipt" in decision.description
+
+
+def test_knowledge_receipt_producer_failure_is_pending_never_success(monkeypatch):
+    """A failed read of the transport status must never be treated as a satisfied (zero) obligation."""
+    _install_green(monkeypatch, mock_knowledge_receipt=False)
+
+    def raising(_path: str) -> list:
+        raise RuntimeError("transport failure")
+
+    monkeypatch.setattr(core, "paged", raising)
+    _sha, decision = core.decide(501)
+    assert decision.state == "pending"
+
+
+def test_valid_pending_adjudication_receipt_permits_progression(monkeypatch):
+    """AC3/AC7: a receipt the producer verified as satisfied -- even with a pending family link --
+    is success, never a block, once the trusted producer has published that verdict."""
+    _install_green(monkeypatch)
+    monkeypatch.setattr(core, "knowledge_receipt_state", lambda _sha, _n: ("success", "1 receipt(s) verified"))
+    _sha, decision = core.decide(501)
+    assert decision.state == "success"
+
+
+def test_legacy_pr_with_no_verified_obligation_is_not_retroactively_blocked(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core, "knowledge_receipt_state", lambda _sha, _n: ("success", "no verified applicable receipt obligation")
+    )
+    _sha, decision = core.decide(501)
+    assert decision.state == "success"
+
+
+def test_knowledge_receipt_state_reads_the_exact_head_never_a_stale_or_foreign_one():
+    seen: list[str] = []
+
+    def spy(path: str) -> list[dict]:
+        seen.append(path)
+        return [_receipt_status(737)]
+
+    original = core.paged
+    try:
+        core.paged = spy  # type: ignore[assignment]
+        state, _detail = core.knowledge_receipt_state("f" * 40, 737)
+    finally:
+        core.paged = original
+    assert seen == [f"commits/{'f' * 40}/statuses"]
+    assert state == "success"
+
+
+# --- F4: PR-bound, never a different PR's status ------------------------------------------------------
+
+
+def test_a_different_prs_status_at_the_same_sha_is_never_consumed(monkeypatch):
+    monkeypatch.setattr(core, "paged", lambda _path: [_receipt_status(100, state="success")])
+    state, detail = core.knowledge_receipt_state("a" * 40, 200)
+    assert state == "pending"
+    assert "200" in detail
+
+
+def test_each_pr_reads_only_its_own_context_at_a_shared_sha(monkeypatch):
+    monkeypatch.setattr(
+        core,
+        "paged",
+        lambda _path: [
+            _receipt_status(100, state="failure", description="100 missing"),
+            _receipt_status(200, state="success"),
+        ],
+    )
+    assert core.knowledge_receipt_state("a" * 40, 100)[0] == "failure"
+    assert core.knowledge_receipt_state("a" * 40, 200)[0] == "success"
+
+
+# --- F5: unauthenticated publisher ---------------------------------------------------------------------
+
+
+def test_an_untrusted_publisher_is_never_consumed(monkeypatch):
+    monkeypatch.setattr(
+        core, "paged", lambda _path: [_receipt_status(501, state="success", creator={"login": "random-actor"})]
+    )
+    state, _detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "pending"  # invisible, not merely distrusted -- never a forged success either
+
+
+def test_a_missing_creator_is_never_consumed(monkeypatch):
+    monkeypatch.setattr(core, "paged", lambda _path: [_receipt_status(501, state="success", creator=None)])
+    state, _detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "pending"
+
+
+def test_a_trusted_publisher_with_valid_evidence_is_accepted(monkeypatch):
+    monkeypatch.setattr(core, "paged", lambda _path: [_receipt_status(501, state="success")])
+    state, _detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "success"
+
+
+def test_a_forged_status_cannot_bypass_a_genuinely_missing_receipt(monkeypatch):
+    """An untrusted actor posting a forged success alongside the real (failing) trusted verdict
+    must never win: only the trusted creator's entry is ever consulted."""
+    monkeypatch.setattr(
+        core,
+        "paged",
+        lambda _path: [
+            _receipt_status(501, state="failure", description="1 missing"),
+            _receipt_status(501, state="success", creator={"login": "random-actor"}, id=100),
+        ],
+    )
+    state, _detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "failure"
+
+
+# --- F1/F3: bounded freshness --------------------------------------------------------------------------
+
+
+def test_a_fresh_trusted_success_is_accepted(monkeypatch):
+    monkeypatch.setattr(core, "_status_age_seconds", lambda _status: 60.0)
+    monkeypatch.setattr(core, "paged", lambda _path: [_receipt_status(501, state="success")])
+    state, _detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "success"
+
+
+def test_a_stale_success_past_the_freshness_bound_is_pending_not_success(monkeypatch):
+    """F1/F3: a success published before a thread resolved into a new obligation, or before a
+    status-publish retry recovered from a transient failure, must not be trusted forever."""
+    monkeypatch.setattr(core, "_status_age_seconds", lambda _status: core.KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS + 1)
+    monkeypatch.setattr(core, "paged", lambda _path: [_receipt_status(501, state="success")])
+    state, detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "pending"
+    assert "stale" in detail
+
+
+def test_a_stale_failure_is_also_downgraded_to_pending_never_fabricated_as_a_block(monkeypatch):
+    """Staleness is symmetric: an old status is simply unknown, never upgraded into a confident
+    failure either -- only a fresh verdict, in either direction, is trusted."""
+    monkeypatch.setattr(core, "_status_age_seconds", lambda _status: core.KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS + 1)
+    monkeypatch.setattr(core, "paged", lambda _path: [_receipt_status(501, state="failure")])
+    state, _detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "pending"
+
+
+def test_an_unparseable_created_at_is_treated_as_stale(monkeypatch):
+    monkeypatch.setattr(core, "paged", lambda _path: [_receipt_status(501, state="success", created_at="not-a-date")])
+    state, _detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "pending"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected_state"),
+    [
+        ({"state": "success", "description": "ok"}, "success"),
+        ({"state": "failure", "description": "missing"}, "failure"),
+        ({"state": "error", "description": "producer crashed"}, "failure"),
+        ({"state": "pending", "description": "still computing"}, "pending"),
+    ],
+)
+def test_knowledge_receipt_state_maps_every_github_status_value(monkeypatch, overrides, expected_state):
+    monkeypatch.setattr(core, "paged", lambda _path: [_receipt_status(501, **overrides)])
+    state, _detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == expected_state
+
+
+def test_knowledge_receipt_state_with_no_status_at_all_is_pending(monkeypatch):
+    monkeypatch.setattr(core, "paged", lambda _path: [])
+    state, _detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "pending"
 
 
 def test_shared_head_waits_for_unique_attribution(monkeypatch):
@@ -326,6 +543,7 @@ def test_a_supplied_observation_decides_identically_to_the_live_one(monkeypatch)
             mergeable=True,
             check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
             governance_status={"id": 99, "state": "success"},
+            knowledge_receipt=("success", ""),
         )
     )
 
@@ -405,13 +623,14 @@ def test_ordinary_workflow_completion_without_association_uses_exact_head(monkey
 def _green_observation() -> core.StaticReadinessObservation:
     return core.StaticReadinessObservation(
         check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
+        knowledge_receipt=("success", ""),
     )
 
 
 def test_worker_says_done_while_required_checks_are_red_is_rejected():
     runs = [_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)]
     runs[0] = {**runs[0], "conclusion": "failure"}
-    observation = core.StaticReadinessObservation(check_runs=tuple(runs))
+    observation = core.StaticReadinessObservation(check_runs=tuple(runs), knowledge_receipt=("success", ""))
 
     verdict = core.evaluate_completion_claim(observation)
 
@@ -476,6 +695,7 @@ def test_live_independent_review_opportunity_is_non_blocking():
     observation = core.StaticReadinessObservation(
         check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
         review_authority=("pending", "WAITING_FOR_REVIEWER: exact HEAD dispatched"),
+        knowledge_receipt=("success", ""),
     )
     assert core.evaluate(observation).state == "success"
     assert core.evaluate_completion_claim(observation).accepted is True
@@ -485,6 +705,7 @@ def test_broken_independent_review_orchestration_is_non_blocking():
     observation = core.StaticReadinessObservation(
         check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
         review_authority=("failure", "MISSING_REVIEW_AUTHORITY: collector unavailable"),
+        knowledge_receipt=("success", ""),
     )
     assert core.evaluate(observation).state == "success"
 
@@ -498,6 +719,7 @@ def test_worker_says_done_after_independent_review_reaches_a_terminal_state_is_a
     observation = core.StaticReadinessObservation(
         check_runs=tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1)),
         review_authority=("success", "VALID_LAST_RESORT_GUARD: pool exhausted, guard reviewed"),
+        knowledge_receipt=("success", ""),
     )
 
     verdict = core.evaluate_completion_claim(observation)
@@ -633,7 +855,9 @@ def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeyp
 
 def _success_description(authority: tuple[str, str]) -> str:
     runs = tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1))
-    decision = core.evaluate(core.StaticReadinessObservation(check_runs=runs, review_authority=authority))
+    decision = core.evaluate(
+        core.StaticReadinessObservation(check_runs=runs, review_authority=authority, knowledge_receipt=("success", ""))
+    )
     assert decision.state == "success"
     assert len(decision.description) <= 140
     return decision.description
@@ -673,7 +897,11 @@ def test_success_description_reports_a_pending_independent_review_as_pending():
 def test_review_disposition_wording_does_not_change_readiness_predicates():
     runs = tuple(_green_check(name, index) for index, name in enumerate(core.REQUIRED_CHECKS, start=1))
     states = {
-        core.evaluate(core.StaticReadinessObservation(check_runs=runs, review_authority=authority)).state
+        core.evaluate(
+            core.StaticReadinessObservation(
+                check_runs=runs, review_authority=authority, knowledge_receipt=("success", "")
+            )
+        ).state
         for authority in (
             ("success", "VALID_AGENT_REVIEW: x"),
             ("success", "POOL_EXHAUSTED: x"),

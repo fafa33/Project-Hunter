@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 WORKFLOW_PATH = Path(".github/workflows/hunter-knowledge-learning.yml")
 COLLECTOR = Path("scripts/hunter_collect_learning_observations.py").read_text()
 
@@ -316,6 +318,221 @@ def test_unresolved_thread_cannot_be_falsely_canonicalized(monkeypatch):
     result = collector.collect("fafa33/Project-Hunter", "token", 530, head, base)
     assert result[0]["classification"] is None
     assert result[0]["claimed_family_id"] is None
+
+
+def test_resolved_confirmed_disposition_creates_a_receipt_obligation(monkeypatch):
+    """ADR 0039 L11 (Issue #527): a resolved thread plus a confirmed owner disposition is the
+    authoritative signal that a finding entered the receipt-required lifecycle -- independent of
+    whether the full family/test tuple needed for deterministic DFF classification is present."""
+    import sys
+
+    sys.path.insert(0, str(Path("scripts").resolve()))
+    import hunter_collect_learning_observations as collector
+
+    head, base = "a" * 40, "b" * 40
+    fix = "1" * 40
+    test_ref = "tests/test_hunter_knowledge_learning_workflow.py::test_collector_does_not_invent_defect_classification"
+    comments = [
+        {
+            "id": 41,
+            "commit_id": "c" * 40,
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+            "path": "scripts/x.py",
+            "line": 8,
+            "body": "real defect",
+        },
+        {
+            "id": 42,
+            "in_reply_to_id": 41,
+            "user": {"login": "fafa33"},
+            "body": f"confirmed and fixed {fix}: canonical invariant [family:DFF-008] [test:{test_ref}]",
+        },
+    ]
+    monkeypatch.setattr(collector, "_trusted_reviewer_logins", lambda: frozenset({"chatgpt-codex-connector"}))
+    monkeypatch.setattr(collector, "_review_threads", lambda *_args: {41: True})
+    monkeypatch.setattr(
+        collector.governance, "request_json", lambda _r, _t, _m, path: comments if "/comments?" in path else []
+    )
+    result = collector.collect("fafa33/Project-Hunter", "token", 530, head, base)
+    finding = result[0]
+    assert finding["obligation"] is True
+    assert finding["receipt_eligible"] is True
+    assert finding["receipt_invariant"] == "canonical invariant"
+    assert finding["receipt_fix_reference"] == fix
+    assert finding["receipt_affected_path"] == "scripts/x.py"
+    assert finding["receipt_regression_evidence"] == [test_ref]
+    assert finding["receipt_family_id"] == "DFF-008"
+
+
+def test_an_unresolved_thread_is_receipt_eligible_but_creates_no_obligation_yet(monkeypatch):
+    """The mandated lifecycle writes the receipt *before* the thread is resolved, so receipt
+    eligibility must not wait on thread resolution -- but the obligation Merge Readiness enforces
+    (the thread was already closed out without ever producing a receipt) cannot exist yet either."""
+    import sys
+
+    sys.path.insert(0, str(Path("scripts").resolve()))
+    import hunter_collect_learning_observations as collector
+
+    head, base = "a" * 40, "b" * 40
+    fix = "1" * 40
+    test_ref = "tests/test_hunter_knowledge_learning_workflow.py::test_collector_does_not_invent_defect_classification"
+    comments = [
+        {
+            "id": 51,
+            "commit_id": "c" * 40,
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+            "path": "scripts/x.py",
+            "line": 8,
+            "body": "real defect",
+        },
+        {
+            "id": 52,
+            "in_reply_to_id": 51,
+            "user": {"login": "fafa33"},
+            "body": f"confirmed and fixed {fix}: canonical invariant [family:DFF-008] [test:{test_ref}]",
+        },
+    ]
+    monkeypatch.setattr(collector, "_trusted_reviewer_logins", lambda: frozenset({"chatgpt-codex-connector"}))
+    monkeypatch.setattr(collector, "_review_threads", lambda *_args: {51: False})
+    monkeypatch.setattr(
+        collector.governance, "request_json", lambda _r, _t, _m, path: comments if "/comments?" in path else []
+    )
+    result = collector.collect("fafa33/Project-Hunter", "token", 530, head, base)
+    finding = result[0]
+    assert finding["obligation"] is False
+    assert finding["receipt_eligible"] is True
+    assert finding["receipt_fix_reference"] == fix
+
+
+def test_a_resolved_false_positive_disposition_creates_no_obligation_and_no_receipt(monkeypatch):
+    import sys
+
+    sys.path.insert(0, str(Path("scripts").resolve()))
+    import hunter_collect_learning_observations as collector
+
+    head, base = "a" * 40, "b" * 40
+    comments = [
+        {
+            "id": 61,
+            "commit_id": "c" * 40,
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+            "path": "scripts/x.py",
+            "line": 8,
+            "body": "claimed defect",
+        },
+        {
+            "id": 62,
+            "in_reply_to_id": 61,
+            "user": {"login": "fafa33"},
+            "body": "false positive: the guard already handles this case",
+        },
+    ]
+    monkeypatch.setattr(collector, "_trusted_reviewer_logins", lambda: frozenset({"chatgpt-codex-connector"}))
+    monkeypatch.setattr(collector, "_review_threads", lambda *_args: {61: True})
+    monkeypatch.setattr(
+        collector.governance, "request_json", lambda _r, _t, _m, path: comments if "/comments?" in path else []
+    )
+    result = collector.collect("fafa33/Project-Hunter", "token", 530, head, base)
+    finding = result[0]
+    assert finding["classification"] == "false-positive"
+    assert finding["obligation"] is False
+    assert finding["receipt_eligible"] is False
+
+
+def test_a_confirmed_disposition_without_a_correction_commit_is_not_receipt_eligible(monkeypatch):
+    """A confirmed-but-undocumented disposition cannot deterministically mint a receipt: the fast
+    path never fabricates a correction commit, so the obligation stays unsatisfiable until the
+    owner (or a follow-up reply) supplies the structured evidence."""
+    import sys
+
+    sys.path.insert(0, str(Path("scripts").resolve()))
+    import hunter_collect_learning_observations as collector
+
+    head, base = "a" * 40, "b" * 40
+    comments = [
+        {
+            "id": 71,
+            "commit_id": "c" * 40,
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+            "path": "scripts/x.py",
+            "line": 8,
+            "body": "real defect",
+        },
+        {
+            "id": 72,
+            "in_reply_to_id": 71,
+            "user": {"login": "fafa33"},
+            "body": "confirmed, will fix shortly",
+        },
+    ]
+    monkeypatch.setattr(collector, "_trusted_reviewer_logins", lambda: frozenset({"chatgpt-codex-connector"}))
+    monkeypatch.setattr(collector, "_review_threads", lambda *_args: {71: True})
+    monkeypatch.setattr(
+        collector.governance, "request_json", lambda _r, _t, _m, path: comments if "/comments?" in path else []
+    )
+    result = collector.collect("fafa33/Project-Hunter", "token", 530, head, base)
+    finding = result[0]
+    assert finding["obligation"] is True  # the owner confirmed it; the thread is resolved
+    assert finding["receipt_eligible"] is False  # but no correction commit exists to mint a receipt from
+
+
+def _confirmed_disposition_observation(fix: str, monkeypatch, resolved: bool = True):
+    import sys
+
+    sys.path.insert(0, str(Path("scripts").resolve()))
+    import hunter_collect_learning_observations as collector
+
+    head, base = "a" * 40, "b" * 40
+    test_ref = "tests/test_hunter_knowledge_learning_workflow.py::test_collector_does_not_invent_defect_classification"
+    comments = [
+        {
+            "id": 81,
+            "commit_id": "c" * 40,
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+            "path": "scripts/x.py",
+            "line": 8,
+            "body": "real defect",
+        },
+        {
+            "id": 82,
+            "in_reply_to_id": 81,
+            "user": {"login": "fafa33"},
+            "body": f"confirmed and fixed {fix}: canonical invariant [family:DFF-008] [test:{test_ref}]",
+        },
+    ]
+    monkeypatch.setattr(collector, "_trusted_reviewer_logins", lambda: frozenset({"chatgpt-codex-connector"}))
+    monkeypatch.setattr(collector, "_review_threads", lambda *_args: {81: resolved})
+    monkeypatch.setattr(
+        collector.governance, "request_json", lambda _r, _t, _m, path: comments if "/comments?" in path else []
+    )
+    result = collector.collect("fafa33/Project-Hunter", "token", 530, head, base)
+    return result[0]
+
+
+@pytest.mark.parametrize("length", [7, 10, 39])
+def test_an_abbreviated_correction_sha_is_not_receipt_eligible(monkeypatch, length):
+    """Copilot F2 (PR #737): split_owner_disposition accepts a 7-39 character abbreviated SHA, but
+    the knowledge_receipt schema requires a full SHA40 -- the collector must not mark an abbreviated
+    reference as receipt-eligible, since receipt_writes would otherwise build a schema-invalid write."""
+    finding = _confirmed_disposition_observation("1" * length, monkeypatch)
+    assert finding["obligation"] is True  # thread resolved, owner confirmed: the obligation still exists
+    assert finding["receipt_eligible"] is False  # but the abbreviated SHA can never mint a valid receipt
+
+
+def test_a_full_sha40_correction_commit_is_receipt_eligible(monkeypatch):
+    finding = _confirmed_disposition_observation("1" * 40, monkeypatch)
+    assert finding["obligation"] is True
+    assert finding["receipt_eligible"] is True
+    assert finding["receipt_fix_reference"] == "1" * 40
+
+
+def test_a_41_character_correction_commit_is_not_receipt_eligible(monkeypatch):
+    """The historical-evidence SHA extractor's word-boundary match caps at 40, but assert the
+    boundary explicitly: anything that is not exactly 40 lowercase hex characters is rejected."""
+    finding = _confirmed_disposition_observation("1" * 41, monkeypatch)
+    # A 41-character run of hex digits is not itself a valid SHA reference the extractor treats
+    # as one; either way it must never become receipt-eligible with an invalid correction commit.
+    assert finding["receipt_eligible"] is False
 
 
 def test_collector_preserves_deleted_review_comment_from_event_payload(tmp_path, monkeypatch):

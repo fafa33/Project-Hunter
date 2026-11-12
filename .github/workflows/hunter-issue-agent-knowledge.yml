@@ -6,7 +6,12 @@ name: Hunter / Issue Agent Knowledge
 # completes (and on a schedule, and by owner dispatch with no payload relay), reads the authenticated
 # reviewer threads for open PRs, and appends each new finding exactly once -- with its deterministic family
 # mapping when one exists -- to the anchored knowledge ledger that DPM overlays before any later task.
-# PR progress never waits on it (not a required check). Inert until S6 (MISSING_CONFIGURATION).
+# ADR 0039 L11 (Issue #527): it also publishes the "Hunter Knowledge Receipt" commit status, a
+# transport of the fast-path receipt verdict already derived from that signed ledger append --
+# never an independent proof authority. This workflow itself is still not a required check (not
+# something a PR's own checks wait on completing); Hunter Merge Readiness is the only consumer of
+# the status it publishes, and only once that status exists for the exact head under evaluation.
+# Inert until S6 (MISSING_CONFIGURATION).
 
 on:
   workflow_run:
@@ -46,6 +51,7 @@ jobs:
       actions: read
       checks: read
       pull-requests: read
+      statuses: write
     steps:
       - name: Checkout trusted main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

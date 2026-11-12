@@ -42,5 +42,6 @@ def test_legacy_governance_status_is_compatibility_only() -> None:
         ),
         governance_status={"id": 999, "state": "failure"},
         review_authority=("success", "VALID_AGENT_REVIEW: exact-head authority"),
+        knowledge_receipt=("success", ""),
     )
     assert readiness.evaluate(observation).state == "success"

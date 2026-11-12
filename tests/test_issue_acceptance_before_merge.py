@@ -411,7 +411,7 @@ def green_checks() -> tuple[dict[str, Any], ...]:
 
 
 def decide(acceptance: tuple[str, str] | None = None, **overrides: Any) -> readiness.Decision:
-    kwargs: dict[str, Any] = {"check_runs": green_checks()}
+    kwargs: dict[str, Any] = {"check_runs": green_checks(), "knowledge_receipt": ("success", "")}
     if acceptance is not None:
         kwargs["issue_acceptance"] = acceptance
     kwargs.update(overrides)

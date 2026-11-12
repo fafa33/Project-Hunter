@@ -57,10 +57,21 @@ def project(snap: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
     legacy = _latest_status(snap["statuses"], readiness.CONTEXT)
     governance = _latest_status(snap["statuses"], readiness.GOVERNANCE_CONTEXT)
+    # Reuses the statuses already fetched above -- never a second network call -- the same way
+    # hunter_candidate_admission.ready_checks() does (Copilot F6, PR #737). A snapshot lacking a
+    # PR number (this script's own narrower test fixtures) leaves the dataclass's own pending
+    # default in place, consistent with "remains UNKNOWN" rather than fabricating a verdict.
+    pr_number = snap.get("pr_number")
+    extra = (
+        {"knowledge_receipt": readiness.knowledge_receipt_verdict_from_statuses(snap["statuses"], pr_number)}
+        if isinstance(pr_number, int)
+        else {}
+    )
     successor = readiness.evaluate(
         readiness.StaticReadinessObservation(
             draft=bool(snap["draft"]),
             mergeable=snap["mergeable"],
+            **extra,
             # A Draft decision terminates before review authority is consulted.
             # Non-Draft semantic parity remains UNKNOWN until exact-head review
             # authority and review-thread facts are added to the snapshot.

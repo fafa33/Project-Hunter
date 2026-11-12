@@ -79,7 +79,7 @@ def safe_draft(pr: dict, repository: str) -> bool:
     )
 
 
-def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | None) -> tuple[str, str]:
+def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | None, pr_number: int) -> tuple[str, str]:
     """Ready requires the same current code/security/governance checks as merge."""
     import hunter_merge_readiness_v2 as readiness
 
@@ -101,6 +101,11 @@ def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | N
         statuses = paged(f"commits/{head_sha}/statuses")
         governance_statuses = [s for s in statuses if s.get("context") == readiness.GOVERNANCE_CONTEXT]
         latest = max(governance_statuses, key=lambda s: int(s.get("id") or 0)) if governance_statuses else None
+        # Copilot F6 (PR #737): StaticReadinessObservation no longer defaults this to success, so it
+        # must be supplied explicitly -- reusing the statuses already fetched above, never a second
+        # network call, and the same trusted authentication/freshness/PR-binding checks the live
+        # merge-readiness controller applies.
+        knowledge_receipt = readiness.knowledge_receipt_verdict_from_statuses(statuses, pr_number)
         decision = readiness.evaluate(
             readiness.StaticReadinessObservation(
                 draft=False,
@@ -108,6 +113,7 @@ def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | N
                 review_authority=("pending", "external LLM review is optional defense-in-depth"),
                 check_runs=tuple(checks),
                 governance_status=latest,
+                knowledge_receipt=knowledge_receipt,
             )
         )
         return decision.state, decision.description
@@ -187,7 +193,7 @@ def enforce_candidate_admission(
         print(f"PR #{pr_number} automatically Ready on {head_sha}")
         return 0
     if admission_state == "success":
-        admission_state, description = ready_checks(repository, token, head_sha, pr.get("mergeable"))
+        admission_state, description = ready_checks(repository, token, head_sha, pr.get("mergeable"), pr_number)
     if admission_state == "success":
         print(f"PR #{pr_number} admitted for review: {description}")
         return 0

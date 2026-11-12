@@ -74,6 +74,7 @@ WRITER_ROLES: Final[Mapping[str, frozenset[str]]] = {
     "thread_resolved": frozenset({"reconcile"}),
     "recurrence": frozenset({"reconcile"}),
     "verified_e2e_outcome": frozenset({"knowledge-ingest"}),
+    "knowledge_receipt": frozenset({"knowledge-ingest"}),
 }
 
 _PROVENANCE = _object(
@@ -183,6 +184,23 @@ EVIDENCE_SCHEMAS: Final = {
         }
     ),
     "recurrence": _object({"family_id": _pattern(_FAMILY), "finding_id": SHA64}),
+    # ADR 0039 L11 (Issue #527): the fast-path Knowledge Receipt. Deterministic, bounded,
+    # repository-local evidence that a confirmed finding was corrected with regression proof,
+    # written before thread resolution. ``outcome`` is ``pending-adjudication`` whenever a
+    # deterministic family link is not yet available; that is a valid, non-blocking terminal
+    # receipt state, never an absence of one.
+    "knowledge_receipt": _object(
+        {
+            "finding_id": SHA64,
+            "fingerprint": SHA64,
+            "invariant": _pattern(_TEXT),
+            "affected_paths": _list(_pattern(_PATH), maximum=32),
+            "correction_commit": SHA40,
+            "regression_evidence": _list(_pattern(_TEST_ID), maximum=32),
+            "outcome": _enum({"matched-family", "pending-adjudication"}),
+            "family_id": _optional(_pattern(_FAMILY)),
+        }
+    ),
 }
 _RECORD = _object(
     {
@@ -316,6 +334,44 @@ def candidate_id(invariant: str, changed_paths: Sequence[str]) -> str:
     return sha256_hex(canonical_json({"invariant": invariant, "changed_paths": sorted(changed_paths)}))
 
 
+def receipt_schema_problems(
+    *,
+    correction_commit: str,
+    invariant: str,
+    affected_path: str,
+    regression_evidence: Sequence[str],
+) -> list[str]:
+    """The single source of truth for ``knowledge_receipt`` field conformance (ADR 0039 L11, Issue #527).
+
+    Reused both by the collector, to decide fast-path receipt eligibility *before* any abbreviated or
+    malformed owner-disposition evidence is treated as satisfying the obligation, and by
+    ``receipt_writes``, as its own last line of defense so a write it builds can never reach
+    ``append()`` already known to be schema-invalid and abort an otherwise-valid batch. An empty
+    result means every field already satisfies the exact pattern ``EVIDENCE_SCHEMAS["knowledge_receipt"]``
+    enforces at append time -- never a looser or stricter check than the schema itself.
+    """
+
+    problems: list[str] = []
+    for value, validator, name in (
+        (correction_commit, SHA40, "correction_commit"),
+        (invariant, _pattern(_TEXT), "invariant"),
+        (affected_path, _pattern(_PATH), "affected_path"),
+    ):
+        try:
+            validator(value, name)
+        except LedgerSchemaError:
+            problems.append(name)
+    evidence_validator = _list(_pattern(_TEST_ID), maximum=32)
+    if not regression_evidence:
+        problems.append("regression_evidence")
+    else:
+        try:
+            evidence_validator(list(regression_evidence), "regression_evidence")
+        except LedgerSchemaError:
+            problems.append("regression_evidence")
+    return problems
+
+
 # --- the verified view -----------------------------------------------------------------------------------
 
 
@@ -327,6 +383,7 @@ class Finding:
     proven: dict[str, Any] | None = None
     resolved: dict[str, Any] | None = None
     historical_assessment: dict[str, Any] | None = None
+    receipt: dict[str, Any] | None = None
 
     @property
     def path(self) -> str:
@@ -375,7 +432,13 @@ class KnowledgeView:
 def record_key(kind: str, evidence: Mapping[str, Any]) -> str:
     """The L2 uniqueness key of a record, derived only from its evidence."""
 
-    if kind in {"finding_ingested", "finding_proven", "thread_resolved", "historical_evidence_assessed"}:
+    if kind in {
+        "finding_ingested",
+        "finding_proven",
+        "thread_resolved",
+        "historical_evidence_assessed",
+        "knowledge_receipt",
+    }:
         return str(evidence["finding_id"])
     if kind == "verified_e2e_outcome":
         return sha256_hex(
@@ -519,6 +582,16 @@ def _fold(view: KnowledgeView, kind: str, evidence: dict[str, Any]) -> None:
             "recurrence of an unproven or differently mapped finding",
         )
         view.recurrences.add((evidence["family_id"], evidence["finding_id"]))
+        return
+    if kind == "knowledge_receipt":
+        _require(evidence["fingerprint"] == item.ingested["fingerprint"], "receipt fingerprint mismatch")
+        _require(bool(evidence["affected_paths"]), "receipt must name at least one affected path")
+        _require(bool(evidence["regression_evidence"]), "receipt must name regression evidence")
+        _require(
+            (evidence["outcome"] == "matched-family") == (evidence["family_id"] is not None),
+            "family id iff matched-family",
+        )
+        item.receipt = dict(evidence)
         return
     raise KnowledgeLedgerError(f"unknown kind {kind}")
 
@@ -666,6 +739,160 @@ def ingestion_writes(
     return writes, refusals
 
 
+# --- fast-path Knowledge Receipt (ADR 0039 L11, Issue #527) ----------------------------------------------
+
+
+def receipt_writes(
+    view: KnowledgeView,
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    repository_id: int,
+    trusted_reviewers: frozenset[str],
+    applicability: FamilyApplicability,
+) -> tuple[list[Write], list[str]]:
+    """The fast-path Knowledge Receipt for a batch of observations.
+
+    Independent of ``ingestion_writes``: the mandatory lifecycle writes a receipt *before* a
+    thread is resolved, so a finding already ingested on an earlier pass (before the owner's
+    disposition reply existed) must still become receipt-eligible on a later pass. Deterministic,
+    bounded and repository-local: every field comes from the observation an authenticated owner
+    reply already carried, never from an external provider or a history scan.
+    """
+
+    writes: list[Write] = []
+    refusals: list[str] = []
+    queued: set[str] = set()
+    for observation in observations:
+        if not observation.get("receipt_eligible"):
+            continue
+        if not str(observation.get("event_id", "")).startswith(("review-comment-", "sonar-issue-")):
+            continue
+        try:
+            evidence = finding_from_observation(
+                observation, repository_id=repository_id, trusted_reviewers=trusted_reviewers
+            )
+        except FindingRefused as error:
+            refusals.append(f"{observation.get('event_id')}: {error}")
+            continue
+        identity = evidence["finding_id"]
+        existing = view.findings.get(identity)
+        if (existing is not None and existing.receipt is not None) or identity in queued:
+            continue  # insert-only: a finding receives at most one receipt (idempotent fast path)
+        # Last line of defense (ADR 0039 L11, Issue #527): re-validate against the exact schema a
+        # write must satisfy before building one. The collector's own eligibility gate already
+        # applies this same check, so this is normally a no-op; it exists so a malformed-but-marked-
+        # eligible observation from any caller can never reach append() already known to be
+        # schema-invalid and abort the rest of this batch's otherwise-valid ingestion.
+        schema_problems = receipt_schema_problems(
+            correction_commit=str(observation["receipt_fix_reference"]),
+            invariant=str(observation["receipt_invariant"]),
+            affected_path=str(observation["receipt_affected_path"]),
+            regression_evidence=[str(item) for item in observation["receipt_regression_evidence"]],
+        )
+        if schema_problems:
+            refusals.append(
+                f"{observation.get('event_id')}: receipt evidence fails schema: {', '.join(schema_problems)}"
+            )
+            continue
+        queued.add(identity)
+        family = observation.get("receipt_family_id")
+        applies = applicability(family, evidence["provenance"]["path"]) if family else None
+        outcome, family_id = (
+            ("matched-family", family)
+            if (family is not None and applies)
+            else (
+                "pending-adjudication",
+                None,
+            )
+        )
+        writes.append(
+            Write(
+                "knowledge_receipt",
+                {
+                    "finding_id": identity,
+                    "fingerprint": evidence["fingerprint"],
+                    "invariant": observation["receipt_invariant"],
+                    "affected_paths": [observation["receipt_affected_path"]],
+                    "correction_commit": observation["receipt_fix_reference"],
+                    "regression_evidence": list(observation["receipt_regression_evidence"]),
+                    "outcome": outcome,
+                    "family_id": family_id,
+                },
+            )
+        )
+    return writes, refusals
+
+
+def receipt_obligations(
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    repository_id: int,
+    trusted_reviewers: frozenset[str],
+) -> tuple[list[str], int]:
+    """The finding ids that entered the receipt-required lifecycle (ADR 0039 L11, Issue #527).
+
+    A resolved thread plus a confirmed owner disposition creates the obligation, independent of
+    whether a receipt yet exists for it -- this is the fact a Knowledge Receipt status verdict is
+    computed from, never an independent judgment of its own.
+
+    Returns ``(resolvable finding ids, unresolvable count)``. An observation the collector already
+    marked as an obligation can still be refused by ``finding_from_observation`` (malformed path or
+    provenance); that refusal must never be read as "no obligation here" -- a confirmed, resolved
+    finding whose identity cannot even be derived is, if anything, *more* suspect than one that
+    resolves cleanly, so it is counted separately and the caller must treat it as permanently
+    unsatisfiable, never as an absence.
+    """
+
+    identities: list[str] = []
+    unresolvable = 0
+    for observation in observations:
+        if not observation.get("obligation"):
+            continue
+        if not str(observation.get("event_id", "")).startswith(("review-comment-", "sonar-issue-")):
+            continue
+        try:
+            evidence = finding_from_observation(
+                observation, repository_id=repository_id, trusted_reviewers=trusted_reviewers
+            )
+        except FindingRefused:
+            unresolvable += 1
+            continue
+        identities.append(evidence["finding_id"])
+    return identities, unresolvable
+
+
+def receipt_verdict(
+    view: KnowledgeView,
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    repository_id: int,
+    trusted_reviewers: frozenset[str],
+) -> tuple[str, str]:
+    """The Knowledge Receipt transport verdict for one PR's observations (ADR 0039 L11, Issue #527).
+
+    A commit status built from this verdict is only a transport of this canonical result, never an
+    independent proof authority: every finding id is read back from the signed, already-applied
+    ledger view, never invented. Legacy PRs and PRs with no verified applicable obligation are
+    ``success`` by construction -- there is nothing to retroactively block.
+    """
+
+    obligated, unresolvable = receipt_obligations(
+        observations, repository_id=repository_id, trusted_reviewers=trusted_reviewers
+    )
+    missing = [fid for fid in obligated if (item := view.findings.get(fid)) is None or item.receipt is None]
+    if unresolvable:
+        return (
+            "failure",
+            f"{unresolvable} confirmed obligation(s) could not be identified from malformed evidence",
+        )
+    if not missing:
+        detail = (
+            "no verified applicable receipt obligation" if not obligated else f"{len(obligated)} receipt(s) verified"
+        )
+        return "success", detail
+    return "failure", f"{len(missing)} of {len(obligated)} confirmed finding(s) missing a Knowledge Receipt"
+
+
 # --- DPM overlay (L2) -------------------------------------------------------------------------------------
 
 
@@ -731,5 +958,9 @@ __all__ = [
     "normalized_claim",
     "overlay_families",
     "read",
+    "receipt_obligations",
+    "receipt_schema_problems",
+    "receipt_verdict",
+    "receipt_writes",
     "record_key",
 ]
