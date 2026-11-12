@@ -24,6 +24,11 @@ REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json
 CONTEXT = "Hunter Merge Readiness"
 GOVERNANCE_CONTEXT = "Hunter Governance Review"
 GOVERNANCE_RECONCILE_WORKFLOW = "Hunter Governance Review Reconcile"
+#: ADR 0039 L11 (Issue #527): a commit-status transport of the fast-path Knowledge Receipt verdict
+#: the trusted "Hunter / Issue Agent Knowledge" workflow derives from the signed knowledge ledger.
+#: This controller only ever reads it at the exact head under evaluation; it is never an
+#: independent proof authority and never reads the ledger itself.
+KNOWLEDGE_RECEIPT_CONTEXT = "Hunter Knowledge Receipt"
 REQUIRED_CHECKS = ("Quality Gates", "dependency-review", "CodeQL")
 HARD_FAILURES = {"failure", "timed_out", "action_required", "startup_failure"}
 
@@ -223,6 +228,32 @@ def latest_status(sha: str, context: str) -> dict[str, Any] | None:
     return max(matches, key=lambda status: int(status.get("id") or 0))
 
 
+def knowledge_receipt_state(head_sha: str) -> tuple[str, str]:
+    """ADR 0039 L11 (Issue #527): the fast-path Knowledge Receipt obligation, read at the exact head.
+
+    A pure consumer of the "Hunter Knowledge Receipt" commit status (``latest_status`` already
+    verifies the exact head and the trusted context, picking the most recent entry): this never
+    reads the signed knowledge ledger itself and never derives its own verdict. Absent evidence --
+    no status yet, or a failed read -- is ``pending``, never treated as a satisfied obligation; a
+    legacy PR or one with no verified applicable obligation is ``success`` only because the trusted
+    producer itself published that verdict, not because this reader assumed it.
+    """
+
+    try:
+        status = latest_status(head_sha, KNOWLEDGE_RECEIPT_CONTEXT)
+    except Exception as exc:
+        return "pending", f"Knowledge Receipt evidence unavailable: {type(exc).__name__}: {exc}"
+    if status is None:
+        return "pending", "Waiting for the Knowledge Receipt verdict at this head"
+    github_state = str(status.get("state") or "")
+    description = str(status.get("description") or "")
+    if github_state == "success":
+        return "success", description
+    if github_state in {"failure", "error"}:
+        return "failure", description or "Knowledge Receipt obligation not satisfied"
+    return "pending", description or "Knowledge Receipt verdict pending"
+
+
 _REVIEW_THREADS_QUERY = """
 query($owner: String!, $name: String!, $number: Int!, $after: String) {
   repository(owner: $owner, name: $name) {
@@ -405,6 +436,9 @@ class ReadinessObservation(Protocol):
     def changes_requested(self) -> tuple[str, ...]: ...
 
     @property
+    def knowledge_receipt(self) -> tuple[str, str]: ...
+
+    @property
     def review_authority(self) -> tuple[str, str]: ...
 
     @property
@@ -431,6 +465,7 @@ class StaticReadinessObservation:
     mergeable: bool | None = True
     unresolved_review_threads: tuple[str, ...] = ()
     changes_requested: tuple[str, ...] = ()
+    knowledge_receipt: tuple[str, str] = ("success", "")
     review_authority: tuple[str, str] = ("success", "")
     candidate_admission: tuple[str, str] = ("success", "")
     issue_acceptance: tuple[str, str] = ("success", "")
@@ -462,6 +497,10 @@ class LiveReadinessObservation:
     @cached_property
     def changes_requested(self) -> tuple[str, ...]:
         return changes_requested_reviewers(self._pr_number)
+
+    @cached_property
+    def knowledge_receipt(self) -> tuple[str, str]:
+        return knowledge_receipt_state(self._head_sha)
 
     @cached_property
     def review_authority(self) -> tuple[str, str]:
@@ -527,6 +566,16 @@ def evaluate(observation: ReadinessObservation) -> Decision:
 
     if observation.changes_requested:
         return Decision("failure", "Changes requested by: " + ", ".join(observation.changes_requested))
+
+    # ADR 0039 L11 (Issue #527): the fast-path Knowledge Receipt obligation. A confirmed finding
+    # whose thread was resolved without ever producing a receipt fails closed here; a legacy PR or
+    # one with no verified applicable obligation is "success" because the trusted producer itself
+    # published that verdict -- this consumer never invents or re-derives it.
+    receipt_state, receipt_detail = observation.knowledge_receipt
+    if receipt_state == "pending":
+        return Decision("pending", "Waiting for the Knowledge Receipt verdict: " + receipt_detail)
+    if receipt_state != "success":
+        return Decision("failure", "Knowledge Receipt obligation not satisfied: " + receipt_detail)
 
     # Independent-review orchestration is advisory defense-in-depth, not merge
     # authority. Provider silence, timeout, quota, or orchestration defects must

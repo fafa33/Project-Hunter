@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import hunter_merge_readiness_v2 as core
 import pytest
@@ -262,9 +263,25 @@ def test_missing_required_check_waits(monkeypatch):
     assert decision.state == "pending"
 
 
+def _status_except_knowledge_receipt(response: dict | None) -> Any:
+    """Every ``latest_status`` lookup gets *response*, except the Knowledge Receipt context stays green.
+
+    Isolates a test's injected legacy-``GOVERNANCE_CONTEXT`` evidence from the unrelated, genuinely
+    merge-blocking Knowledge Receipt check (ADR 0039 L11, Issue #527), which also reads
+    ``latest_status`` but is deliberately not what these tests are exercising.
+    """
+
+    def lookup(_sha: str, context: str) -> dict | None:
+        if context == core.KNOWLEDGE_RECEIPT_CONTEXT:
+            return {"id": 99, "state": "success"}
+        return response
+
+    return lookup
+
+
 def test_legacy_governance_status_is_not_a_second_merge_gate(monkeypatch):
     _install_green(monkeypatch)
-    monkeypatch.setattr(core, "latest_status", lambda _sha, _context: {"id": 99, "state": "failure"})
+    monkeypatch.setattr(core, "latest_status", _status_except_knowledge_receipt({"id": 99, "state": "failure"}))
     _sha, decision = core.decide(501)
     assert decision.state == "success"
     assert core.GOVERNANCE_CONTEXT not in decision.description
@@ -272,9 +289,103 @@ def test_legacy_governance_status_is_not_a_second_merge_gate(monkeypatch):
 
 def test_missing_legacy_governance_status_does_not_duplicate_current_evidence(monkeypatch):
     _install_green(monkeypatch)
-    monkeypatch.setattr(core, "latest_status", lambda _sha, _context: None)
+    monkeypatch.setattr(core, "latest_status", _status_except_knowledge_receipt(None))
     _sha, decision = core.decide(501)
     assert decision.state == "success"
+
+
+# --- ADR 0039 L11 (Issue #527): the fast-path Knowledge Receipt obligation --------------------------------
+
+
+def test_missing_knowledge_receipt_fails_closed(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core, "latest_status", lambda _sha, context: {"id": 99, "state": "failure", "description": "1 missing"}
+    )
+    _sha, decision = core.decide(501)
+    assert decision.state == "failure"
+    assert "Knowledge Receipt" in decision.description
+
+
+def test_absent_knowledge_receipt_status_is_pending_not_success(monkeypatch):
+    """No status yet at this exact head is a genuine unknown, never a silently satisfied obligation."""
+    _install_green(monkeypatch)
+    monkeypatch.setattr(core, "latest_status", lambda _sha, _context: None)
+    _sha, decision = core.decide(501)
+    assert decision.state == "pending"
+    assert "Knowledge Receipt" in decision.description
+
+
+def test_knowledge_receipt_producer_failure_is_pending_never_success(monkeypatch):
+    """A failed read of the transport status must never be treated as a satisfied (zero) obligation."""
+    _install_green(monkeypatch)
+
+    def raising(_sha: str, _context: str) -> dict:
+        raise RuntimeError("transport failure")
+
+    monkeypatch.setattr(core, "latest_status", raising)
+    _sha, decision = core.decide(501)
+    assert decision.state == "pending"
+
+
+def test_valid_pending_adjudication_receipt_permits_progression(monkeypatch):
+    """AC3/AC7: a receipt the producer verified as satisfied -- even with a pending family link --
+    is success, never a block, once the trusted producer has published that verdict."""
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "latest_status",
+        lambda _sha, _context: {"id": 99, "state": "success", "description": "1 receipt(s) verified"},
+    )
+    _sha, decision = core.decide(501)
+    assert decision.state == "success"
+
+
+def test_legacy_pr_with_no_verified_obligation_is_not_retroactively_blocked(monkeypatch):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(
+        core,
+        "latest_status",
+        lambda _sha, _context: {
+            "id": 99,
+            "state": "success",
+            "description": "no verified applicable receipt obligation",
+        },
+    )
+    _sha, decision = core.decide(501)
+    assert decision.state == "success"
+
+
+def test_knowledge_receipt_state_reads_the_exact_head_never_a_stale_or_foreign_one():
+    seen: list[tuple[str, str]] = []
+
+    def spy(sha: str, context: str) -> dict:
+        seen.append((sha, context))
+        return {"id": 1, "state": "success", "description": "ok"}
+
+    original = core.latest_status
+    try:
+        core.latest_status = spy  # type: ignore[assignment]
+        core.knowledge_receipt_state("f" * 40)
+    finally:
+        core.latest_status = original
+    assert seen == [("f" * 40, core.KNOWLEDGE_RECEIPT_CONTEXT)]
+
+
+@pytest.mark.parametrize(
+    ("status", "expected_state"),
+    [
+        ({"id": 1, "state": "success", "description": "ok"}, "success"),
+        ({"id": 1, "state": "failure", "description": "missing"}, "failure"),
+        ({"id": 1, "state": "error", "description": "producer crashed"}, "failure"),
+        ({"id": 1, "state": "pending", "description": "still computing"}, "pending"),
+        (None, "pending"),
+    ],
+)
+def test_knowledge_receipt_state_maps_every_github_status_value(monkeypatch, status, expected_state):
+    monkeypatch.setattr(core, "latest_status", lambda _sha, _context: status)
+    state, _detail = core.knowledge_receipt_state("a" * 40)
+    assert state == expected_state
 
 
 def test_shared_head_waits_for_unique_attribution(monkeypatch):

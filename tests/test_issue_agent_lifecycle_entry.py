@@ -195,3 +195,59 @@ def test_bind_step_annotates_a_terminal_failure_without_failing_the_job(
     printed = capsys.readouterr().out
     assert ("::error title=Issue agent FAILED::" in printed) is annotated
     assert outputs == {"result_bound": bound, "fallback_authorized": "false"}
+
+
+# --- ADR 0039 L11 (Issue #527): the Knowledge Receipt status transport -------------------------------------
+
+
+class _FakeGovernance:
+    def __init__(self, combined: dict[str, Any], calls: list[tuple[str, str, dict | None]]) -> None:
+        self._combined = combined
+        self._calls = calls
+
+    def request_json(self, _repository: str, _token: str, method: str, path: str, payload: dict | None = None) -> Any:
+        self._calls.append((method, path, payload))
+        return self._combined if method == "GET" else {"id": 1}
+
+
+class _FakeCollector:
+    def __init__(self, combined: dict[str, Any], calls: list[tuple[str, str, dict | None]]) -> None:
+        self.governance = _FakeGovernance(combined, calls)
+
+
+def test_knowledge_receipt_status_publish_is_idempotent_when_unchanged() -> None:
+    """ADR 0039 L11: an unchanged verdict at this exact head is never republished."""
+    calls: list[tuple[str, str, dict | None]] = []
+    combined = {"statuses": [{"context": lifecycle.KNOWLEDGE_RECEIPT_CONTEXT, "state": "success", "description": "ok"}]}
+    collector = _FakeCollector(combined, calls)
+    lifecycle._publish_knowledge_receipt_status(collector, "fafa33/Project-Hunter", "token", "a" * 40, "success", "ok")
+    assert calls == [("GET", "commits/" + "a" * 40 + "/status", None)]
+
+
+def test_knowledge_receipt_status_publish_posts_on_a_changed_verdict() -> None:
+    calls: list[tuple[str, str, dict | None]] = []
+    combined = {"statuses": []}
+    collector = _FakeCollector(combined, calls)
+    lifecycle._publish_knowledge_receipt_status(
+        collector, "fafa33/Project-Hunter", "token", "a" * 40, "failure", "1 missing"
+    )
+    assert len(calls) == 2
+    method, path, payload = calls[1]
+    assert method == "POST"
+    assert path == "statuses/" + "a" * 40
+    assert payload == {
+        "state": "failure",
+        "context": lifecycle.KNOWLEDGE_RECEIPT_CONTEXT,
+        "description": "1 missing",
+    }
+
+
+def test_knowledge_receipt_status_publish_truncates_to_the_github_description_limit() -> None:
+    calls: list[tuple[str, str, dict | None]] = []
+    collector = _FakeCollector({"statuses": []}, calls)
+    lifecycle._publish_knowledge_receipt_status(
+        collector, "fafa33/Project-Hunter", "token", "a" * 40, "failure", "x" * 200
+    )
+    _method, _path, payload = calls[1]
+    assert payload is not None
+    assert len(payload["description"]) == 140

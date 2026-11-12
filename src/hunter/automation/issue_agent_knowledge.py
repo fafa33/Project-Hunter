@@ -74,6 +74,7 @@ WRITER_ROLES: Final[Mapping[str, frozenset[str]]] = {
     "thread_resolved": frozenset({"reconcile"}),
     "recurrence": frozenset({"reconcile"}),
     "verified_e2e_outcome": frozenset({"knowledge-ingest"}),
+    "knowledge_receipt": frozenset({"knowledge-ingest"}),
 }
 
 _PROVENANCE = _object(
@@ -183,6 +184,23 @@ EVIDENCE_SCHEMAS: Final = {
         }
     ),
     "recurrence": _object({"family_id": _pattern(_FAMILY), "finding_id": SHA64}),
+    # ADR 0039 L11 (Issue #527): the fast-path Knowledge Receipt. Deterministic, bounded,
+    # repository-local evidence that a confirmed finding was corrected with regression proof,
+    # written before thread resolution. ``outcome`` is ``pending-adjudication`` whenever a
+    # deterministic family link is not yet available; that is a valid, non-blocking terminal
+    # receipt state, never an absence of one.
+    "knowledge_receipt": _object(
+        {
+            "finding_id": SHA64,
+            "fingerprint": SHA64,
+            "invariant": _pattern(_TEXT),
+            "affected_paths": _list(_pattern(_PATH), maximum=32),
+            "correction_commit": SHA40,
+            "regression_evidence": _list(_pattern(_TEST_ID), maximum=32),
+            "outcome": _enum({"matched-family", "pending-adjudication"}),
+            "family_id": _optional(_pattern(_FAMILY)),
+        }
+    ),
 }
 _RECORD = _object(
     {
@@ -327,6 +345,7 @@ class Finding:
     proven: dict[str, Any] | None = None
     resolved: dict[str, Any] | None = None
     historical_assessment: dict[str, Any] | None = None
+    receipt: dict[str, Any] | None = None
 
     @property
     def path(self) -> str:
@@ -375,7 +394,13 @@ class KnowledgeView:
 def record_key(kind: str, evidence: Mapping[str, Any]) -> str:
     """The L2 uniqueness key of a record, derived only from its evidence."""
 
-    if kind in {"finding_ingested", "finding_proven", "thread_resolved", "historical_evidence_assessed"}:
+    if kind in {
+        "finding_ingested",
+        "finding_proven",
+        "thread_resolved",
+        "historical_evidence_assessed",
+        "knowledge_receipt",
+    }:
         return str(evidence["finding_id"])
     if kind == "verified_e2e_outcome":
         return sha256_hex(
@@ -519,6 +544,16 @@ def _fold(view: KnowledgeView, kind: str, evidence: dict[str, Any]) -> None:
             "recurrence of an unproven or differently mapped finding",
         )
         view.recurrences.add((evidence["family_id"], evidence["finding_id"]))
+        return
+    if kind == "knowledge_receipt":
+        _require(evidence["fingerprint"] == item.ingested["fingerprint"], "receipt fingerprint mismatch")
+        _require(bool(evidence["affected_paths"]), "receipt must name at least one affected path")
+        _require(bool(evidence["regression_evidence"]), "receipt must name regression evidence")
+        _require(
+            (evidence["outcome"] == "matched-family") == (evidence["family_id"] is not None),
+            "family id iff matched-family",
+        )
+        item.receipt = dict(evidence)
         return
     raise KnowledgeLedgerError(f"unknown kind {kind}")
 
@@ -666,6 +701,128 @@ def ingestion_writes(
     return writes, refusals
 
 
+# --- fast-path Knowledge Receipt (ADR 0039 L11, Issue #527) ----------------------------------------------
+
+
+def receipt_writes(
+    view: KnowledgeView,
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    repository_id: int,
+    trusted_reviewers: frozenset[str],
+    applicability: FamilyApplicability,
+) -> tuple[list[Write], list[str]]:
+    """The fast-path Knowledge Receipt for a batch of observations.
+
+    Independent of ``ingestion_writes``: the mandatory lifecycle writes a receipt *before* a
+    thread is resolved, so a finding already ingested on an earlier pass (before the owner's
+    disposition reply existed) must still become receipt-eligible on a later pass. Deterministic,
+    bounded and repository-local: every field comes from the observation an authenticated owner
+    reply already carried, never from an external provider or a history scan.
+    """
+
+    writes: list[Write] = []
+    refusals: list[str] = []
+    queued: set[str] = set()
+    for observation in observations:
+        if not observation.get("receipt_eligible"):
+            continue
+        if not str(observation.get("event_id", "")).startswith(("review-comment-", "sonar-issue-")):
+            continue
+        try:
+            evidence = finding_from_observation(
+                observation, repository_id=repository_id, trusted_reviewers=trusted_reviewers
+            )
+        except FindingRefused as error:
+            refusals.append(f"{observation.get('event_id')}: {error}")
+            continue
+        identity = evidence["finding_id"]
+        existing = view.findings.get(identity)
+        if (existing is not None and existing.receipt is not None) or identity in queued:
+            continue  # insert-only: a finding receives at most one receipt (idempotent fast path)
+        queued.add(identity)
+        family = observation.get("receipt_family_id")
+        applies = applicability(family, evidence["provenance"]["path"]) if family else None
+        outcome, family_id = (
+            ("matched-family", family)
+            if (family is not None and applies)
+            else (
+                "pending-adjudication",
+                None,
+            )
+        )
+        writes.append(
+            Write(
+                "knowledge_receipt",
+                {
+                    "finding_id": identity,
+                    "fingerprint": evidence["fingerprint"],
+                    "invariant": observation["receipt_invariant"],
+                    "affected_paths": [observation["receipt_affected_path"]],
+                    "correction_commit": observation["receipt_fix_reference"],
+                    "regression_evidence": list(observation["receipt_regression_evidence"]),
+                    "outcome": outcome,
+                    "family_id": family_id,
+                },
+            )
+        )
+    return writes, refusals
+
+
+def receipt_obligations(
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    repository_id: int,
+    trusted_reviewers: frozenset[str],
+) -> list[str]:
+    """The finding ids that entered the receipt-required lifecycle (ADR 0039 L11, Issue #527).
+
+    A resolved thread plus a confirmed owner disposition creates the obligation, independent of
+    whether a receipt yet exists for it -- this is the fact a Knowledge Receipt status verdict is
+    computed from, never an independent judgment of its own.
+    """
+
+    identities: list[str] = []
+    for observation in observations:
+        if not observation.get("obligation"):
+            continue
+        if not str(observation.get("event_id", "")).startswith(("review-comment-", "sonar-issue-")):
+            continue
+        try:
+            evidence = finding_from_observation(
+                observation, repository_id=repository_id, trusted_reviewers=trusted_reviewers
+            )
+        except FindingRefused:
+            continue
+        identities.append(evidence["finding_id"])
+    return identities
+
+
+def receipt_verdict(
+    view: KnowledgeView,
+    observations: Sequence[Mapping[str, Any]],
+    *,
+    repository_id: int,
+    trusted_reviewers: frozenset[str],
+) -> tuple[str, str]:
+    """The Knowledge Receipt transport verdict for one PR's observations (ADR 0039 L11, Issue #527).
+
+    A commit status built from this verdict is only a transport of this canonical result, never an
+    independent proof authority: every finding id is read back from the signed, already-applied
+    ledger view, never invented. Legacy PRs and PRs with no verified applicable obligation are
+    ``success`` by construction -- there is nothing to retroactively block.
+    """
+
+    obligated = receipt_obligations(observations, repository_id=repository_id, trusted_reviewers=trusted_reviewers)
+    missing = [fid for fid in obligated if (item := view.findings.get(fid)) is None or item.receipt is None]
+    if not missing:
+        detail = (
+            "no verified applicable receipt obligation" if not obligated else f"{len(obligated)} receipt(s) verified"
+        )
+        return "success", detail
+    return "failure", f"{len(missing)} of {len(obligated)} confirmed finding(s) missing a Knowledge Receipt"
+
+
 # --- DPM overlay (L2) -------------------------------------------------------------------------------------
 
 
@@ -731,5 +888,8 @@ __all__ = [
     "normalized_claim",
     "overlay_families",
     "read",
+    "receipt_obligations",
+    "receipt_verdict",
+    "receipt_writes",
     "record_key",
 ]

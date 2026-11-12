@@ -2870,6 +2870,36 @@
       "sources": [
         "Issue #551: production evidence across PR #730 (Python hostedtoolcache mkdir: /Users/runner: Permission denied), PR #731 (SSH host-key verification failed on the fallback runner), PR #732 (known_hosts present yet still failed -- ssh's own tilde expansion resolves the account's password-database home, confirmed directly with dscl and ssh -G, not $HOME), and PR #733 (Permission denied (publickey) once host-key verification passed -- the identical defect in ssh's default IdentityFile resolution); verified live on both self-hosted runner accounts after the fix, including the first-ever successful fallback-runner canonicalization runs (workflow runs 43147963574, 43148140320, 43148287464)."
       ]
+    },
+    {
+      "id": "DFF-057",
+      "title": "confirmed-and-corrected-finding-reaches-merge-without-a-knowledge-receipt",
+      "invariant": "A reviewer finding the owner's structured disposition reply classifies confirmed, on a thread that is then resolved, must carry a machine-readable Knowledge Receipt (finding identity, root-cause invariant, affected surface, correction commit, regression evidence, and either an existing-family link or an explicit pending-adjudication disposition) before that finding is treated as complete. A resolved thread without one is never silently equivalent to a verified, closed finding; a legacy PR or a thread with no confirmed disposition carries no such obligation and is never retroactively blocked.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/issue_agent_knowledge.py",
+          "scripts/hunter_collect_learning_observations.py",
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "scripts/hunter_merge_readiness_v2.py",
+          ".github/workflows/hunter-issue-agent-knowledge.yml"
+        ],
+        "rationale": "Changes to the knowledge ledger's evidence schemas, the collector's owner-disposition parsing, the knowledge-ingest writer, or the merge-readiness consumer can silently reopen the gap this family closes: a confirmed, resolved finding reaching merge with no receipt."
+      },
+      "prevention": {
+        "mechanism": "The signed, insert-only `knowledge_receipt` ledger kind (ADR 0039 L11); `receipt_writes` mints it deterministically from the same authenticated owner disposition reply the collector already parses, independent of thread-resolution timing. `receipt_verdict`, derived only from the already-applied signed ledger view, is published as the `Hunter Knowledge Receipt` commit status by the trusted knowledge-ingest role -- a transport, never an independent proof authority. `hunter_merge_readiness_v2.evaluate()` fails closed when that status reports a missing obligation, treats its absence or a read failure as pending (never a silently satisfied obligation), and passes a legacy or no-obligation PR through unchanged.",
+        "boundary": "merge-gate"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_knowledge.py::test_the_verdict_fails_closed_when_the_obligation_has_no_receipt",
+        "tests/test_issue_agent_knowledge.py::test_an_interrupted_transport_publish_is_resumed_by_another_executor_from_durable_state",
+        "tests/test_hunter_merge_readiness_v2.py::test_missing_knowledge_receipt_fails_closed",
+        "tests/test_hunter_merge_readiness_v2.py::test_absent_knowledge_receipt_status_is_pending_not_success",
+        "tests/test_hunter_merge_readiness_v2.py::test_legacy_pr_with_no_verified_obligation_is_not_retroactively_blocked"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #527: PR #526 showed a confirmed implementation gap reaching merge from outside the canonical SPM/DPM ingress, with no mechanical requirement that a confirmed, corrected finding produce durable knowledge before completion."
+      ]
     }
   ]
 }

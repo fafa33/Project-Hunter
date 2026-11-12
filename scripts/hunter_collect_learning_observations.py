@@ -193,6 +193,17 @@ def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[
         affected_paths: list[str] = []
         regression_evidence: list[str] = []
         claimed_family_id: str | None = None
+        # ADR 0039 L11 (Issue #527): the fast-path Knowledge Receipt obligation and its
+        # evidence. Deliberately independent of thread resolution: the mandated lifecycle is
+        # "... -> regression test -> fast knowledge receipt -> focused verification -> resolve",
+        # so a receipt must become eligible before the thread is ever resolved, not after.
+        obligation = False
+        receipt_eligible = False
+        receipt_invariant = None
+        receipt_fix_reference = None
+        receipt_affected_path = None
+        receipt_regression_evidence: list[str] = []
+        receipt_family_id: str | None = None
         disposition = dispositions.get(comment_id)
         if disposition is not None:
             disposition_class, disposition_invariant, disposition_fix, disposition_family, disposition_tests = (
@@ -201,6 +212,7 @@ def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[
             # A lifecycle disposition is terminal only when the exact thread is resolved.
             # Confirmed knowledge additionally requires the complete replayable evidence contract.
             if thread_state.get(comment_id) is True:
+                obligation = disposition_class == "confirmed"
                 if disposition_class != "confirmed":
                     classification = disposition_class
                 elif (
@@ -216,6 +228,19 @@ def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[
                     affected_paths = [str(item["path"])]
                     regression_evidence = disposition_tests
                     claimed_family_id = disposition_family
+            if (
+                disposition_class == "confirmed"
+                and disposition_fix
+                and disposition_tests
+                and disposition_invariant
+                and item.get("path")
+            ):
+                receipt_eligible = True
+                receipt_invariant = disposition_invariant
+                receipt_fix_reference = disposition_fix
+                receipt_affected_path = str(item["path"])
+                receipt_regression_evidence = disposition_tests
+                receipt_family_id = disposition_family
         observations.append(
             {
                 "source": "github-review",
@@ -236,6 +261,13 @@ def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[
                 "fix_reference": fix_reference,
                 "regression_evidence": regression_evidence,
                 "claimed_family_id": claimed_family_id,
+                "obligation": obligation,
+                "receipt_eligible": receipt_eligible,
+                "receipt_invariant": receipt_invariant,
+                "receipt_fix_reference": receipt_fix_reference,
+                "receipt_affected_path": receipt_affected_path,
+                "receipt_regression_evidence": receipt_regression_evidence,
+                "receipt_family_id": receipt_family_id,
             }
         )
 

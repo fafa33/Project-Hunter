@@ -437,7 +437,19 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
                 trusted_reviewers=trusted,
                 applicability=applicability,
             )
-            _, _, written = knowledge.append(
+            # ADR 0039 L11 (Issue #527): the fast-path Knowledge Receipt, written in the same
+            # signed batch as ingestion. Deterministic, bounded, repository-local -- every field
+            # comes from the authenticated owner disposition the collector already carries.
+            new_receipt_writes, receipt_refusals = knowledge.receipt_writes(
+                view,
+                observations,
+                repository_id=configuration.repository_id,
+                trusted_reviewers=trusted,
+                applicability=applicability,
+            )
+            writes = writes + new_receipt_writes
+            refusals = refusals + receipt_refusals
+            _, view, written = knowledge.append(
                 store,
                 writes,
                 trust=configuration.trust,
@@ -453,7 +465,53 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
         print(f"PR #{number} at {head[:12]}: {written} knowledge record(s), {len(refusals)} refused observation(s)")
         for refusal in refusals:
             print(f"  refused {refusal}")
+        # The commit status is only a transport of the verdict just derived from the signed ledger
+        # append above; it is never an independent proof authority. Best-effort: a transient
+        # publish failure must never abort ingestion for the remaining PRs in this pass, since the
+        # signed ledger write it reports on has already durably succeeded.
+        verdict_state, verdict_detail = knowledge.receipt_verdict(
+            view, observations, repository_id=configuration.repository_id, trusted_reviewers=trusted
+        )
+        try:
+            _publish_knowledge_receipt_status(
+                collector, configuration.repository, token, head, verdict_state, verdict_detail
+            )
+        except Exception as exc:
+            print(f"PR #{number}: Knowledge Receipt status publish failed (non-fatal): {type(exc).__name__}: {exc}")
     return 0
+
+
+#: ADR 0039 L11 (Issue #527): a commit-status transport of the canonical receipt verdict already
+#: derived from the signed knowledge ledger. Never an independent proof authority.
+KNOWLEDGE_RECEIPT_CONTEXT: Final = "Hunter Knowledge Receipt"
+
+
+def _publish_knowledge_receipt_status(
+    collector: Any, repository: str, token: str, head_sha: str, state_value: str, description: str
+) -> None:
+    """Idempotent transport publish: an unchanged verdict at this exact head is never republished."""
+
+    combined = collector.governance.request_json(repository, token, "GET", f"commits/{head_sha}/status")
+    if not isinstance(combined, dict) or not isinstance(combined.get("statuses"), list):
+        raise ValueError("malformed combined commit status response")
+    description = description[:140]
+    previous = next(
+        (
+            entry
+            for entry in combined["statuses"]
+            if isinstance(entry, dict) and entry.get("context") == KNOWLEDGE_RECEIPT_CONTEXT
+        ),
+        None,
+    )
+    if previous is not None and previous.get("state") == state_value and previous.get("description") == description:
+        return
+    collector.governance.request_json(
+        repository,
+        token,
+        "POST",
+        f"statuses/{head_sha}",
+        {"state": state_value, "context": KNOWLEDGE_RECEIPT_CONTEXT, "description": description},
+    )
 
 
 #: ADR 0039 L2 (owner decision D3, Issue #705, 2026-11-09/11): the one owner-approved positive-outcome
