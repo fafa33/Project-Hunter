@@ -170,6 +170,23 @@ jobs:
             fi
             echo "Provisioned github.com host key(s) from GitHub's own published Meta API."
           fi
+          # Issue #551 recurrence: even after the provisioning above reports github.com present,
+          # 12 real runs on this fleet's fallback runner account still failed the next step's git
+          # fetch with "Host key verification failed" -- diagnosed live, not assumed, that the keys
+          # written are byte-identical to a real working known_hosts (compared directly against
+          # GitHub's Meta API), so this is not a data bug. Without filesystem access to that account
+          # to find the exact mismatch, stop depending on ssh's own default, ambient resolution of
+          # which known_hosts file applies to this invocation -- whatever that resolves to on a given
+          # runner account/HOME combination -- and instead bind the fetch/push in the next step to
+          # the exact file this step just verified, explicitly, on the repository checkout both steps
+          # share. This also removes any dependency on a stale core.sshCommand left by some earlier,
+          # unrelated job on this long-lived self-hosted checkout (actions/checkout's own cleanup
+          # only clears this after the job, never proved it was the cause here, but closing it off
+          # costs nothing and cannot regress the already-working primary-runner path).
+          echo "::notice::SSH diagnostic -- whoami=$(whoami) HOME=$HOME"
+          echo "::notice::SSH diagnostic -- ssh -G resolution: $(ssh -G github.com 2>&1 | grep -iE '^user |^hostname |^userknownhostsfile|^stricthostkeychecking' | tr '\n' ';')"
+          echo "::notice::SSH diagnostic -- existing core.sshCommand (local/global): $(git config --get core.sshCommand || echo '<unset>')/$(git config --global --get core.sshCommand || echo '<unset>')"
+          git config core.sshCommand "ssh -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
       - name: Propose canonical knowledge when replayable evidence exists
         if: steps.engine.outputs.available == 'true'
         env:
