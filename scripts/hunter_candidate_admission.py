@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from typing import Any
 
@@ -62,35 +61,6 @@ def mark_ready(token: str, node_id: str) -> bool:
     except Exception as exc:
         print(f"Ready transition failed closed: {exc}")
         return False
-
-
-def request_external_code_review(token: str, repository: str, pr_number: int) -> bool:
-    """Best-effort: ask the installed external reviewer app to review this exact head.
-
-    The external reviewer app (chatgpt-codex-connector) reacts to a human-sent
-    `ready_for_review` webhook, but never did so for one this App's own token sent
-    (verified: zero reviews across every PR this automated Ready mutation has
-    performed since PR #704 gave it write access, versus a review on every PR a
-    human marked ready before that). The app's own documentation names a comment
-    containing "@codex review" as an independent trigger that does not depend on
-    who performed the preceding transition, so issuing it here from the one path
-    that already succeeds (human-driven Ready) restores dispatch without touching
-    this App's mutation at all, or anything the owner's own manual transitions do.
-    """
-    try:
-        transport.request_rest_json(
-            url=f"https://api.github.com/repos/{repository}/issues/{pr_number}/comments",
-            method="POST",
-            headers={},
-            data=json.dumps({"body": "@codex review"}).encode("utf-8"),
-            token=token,
-            what="request external code review after automatic Ready transition",
-            policy=transport.RetryPolicy(attempts=1),
-        )
-    except Exception as exc:
-        print(f"Warning: external review request comment failed ({exc}); Ready transition still stands.")
-        return False
-    return True
 
 
 def safe_draft(pr: dict, repository: str) -> bool:
@@ -214,8 +184,6 @@ def enforce_candidate_admission(
             return 1
         if not mutation_confirmed:
             print(f"PR #{pr_number} Ready mutation response ambiguous; GitHub state confirms Ready")
-        if request_external_code_review(mutation_token, repository, pr_number):
-            print(f"PR #{pr_number} requested external code review for {head_sha}")
         print(f"PR #{pr_number} automatically Ready on {head_sha}")
         return 0
     if admission_state == "success":
