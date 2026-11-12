@@ -350,6 +350,14 @@ status. It adds no new ledger, authority, workflow, or privileged execution path
   never a silently satisfied obligation. This is how DPM/SPM's existing `overlay_families` (already including
   every open finding, unchanged) and this merge-blocking check compose without a parallel knowledge or review
   system (AC5/AC6/AC10): one signed ledger, one existing writer role, one existing consumer.
+- **Receipt family link feeds classification too (Issue #586 requirement 3).** A family an owner names only in
+  the disposition reply -- not in the original finding comment, the realistic case since the reviewing bot
+  rarely knows the family -- was invisible to `finding_classified`/DPM-overlay family enrichment entirely:
+  `ingestion_writes` only ever reads a tag from the *original* comment. `receipt_writes` now mints the same
+  `finding_classified` record that path already would whenever its own `matched-family` outcome applies, so
+  the match reaches DPM/SPM the same way either source names it. Skipped whenever a deterministic
+  classification already exists or the original message already carries its own tag -- first classification
+  always wins, and no two writes can ever conflict under the same `(finding_id, basis)` key.
 
 ## Consequences
 

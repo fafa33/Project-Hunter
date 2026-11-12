@@ -820,6 +820,35 @@ def receipt_writes(
                 },
             )
         )
+        # Issue #586 (requirement 3: "feed prevention into canonical DPM/SPM agent context"):
+        # a family link an owner names only in the disposition reply -- the realistic case, since
+        # the reviewer bot's own comment rarely knows the family -- was previously invisible to
+        # classification/DPM-overlay family enrichment entirely; ingestion_writes only ever reads
+        # a tag from the *original* finding comment. Mint the same finding_classified record the
+        # tag-in-message path already would, so the matched family reaches DPM/SPM the same way.
+        # Skipped whenever a deterministic classification already exists (first write wins, exactly
+        # like ingestion_writes's own rule) or the original comment already carries its own tag
+        # (ingestion_writes already owns that case) -- never two competing classifications.
+        if (
+            outcome == "matched-family"
+            and family_id is not None
+            and (existing is None or existing.classifications.get("deterministic") is None)
+            and family_tag(str(observation.get("message", ""))) is None
+        ):
+            writes.append(
+                Write(
+                    "finding_classified",
+                    {
+                        "finding_id": identity,
+                        "outcome": "matched",
+                        "family_id": family_id,
+                        "candidate_id": None,
+                        "basis": "deterministic",
+                        "regression_tests": [],
+                        "authorization_id": None,
+                    },
+                )
+            )
     return writes, refusals
 
 
