@@ -218,9 +218,15 @@ class _FakeCollector:
 def test_knowledge_receipt_status_publish_is_idempotent_when_unchanged() -> None:
     """ADR 0039 L11: an unchanged verdict at this exact head is never republished."""
     calls: list[tuple[str, str, dict | None]] = []
-    combined = {"statuses": [{"context": lifecycle.KNOWLEDGE_RECEIPT_CONTEXT, "state": "success", "description": "ok"}]}
+    combined = {
+        "statuses": [
+            {"context": f"{lifecycle.KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}737", "state": "success", "description": "ok"}
+        ]
+    }
     collector = _FakeCollector(combined, calls)
-    lifecycle._publish_knowledge_receipt_status(collector, "fafa33/Project-Hunter", "token", "a" * 40, "success", "ok")
+    lifecycle._publish_knowledge_receipt_status(
+        collector, "fafa33/Project-Hunter", "token", "a" * 40, 737, "success", "ok"
+    )
     assert calls == [("GET", "commits/" + "a" * 40 + "/status", None)]
 
 
@@ -229,7 +235,7 @@ def test_knowledge_receipt_status_publish_posts_on_a_changed_verdict() -> None:
     combined = {"statuses": []}
     collector = _FakeCollector(combined, calls)
     lifecycle._publish_knowledge_receipt_status(
-        collector, "fafa33/Project-Hunter", "token", "a" * 40, "failure", "1 missing"
+        collector, "fafa33/Project-Hunter", "token", "a" * 40, 737, "failure", "1 missing"
     )
     assert len(calls) == 2
     method, path, payload = calls[1]
@@ -237,7 +243,7 @@ def test_knowledge_receipt_status_publish_posts_on_a_changed_verdict() -> None:
     assert path == "statuses/" + "a" * 40
     assert payload == {
         "state": "failure",
-        "context": lifecycle.KNOWLEDGE_RECEIPT_CONTEXT,
+        "context": f"{lifecycle.KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}737",
         "description": "1 missing",
     }
 
@@ -246,8 +252,30 @@ def test_knowledge_receipt_status_publish_truncates_to_the_github_description_li
     calls: list[tuple[str, str, dict | None]] = []
     collector = _FakeCollector({"statuses": []}, calls)
     lifecycle._publish_knowledge_receipt_status(
-        collector, "fafa33/Project-Hunter", "token", "a" * 40, "failure", "x" * 200
+        collector, "fafa33/Project-Hunter", "token", "a" * 40, 737, "failure", "x" * 200
     )
     _method, _path, payload = calls[1]
     assert payload is not None
     assert len(payload["description"]) == 140
+
+
+def test_knowledge_receipt_status_publish_is_bound_to_pr_identity_not_only_the_head() -> None:
+    """Copilot F4 (PR #737): two PRs sharing one head SHA must never read or overwrite each
+
+    other's verdict. An existing status for a *different* PR's context at the same SHA must
+    never be treated as "unchanged" for this PR, and must never be overwritten by this publish.
+    """
+    calls: list[tuple[str, str, dict | None]] = []
+    combined = {
+        "statuses": [
+            {"context": f"{lifecycle.KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}100", "state": "success", "description": "ok"}
+        ]
+    }
+    collector = _FakeCollector(combined, calls)
+    lifecycle._publish_knowledge_receipt_status(
+        collector, "fafa33/Project-Hunter", "token", "a" * 40, 200, "failure", "1 missing"
+    )
+    assert len(calls) == 2  # PR #200's context was absent, so this is a real post, not a skip
+    _method, _path, payload = calls[1]
+    assert payload is not None
+    assert payload["context"] == f"{lifecycle.KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}200"

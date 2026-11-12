@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from functools import cached_property
 from pathlib import Path
 from typing import Any, Protocol
@@ -27,8 +28,16 @@ GOVERNANCE_RECONCILE_WORKFLOW = "Hunter Governance Review Reconcile"
 #: ADR 0039 L11 (Issue #527): a commit-status transport of the fast-path Knowledge Receipt verdict
 #: the trusted "Hunter / Issue Agent Knowledge" workflow derives from the signed knowledge ledger.
 #: This controller only ever reads it at the exact head under evaluation; it is never an
-#: independent proof authority and never reads the ledger itself.
-KNOWLEDGE_RECEIPT_CONTEXT = "Hunter Knowledge Receipt"
+#: independent proof authority and never reads the ledger itself. The context is PR-scoped (Copilot
+#: F4, PR #737): a bare SHA-scoped context has no PR dimension, so two open PRs sharing one head
+#: could otherwise read or overwrite each other's verdict.
+KNOWLEDGE_RECEIPT_CONTEXT_PREFIX = "Hunter Knowledge Receipt / PR #"
+#: The only identity this controller trusts to have published a Knowledge Receipt status (Copilot
+#: F5): the same convention hunter_review_orchestrator.py's own trusted-status consumers use.
+KNOWLEDGE_RECEIPT_TRUSTED_CREATOR = "github-actions[bot]"
+#: Comfortably wider than the producer's own ~30-minute scheduled cadence (Copilot F1/F3): bounds,
+#: without eliminating, how long a cached verdict may be trusted before a fresher one is required.
+KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS = 45 * 60
 REQUIRED_CHECKS = ("Quality Gates", "dependency-review", "CodeQL")
 HARD_FAILURES = {"failure", "timed_out", "action_required", "startup_failure"}
 
@@ -228,23 +237,70 @@ def latest_status(sha: str, context: str) -> dict[str, Any] | None:
     return max(matches, key=lambda status: int(status.get("id") or 0))
 
 
-def knowledge_receipt_state(head_sha: str) -> tuple[str, str]:
-    """ADR 0039 L11 (Issue #527): the fast-path Knowledge Receipt obligation, read at the exact head.
+def _status_age_seconds(status: dict[str, Any]) -> float | None:
+    """Seconds since a commit status's ``created_at``, or ``None`` when it cannot be parsed.
 
-    A pure consumer of the "Hunter Knowledge Receipt" commit status (``latest_status`` already
-    verifies the exact head and the trusted context, picking the most recent entry): this never
-    reads the signed knowledge ledger itself and never derives its own verdict. Absent evidence --
-    no status yet, or a failed read -- is ``pending``, never treated as a satisfied obligation; a
-    legacy PR or one with no verified applicable obligation is ``success`` only because the trusted
-    producer itself published that verdict, not because this reader assumed it.
+    An unparseable timestamp is never treated as fresh -- the caller's own ``is None`` check
+    routes it to the same stale/pending outcome as a too-old one.
     """
 
+    raw = status.get("created_at")
+    if not isinstance(raw, str):
+        return None
     try:
-        status = latest_status(head_sha, KNOWLEDGE_RECEIPT_CONTEXT)
-    except Exception as exc:
-        return "pending", f"Knowledge Receipt evidence unavailable: {type(exc).__name__}: {exc}"
-    if status is None:
-        return "pending", "Waiting for the Knowledge Receipt verdict at this head"
+        created_at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (datetime.now(UTC) - created_at).total_seconds()
+
+
+def knowledge_receipt_verdict_from_statuses(statuses: list[Any], pr_number: int) -> tuple[str, str]:
+    """ADR 0039 L11 (Issue #527): the fast-path Knowledge Receipt obligation, from an already-fetched
+
+    commit-status list (the status *list* endpoint, never the combined one, which reports
+    ``creator: null`` for every status including trusted workflow posts). Pure and network-free, so
+    a caller that already fetched this PR's statuses for another reason (``hunter_candidate_admission
+    .ready_checks``) reuses them instead of a duplicate request -- and this is never an independent
+    proof authority, only a reader of a verdict the trusted producer already derived. Four hardening
+    properties close the gaps an independent review found in the first version (Copilot, PR #737):
+
+    - **PR-bound context (F4).** The context embeds ``pr_number``, so two open PRs that happen to
+      share one head SHA can never read or overwrite each other's verdict -- unlike a single
+      SHA-scoped context, which the commit-status API has no PR dimension for at all.
+    - **Authenticated publisher (F5).** Requires an exact creator match against
+      ``KNOWLEDGE_RECEIPT_TRUSTED_CREATOR`` -- the same pattern ``hunter_review_orchestrator.py``'s
+      ``_parse_cycle``/``read_collector_completion`` already use for their own trusted statuses. Any
+      other actor's status is invisible here, never merely distrusted.
+    - **Bounded freshness (F1/F3).** GitHub Actions has no "review thread resolved" trigger, so the
+      producer's own scheduled cadence (``hunter-issue-agent-knowledge.yml``, a ~30-minute cron) is
+      the only thing that can ever notice a thread resolving into a new obligation, or recover from
+      a transient status-publish failure. Relying on that cadence *indefinitely* would let an old
+      ``success`` posted before an obligation existed outlive its truth. A status older than
+      ``KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS`` (comfortably wider than that cadence) is downgraded to
+      ``pending`` rather than trusted forever -- bounding, not eliminating, the reliance on
+      catch-up, and never fabricating a ``failure`` verdict for a stale status either.
+    - **Fail-closed absence (F6).** No status, an unauthenticated one, or a read failure is
+      ``pending`` -- never treated as a satisfied (``success``) obligation.
+    """
+
+    context = f"{KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}{pr_number}"
+    matches = [
+        status
+        for status in statuses
+        if isinstance(status, dict)
+        and status.get("context") == context
+        and str((status.get("creator") or {}).get("login") or "") == KNOWLEDGE_RECEIPT_TRUSTED_CREATOR
+    ]
+    if not matches:
+        return "pending", f"Waiting for an authenticated Knowledge Receipt verdict for PR #{pr_number}"
+    status = max(matches, key=lambda entry: int(entry.get("id") or 0))
+    age_seconds = _status_age_seconds(status)
+    if age_seconds is None or age_seconds > KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS:
+        return (
+            "pending",
+            f"Knowledge Receipt verdict for PR #{pr_number} is stale (age "
+            f"{'unknown' if age_seconds is None else f'{int(age_seconds)}s'}); waiting for a fresher one",
+        )
     github_state = str(status.get("state") or "")
     description = str(status.get("description") or "")
     if github_state == "success":
@@ -252,6 +308,16 @@ def knowledge_receipt_state(head_sha: str) -> tuple[str, str]:
     if github_state in {"failure", "error"}:
         return "failure", description or "Knowledge Receipt obligation not satisfied"
     return "pending", description or "Knowledge Receipt verdict pending"
+
+
+def knowledge_receipt_state(head_sha: str, pr_number: int) -> tuple[str, str]:
+    """I/O wrapper: fetch this exact head's commit statuses and derive the Knowledge Receipt verdict."""
+
+    try:
+        statuses = paged(f"commits/{head_sha}/statuses")
+    except Exception as exc:
+        return "pending", f"Knowledge Receipt evidence unavailable: {type(exc).__name__}: {exc}"
+    return knowledge_receipt_verdict_from_statuses(statuses, pr_number)
 
 
 _REVIEW_THREADS_QUERY = """
@@ -465,7 +531,11 @@ class StaticReadinessObservation:
     mergeable: bool | None = True
     unresolved_review_threads: tuple[str, ...] = ()
     changes_requested: tuple[str, ...] = ()
-    knowledge_receipt: tuple[str, str] = ("success", "")
+    # Deliberately not "success" (Copilot F6, PR #737): a caller that omits this field must never
+    # silently admit a head with no Knowledge Receipt evidence at all. Every production caller
+    # supplies it explicitly via knowledge_receipt_state(); legacy/no-obligation PRs still read as
+    # success, but only because that trusted function itself says so, never because of this default.
+    knowledge_receipt: tuple[str, str] = ("pending", "no Knowledge Receipt evidence supplied")
     review_authority: tuple[str, str] = ("success", "")
     candidate_admission: tuple[str, str] = ("success", "")
     issue_acceptance: tuple[str, str] = ("success", "")
@@ -500,7 +570,7 @@ class LiveReadinessObservation:
 
     @cached_property
     def knowledge_receipt(self) -> tuple[str, str]:
-        return knowledge_receipt_state(self._head_sha)
+        return knowledge_receipt_state(self._head_sha, self._pr_number)
 
     @cached_property
     def review_authority(self) -> tuple[str, str]:

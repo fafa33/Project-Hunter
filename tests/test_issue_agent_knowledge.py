@@ -996,6 +996,62 @@ def test_the_verdict_counts_every_missing_obligation_among_several(store: state.
     assert "1 of 2" in detail
 
 
+def test_receipt_writes_refuses_an_abbreviated_sha_instead_of_building_an_invalid_write(
+    store: state.GitLedgerStore,
+) -> None:
+    """Copilot F7 (PR #737): even if a caller's eligibility gate is wrong or absent,
+
+    receipt_writes must never build a Write that append() would then reject, aborting the rest of
+    this batch's otherwise-valid ingestion -- it must refuse the one bad observation and continue.
+    """
+    bad = receipt_observation(11, receipt_fix_reference="1" * 7)
+    good = receipt_observation(12)
+    _, view = knowledge.read(store, trust=TRUST, provenance=trusted)
+    writes, refusals = knowledge.receipt_writes(
+        view, [bad, good], repository_id=1, trusted_reviewers=REVIEWERS, applicability=applicability
+    )
+    assert [write.kind for write in writes] == ["knowledge_receipt"]
+    assert writes[0].evidence["finding_id"] == knowledge.finding_id(1, 561, 12)
+    assert len(refusals) == 1 and "schema" in refusals[0] and "correction_commit" in refusals[0]
+
+
+def test_receipt_writes_refuses_a_short_invariant_instead_of_building_an_invalid_write(
+    store: state.GitLedgerStore,
+) -> None:
+    bad = receipt_observation(11, receipt_invariant="too short")
+    _, view = knowledge.read(store, trust=TRUST, provenance=trusted)
+    writes, refusals = knowledge.receipt_writes(
+        view, [bad], repository_id=1, trusted_reviewers=REVIEWERS, applicability=applicability
+    )
+    assert writes == []
+    assert len(refusals) == 1 and "invariant" in refusals[0]
+
+
+def test_an_obligation_refused_by_finding_identity_is_never_treated_as_no_obligation(
+    store: state.GitLedgerStore,
+) -> None:
+    """Copilot F8 (PR #737): a confirmed, resolved finding whose path/provenance is malformed is
+
+    refused by finding_from_observation -- but that must count as a permanently unsatisfiable
+    obligation, never silently drop out of the obligation set and let the verdict read as success.
+    """
+    malformed = resolved_confirmed_observation(path=None)  # finding_from_observation requires a path
+    view, _, _ = ingest_with_receipt(store, resolved_confirmed_observation(13))  # an unrelated satisfied one
+    verdict_state, detail = knowledge.receipt_verdict(view, [malformed], repository_id=1, trusted_reviewers=REVIEWERS)
+    assert verdict_state == "failure"
+    assert "malformed evidence" in detail
+
+
+def test_an_obligation_refused_alongside_a_satisfied_one_still_fails_closed(store: state.GitLedgerStore) -> None:
+    satisfied = resolved_confirmed_observation(11)
+    malformed = resolved_confirmed_observation(12, path=None)
+    view, _, _ = ingest_with_receipt(store, satisfied)
+    verdict_state, _detail = knowledge.receipt_verdict(
+        view, [satisfied, malformed], repository_id=1, trusted_reviewers=REVIEWERS
+    )
+    assert verdict_state == "failure"  # the one satisfied obligation cannot offset the refused one
+
+
 def test_a_knowledge_receipt_does_not_alter_the_dpm_overlay(store: state.GitLedgerStore) -> None:
     """The receipt is finding-lifecycle evidence, not prevention knowledge; the DPM overlay is unaffected by it."""
     view, _, _ = ingest(store, observation())

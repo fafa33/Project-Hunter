@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 WORKFLOW_PATH = Path(".github/workflows/hunter-knowledge-learning.yml")
 COLLECTOR = Path("scripts/hunter_collect_learning_observations.py").read_text()
 
@@ -472,6 +474,65 @@ def test_a_confirmed_disposition_without_a_correction_commit_is_not_receipt_elig
     finding = result[0]
     assert finding["obligation"] is True  # the owner confirmed it; the thread is resolved
     assert finding["receipt_eligible"] is False  # but no correction commit exists to mint a receipt from
+
+
+def _confirmed_disposition_observation(fix: str, monkeypatch, resolved: bool = True):
+    import sys
+
+    sys.path.insert(0, str(Path("scripts").resolve()))
+    import hunter_collect_learning_observations as collector
+
+    head, base = "a" * 40, "b" * 40
+    test_ref = "tests/test_hunter_knowledge_learning_workflow.py::test_collector_does_not_invent_defect_classification"
+    comments = [
+        {
+            "id": 81,
+            "commit_id": "c" * 40,
+            "user": {"login": "chatgpt-codex-connector[bot]"},
+            "path": "scripts/x.py",
+            "line": 8,
+            "body": "real defect",
+        },
+        {
+            "id": 82,
+            "in_reply_to_id": 81,
+            "user": {"login": "fafa33"},
+            "body": f"confirmed and fixed {fix}: canonical invariant [family:DFF-008] [test:{test_ref}]",
+        },
+    ]
+    monkeypatch.setattr(collector, "_trusted_reviewer_logins", lambda: frozenset({"chatgpt-codex-connector"}))
+    monkeypatch.setattr(collector, "_review_threads", lambda *_args: {81: resolved})
+    monkeypatch.setattr(
+        collector.governance, "request_json", lambda _r, _t, _m, path: comments if "/comments?" in path else []
+    )
+    result = collector.collect("fafa33/Project-Hunter", "token", 530, head, base)
+    return result[0]
+
+
+@pytest.mark.parametrize("length", [7, 10, 39])
+def test_an_abbreviated_correction_sha_is_not_receipt_eligible(monkeypatch, length):
+    """Copilot F2 (PR #737): split_owner_disposition accepts a 7-39 character abbreviated SHA, but
+    the knowledge_receipt schema requires a full SHA40 -- the collector must not mark an abbreviated
+    reference as receipt-eligible, since receipt_writes would otherwise build a schema-invalid write."""
+    finding = _confirmed_disposition_observation("1" * length, monkeypatch)
+    assert finding["obligation"] is True  # thread resolved, owner confirmed: the obligation still exists
+    assert finding["receipt_eligible"] is False  # but the abbreviated SHA can never mint a valid receipt
+
+
+def test_a_full_sha40_correction_commit_is_receipt_eligible(monkeypatch):
+    finding = _confirmed_disposition_observation("1" * 40, monkeypatch)
+    assert finding["obligation"] is True
+    assert finding["receipt_eligible"] is True
+    assert finding["receipt_fix_reference"] == "1" * 40
+
+
+def test_a_41_character_correction_commit_is_not_receipt_eligible(monkeypatch):
+    """The historical-evidence SHA extractor's word-boundary match caps at 40, but assert the
+    boundary explicitly: anything that is not exactly 40 lowercase hex characters is rejected."""
+    finding = _confirmed_disposition_observation("1" * 41, monkeypatch)
+    # A 41-character run of hex digits is not itself a valid SHA reference the extractor treats
+    # as one; either way it must never become receipt-eligible with an invalid correction commit.
+    assert finding["receipt_eligible"] is False
 
 
 def test_collector_preserves_deleted_review_comment_from_event_payload(tmp_path, monkeypatch):

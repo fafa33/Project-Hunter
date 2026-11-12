@@ -44,6 +44,7 @@ def _observation(**overrides: object) -> PullRequestObservation:
         "check_runs": _green_checks(),
         "governance_status": {"id": 99, "state": "success"},
         "shared_open_prs": (),
+        "knowledge_receipt": ("success", ""),
     }
     base.update(overrides)
     return PullRequestObservation(**base)  # type: ignore[arg-type]

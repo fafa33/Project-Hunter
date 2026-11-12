@@ -612,6 +612,7 @@ def test_merge_ready_success_describes_deterministic_authority() -> None:
                 {"id": i, "name": name, "status": "completed", "conclusion": "success"}
                 for i, name in enumerate(readiness.REQUIRED_CHECKS, start=1)
             ),
+            knowledge_receipt=("success", ""),
         )
     )
     assert decision.state == "success"
@@ -1139,6 +1140,7 @@ def test_pr469_zero_reviews_all_checks_green_does_not_require_terminal_review_op
             {"id": n, "name": name, "status": "completed", "conclusion": "success"}
             for n, name in enumerate(readiness.REQUIRED_CHECKS, 1)
         ),
+        knowledge_receipt=("success", ""),
     )
     assert readiness.evaluate(observation).state == "success"
 
@@ -2128,6 +2130,7 @@ def test_merge_readiness_waits_while_bounded_review_opportunity_is_live() -> Non
             {"name": "dependency-review", "status": "completed", "conclusion": "success"},
             {"name": "CodeQL", "status": "completed", "conclusion": "success"},
         ),
+        knowledge_receipt=("success", ""),
     )
     assert readiness.evaluate(observation).state == "success"
 
@@ -2141,6 +2144,7 @@ def test_merge_readiness_external_reviewer_unavailability_does_not_block_verifie
             {"name": "dependency-review", "status": "completed", "conclusion": "success"},
             {"name": "CodeQL", "status": "completed", "conclusion": "success"},
         ),
+        knowledge_receipt=("success", ""),
     )
     assert readiness.evaluate(observation).state == "success"
 

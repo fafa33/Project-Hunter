@@ -804,6 +804,7 @@ def test_waiting_still_satisfies_neither_admission_nor_merge_readiness(monkeypat
             ),
             governance_status={"id": 9, "state": state},
             candidate_admission=(state, "trusted exact-head preflight is still running"),
+            knowledge_receipt=("success", ""),
         )
     )
 

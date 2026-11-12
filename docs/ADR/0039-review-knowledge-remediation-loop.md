@@ -410,3 +410,29 @@ pending-adjudication and legacy-no-obligation pass-through, and exact-head/trust
 140-character GitHub description bound). Ruff, Black and mypy (full configured file list, 1033 source files)
 all green. This is local, focused evidence; the hosted exact-head `Hunter / Pre-PR Preflight` run remains the
 authoritative full-repository proof, and merge readiness continues to require it.
+
+**Hardening round (Copilot review, PR #737, 2026-11-12).** Eight High findings against the first version,
+all closed on the same branch:
+
+- `receipt_schema_problems`, the single source of truth for `knowledge_receipt` schema conformance, reused
+  by both the collector's eligibility gate and `receipt_writes`'s own last-line-of-defense check -- an
+  abbreviated SHA or a too-short invariant is refused, never silently receipt-eligible and never able to
+  abort an otherwise-valid batch.
+- `receipt_obligations` returns an unresolvable count separately from its finding-id list, so a
+  confirmed-and-resolved finding `finding_from_observation` refuses (malformed path/provenance) fails the
+  verdict closed instead of silently reading as "no obligation."
+- The transport status is PR-scoped (`Hunter Knowledge Receipt / PR #<N>`, never a bare SHA-scoped context),
+  authenticated (`creator.login == "github-actions[bot]"`, the same pattern `hunter_review_orchestrator.py`
+  already uses for its own trusted statuses), and freshness-bounded (`KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS`,
+  comfortably wider than the producer's own ~30-minute cadence -- GitHub Actions has no "thread resolved"
+  trigger, so this bounds, without eliminating, how long a cached verdict may be trusted before a fresher
+  one is required; staleness degrades to `pending` in either direction, never upgraded to a fabricated
+  `failure` either).
+- `StaticReadinessObservation.knowledge_receipt` no longer defaults to `success`; every production
+  constructor (`hunter_candidate_admission.ready_checks`, `hunter_workflow_state.observe_pull_request`,
+  `hunter_governance_shadow.project`) supplies it explicitly, reusing an already-fetched statuses list where
+  one exists rather than a duplicate network call.
+
+Verification: 860 passed across the fourteen affected test files (ledger, collector, merge-readiness,
+candidate-admission, workflow-state, governance-shadow, and the review-orchestrator guard this PR's own
+`statuses: write` grant exercised). Ruff, Black and mypy green again on the full configured file list.

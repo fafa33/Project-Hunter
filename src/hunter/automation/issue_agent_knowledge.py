@@ -334,6 +334,44 @@ def candidate_id(invariant: str, changed_paths: Sequence[str]) -> str:
     return sha256_hex(canonical_json({"invariant": invariant, "changed_paths": sorted(changed_paths)}))
 
 
+def receipt_schema_problems(
+    *,
+    correction_commit: str,
+    invariant: str,
+    affected_path: str,
+    regression_evidence: Sequence[str],
+) -> list[str]:
+    """The single source of truth for ``knowledge_receipt`` field conformance (ADR 0039 L11, Issue #527).
+
+    Reused both by the collector, to decide fast-path receipt eligibility *before* any abbreviated or
+    malformed owner-disposition evidence is treated as satisfying the obligation, and by
+    ``receipt_writes``, as its own last line of defense so a write it builds can never reach
+    ``append()`` already known to be schema-invalid and abort an otherwise-valid batch. An empty
+    result means every field already satisfies the exact pattern ``EVIDENCE_SCHEMAS["knowledge_receipt"]``
+    enforces at append time -- never a looser or stricter check than the schema itself.
+    """
+
+    problems: list[str] = []
+    for value, validator, name in (
+        (correction_commit, SHA40, "correction_commit"),
+        (invariant, _pattern(_TEXT), "invariant"),
+        (affected_path, _pattern(_PATH), "affected_path"),
+    ):
+        try:
+            validator(value, name)
+        except LedgerSchemaError:
+            problems.append(name)
+    evidence_validator = _list(_pattern(_TEST_ID), maximum=32)
+    if not regression_evidence:
+        problems.append("regression_evidence")
+    else:
+        try:
+            evidence_validator(list(regression_evidence), "regression_evidence")
+        except LedgerSchemaError:
+            problems.append("regression_evidence")
+    return problems
+
+
 # --- the verified view -----------------------------------------------------------------------------------
 
 
@@ -740,6 +778,22 @@ def receipt_writes(
         existing = view.findings.get(identity)
         if (existing is not None and existing.receipt is not None) or identity in queued:
             continue  # insert-only: a finding receives at most one receipt (idempotent fast path)
+        # Last line of defense (ADR 0039 L11, Issue #527): re-validate against the exact schema a
+        # write must satisfy before building one. The collector's own eligibility gate already
+        # applies this same check, so this is normally a no-op; it exists so a malformed-but-marked-
+        # eligible observation from any caller can never reach append() already known to be
+        # schema-invalid and abort the rest of this batch's otherwise-valid ingestion.
+        schema_problems = receipt_schema_problems(
+            correction_commit=str(observation["receipt_fix_reference"]),
+            invariant=str(observation["receipt_invariant"]),
+            affected_path=str(observation["receipt_affected_path"]),
+            regression_evidence=[str(item) for item in observation["receipt_regression_evidence"]],
+        )
+        if schema_problems:
+            refusals.append(
+                f"{observation.get('event_id')}: receipt evidence fails schema: {', '.join(schema_problems)}"
+            )
+            continue
         queued.add(identity)
         family = observation.get("receipt_family_id")
         applies = applicability(family, evidence["provenance"]["path"]) if family else None
@@ -774,15 +828,23 @@ def receipt_obligations(
     *,
     repository_id: int,
     trusted_reviewers: frozenset[str],
-) -> list[str]:
+) -> tuple[list[str], int]:
     """The finding ids that entered the receipt-required lifecycle (ADR 0039 L11, Issue #527).
 
     A resolved thread plus a confirmed owner disposition creates the obligation, independent of
     whether a receipt yet exists for it -- this is the fact a Knowledge Receipt status verdict is
     computed from, never an independent judgment of its own.
+
+    Returns ``(resolvable finding ids, unresolvable count)``. An observation the collector already
+    marked as an obligation can still be refused by ``finding_from_observation`` (malformed path or
+    provenance); that refusal must never be read as "no obligation here" -- a confirmed, resolved
+    finding whose identity cannot even be derived is, if anything, *more* suspect than one that
+    resolves cleanly, so it is counted separately and the caller must treat it as permanently
+    unsatisfiable, never as an absence.
     """
 
     identities: list[str] = []
+    unresolvable = 0
     for observation in observations:
         if not observation.get("obligation"):
             continue
@@ -793,9 +855,10 @@ def receipt_obligations(
                 observation, repository_id=repository_id, trusted_reviewers=trusted_reviewers
             )
         except FindingRefused:
+            unresolvable += 1
             continue
         identities.append(evidence["finding_id"])
-    return identities
+    return identities, unresolvable
 
 
 def receipt_verdict(
@@ -813,8 +876,15 @@ def receipt_verdict(
     ``success`` by construction -- there is nothing to retroactively block.
     """
 
-    obligated = receipt_obligations(observations, repository_id=repository_id, trusted_reviewers=trusted_reviewers)
+    obligated, unresolvable = receipt_obligations(
+        observations, repository_id=repository_id, trusted_reviewers=trusted_reviewers
+    )
     missing = [fid for fid in obligated if (item := view.findings.get(fid)) is None or item.receipt is None]
+    if unresolvable:
+        return (
+            "failure",
+            f"{unresolvable} confirmed obligation(s) could not be identified from malformed evidence",
+        )
     if not missing:
         detail = (
             "no verified applicable receipt obligation" if not obligated else f"{len(obligated)} receipt(s) verified"
@@ -889,6 +959,7 @@ __all__ = [
     "overlay_families",
     "read",
     "receipt_obligations",
+    "receipt_schema_problems",
     "receipt_verdict",
     "receipt_writes",
     "record_key",

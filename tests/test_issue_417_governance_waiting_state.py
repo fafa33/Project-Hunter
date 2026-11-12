@@ -383,6 +383,7 @@ def _readiness_observation(governance: dict[str, Any] | None) -> readiness.Stati
             {"name": name, "status": "completed", "conclusion": "success"} for name in readiness.REQUIRED_CHECKS
         ),
         governance_status=governance,
+        knowledge_receipt=("success", ""),
     )
 
 

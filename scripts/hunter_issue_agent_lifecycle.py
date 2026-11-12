@@ -474,7 +474,7 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
         )
         try:
             _publish_knowledge_receipt_status(
-                collector, configuration.repository, token, head, verdict_state, verdict_detail
+                collector, configuration.repository, token, head, number, verdict_state, verdict_detail
             )
         except Exception as exc:
             print(f"PR #{number}: Knowledge Receipt status publish failed (non-fatal): {type(exc).__name__}: {exc}")
@@ -482,25 +482,36 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
 
 
 #: ADR 0039 L11 (Issue #527): a commit-status transport of the canonical receipt verdict already
-#: derived from the signed knowledge ledger. Never an independent proof authority.
-KNOWLEDGE_RECEIPT_CONTEXT: Final = "Hunter Knowledge Receipt"
+#: derived from the signed knowledge ledger. Never an independent proof authority. PR-scoped
+#: (Copilot F4, PR #737): a bare SHA-scoped context has no PR dimension, so two open PRs sharing one
+#: head could otherwise read or overwrite each other's verdict; must match
+#: hunter_merge_readiness_v2.KNOWLEDGE_RECEIPT_CONTEXT_PREFIX exactly.
+KNOWLEDGE_RECEIPT_CONTEXT_PREFIX: Final = "Hunter Knowledge Receipt / PR #"
 
 
 def _publish_knowledge_receipt_status(
-    collector: Any, repository: str, token: str, head_sha: str, state_value: str, description: str
+    collector: Any,
+    repository: str,
+    token: str,
+    head_sha: str,
+    pr_number: int,
+    state_value: str,
+    description: str,
 ) -> None:
-    """Idempotent transport publish: an unchanged verdict at this exact head is never republished."""
+    """Idempotent transport publish: an unchanged verdict at this exact head is never republished.
 
+    Published under ``GITHUB_TOKEN`` by the trusted ``hunter-issue-agent-knowledge.yml`` job, so
+    GitHub itself records the creator as ``github-actions[bot]`` -- the identity
+    ``hunter_merge_readiness_v2.KNOWLEDGE_RECEIPT_TRUSTED_CREATOR`` requires (Copilot F5, PR #737).
+    """
+
+    context = f"{KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}{pr_number}"
     combined = collector.governance.request_json(repository, token, "GET", f"commits/{head_sha}/status")
     if not isinstance(combined, dict) or not isinstance(combined.get("statuses"), list):
         raise ValueError("malformed combined commit status response")
     description = description[:140]
     previous = next(
-        (
-            entry
-            for entry in combined["statuses"]
-            if isinstance(entry, dict) and entry.get("context") == KNOWLEDGE_RECEIPT_CONTEXT
-        ),
+        (entry for entry in combined["statuses"] if isinstance(entry, dict) and entry.get("context") == context),
         None,
     )
     if previous is not None and previous.get("state") == state_value and previous.get("description") == description:
@@ -510,7 +521,7 @@ def _publish_knowledge_receipt_status(
         token,
         "POST",
         f"statuses/{head_sha}",
-        {"state": state_value, "context": KNOWLEDGE_RECEIPT_CONTEXT, "description": description},
+        {"state": state_value, "context": context, "description": description},
     )
 
 

@@ -10,6 +10,7 @@ from typing import Any
 
 import hunter_governance_review_v2 as governance
 
+from hunter.automation.issue_agent_knowledge import receipt_schema_problems
 from hunter.evidence_intelligence.historical_evidence_adjudication import split_owner_disposition
 
 
@@ -234,6 +235,17 @@ def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[
                 and disposition_tests
                 and disposition_invariant
                 and item.get("path")
+                # Receipt-eligible means the evidence actually satisfies the knowledge_receipt
+                # schema, not merely that every field is non-empty (Issue #527, Copilot F2/F7):
+                # split_owner_disposition accepts an abbreviated 7-39 character SHA, but the
+                # schema requires a full SHA40, and a short invariant/malformed test id would
+                # otherwise reach receipt_writes only to be rejected -- or worse, abort the batch.
+                and not receipt_schema_problems(
+                    correction_commit=disposition_fix,
+                    invariant=disposition_invariant,
+                    affected_path=str(item["path"]),
+                    regression_evidence=disposition_tests,
+                )
             ):
                 receipt_eligible = True
                 receipt_invariant = disposition_invariant
