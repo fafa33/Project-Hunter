@@ -872,6 +872,39 @@ def test_canonicalization_binds_the_push_to_the_exact_known_hosts_file_it_just_v
     assert not lines[binding_index].startswith(" "), "the binding must run unconditionally, not inside if/else"
 
 
+def test_canonicalization_binds_identity_files_under_home_without_removing_defaults() -> None:
+    """Regression: the same `~`-expansion defect also governs ssh's default `IdentityFile` lookup.
+
+    Real evidence (PRs #592, #553, #622, #693, #719, #722) showed that once the known_hosts binding
+    let the fallback-runner fetch past host-key verification, it failed closed one layer deeper with
+    `Permission denied (publickey)`. Confirmed directly: ssh's default `IdentityFile ~/.ssh/id_*`
+    entries are `~`-expanded through the same password-database home as `UserKnownHostsFile`, not
+    `$HOME` -- so a key provisioned at this job's `$HOME`-relative path (matching every other path
+    this job already uses) would be invisible to ssh's own default identity search for the identical
+    reason. This asserts the explicit, additive (never `IdentitiesOnly=yes`) binding is present, and
+    that the diagnostic listing of `$HOME/.ssh` never reads or prints file contents.
+    """
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    path = root / ".github" / "workflows" / "hunter-canonicalization-auto.yml"
+    workflow = yaml.safe_load(path.read_text())
+    steps = [step for job in workflow["jobs"].values() for step in job.get("steps", [])]
+    (provision,) = (s for s in steps if s.get("name") == "Provision GitHub SSH host key for canonicalization push")
+    script = provision["run"]
+
+    for name in ("id_ed25519", "id_rsa", "id_ecdsa"):
+        assert f"-o IdentityFile=$HOME/.ssh/{name}" in script
+
+    # Additive, not exclusive: never remove ssh's own other default identities (an agent, say).
+    assert "-o IdentitiesOnly" not in script
+
+    # The diagnostic lists the directory (filenames/permissions) -- it must never cat/read a file.
+    assert 'ls -la "$HOME/.ssh"' in script
+    for forbidden in ("cat ", "BEGIN", "PRIVATE KEY"):
+        assert forbidden not in script
+
+
 def test_governed_review_request_rejects_missing_issue_criteria(tmp_path: Path) -> None:
     """Never reuse inherited review claims when trusted Issue evidence is empty."""
 

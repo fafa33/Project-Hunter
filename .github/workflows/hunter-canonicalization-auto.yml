@@ -184,9 +184,24 @@ jobs:
           # only clears this after the job, never proved it was the cause here, but closing it off
           # costs nothing and cannot regress the already-working primary-runner path).
           echo "::notice::SSH diagnostic -- whoami=$(whoami) HOME=$HOME"
-          echo "::notice::SSH diagnostic -- ssh -G resolution: $(ssh -G github.com 2>&1 | grep -iE '^user |^hostname |^userknownhostsfile|^stricthostkeychecking' | tr '\n' ';')"
+          echo "::notice::SSH diagnostic -- ssh -G resolution: $(ssh -G github.com 2>&1 | grep -iE '^user |^hostname |^userknownhostsfile|^identityfile|^stricthostkeychecking' | tr '\n' ';')"
           echo "::notice::SSH diagnostic -- existing core.sshCommand (local/global): $(git config --get core.sshCommand || echo '<unset>')/$(git config --global --get core.sshCommand || echo '<unset>')"
-          git config core.sshCommand "ssh -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes"
+          # Issue #551 recurrence, same defect class, a second default ssh_config directive: once the
+          # known_hosts binding above let the fetch past host-key verification, real fallback-runner
+          # evidence (PRs #592, #553, #622, #693, #719, #722) showed it then fail "Permission denied
+          # (publickey)" -- ssh's *default* `IdentityFile ~/.ssh/id_*` entries are `~`-expanded exactly
+          # like `UserKnownHostsFile` above, through the same password-database home, not `$HOME`. Any
+          # identity provisioned at the `$HOME`-relative path this job otherwise uses throughout would
+          # be invisible to ssh's own default lookup for the identical reason. List (never read) what
+          # is actually present, safely -- filenames and permissions only, no key material -- and bind
+          # every conventional identity name explicitly under `$HOME` so a key placed there is found
+          # regardless of this account's password-database home. A name ssh does not find here is
+          # skipped with a warning, not a hard failure, so this is safe even if none of them exist.
+          echo "::notice::SSH diagnostic -- $HOME/.ssh listing: $(ls -la "$HOME/.ssh" 2>&1 | tr '\n' ';')"
+          # Deliberately not IdentitiesOnly=yes: these $HOME-relative paths are added to ssh's own
+          # default search, never substituted for it, so this cannot remove an identity that already
+          # worked (an agent-offered key, or any other default this account already relied on).
+          git config core.sshCommand "ssh -o UserKnownHostsFile=$HOME/.ssh/known_hosts -o StrictHostKeyChecking=yes -o IdentityFile=$HOME/.ssh/id_ed25519 -o IdentityFile=$HOME/.ssh/id_rsa -o IdentityFile=$HOME/.ssh/id_ecdsa"
       - name: Propose canonical knowledge when replayable evidence exists
         if: steps.engine.outputs.available == 'true'
         env:
