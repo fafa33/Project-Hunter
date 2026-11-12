@@ -2844,6 +2844,32 @@
       "sources": [
         "PR #622 Governance Reconcile run 39442251750 (2026-10-20); scripts/hunter_review_orchestrator.py review_request_state and ReviewRequestBlocked; Issue #588 related stale readiness/reconciliation history"
       ]
+    },
+    {
+      "id": "DFF-056",
+      "title": "self-hosted-canonicalization-runner-ambient-home-resolution-and-unauthenticated-ssh-fail-open",
+      "invariant": "A self-hosted job that executes across more than one macOS runner account must never assume a fixed interactive-account path, nor rely on a tool's own ambient, password-database-home-based resolution of a cache, known_hosts, or SSH identity file for an account whose exported $HOME may differ from its real account home. A missing, unreachable, or unauthenticated credential this job depends on must fail closed with a classifiable error, never a silent success or a false NO-OP.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-canonicalization-auto.yml",
+          "tests/test_hunter_canonicalization_candidate_pr.py"
+        ],
+        "rationale": "Any future change to this job's Python, Git, or SSH provisioning on the self-hosted fleet can reintroduce an ambient-path or ambient-credential assumption that one runner account happens to satisfy by coincidence and another does not."
+      },
+      "prevention": {
+        "mechanism": "Explicit, $HOME-relative RUNNER_TOOL_CACHE and PIP_CACHE_DIR for the Python tool-cache installer (distinct, portable paths, never /Users/runner); explicit UserKnownHostsFile and IdentityFile bindings passed to ssh directly instead of its own tilde-expanded, password-database-home defaults (confirmed live to diverge from an account's exported $HOME); StrictHostKeyChecking pinned to yes, never relaxed; the identity binding is additive, never IdentitiesOnly, so it cannot remove an identity that already worked. A missing SSH host key or absent identity file surfaces as a classifiable INFRA_PROVISIONING_FAILURE or an explicit git authentication error, never a silent success.",
+        "boundary": "hosted-gate"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_canonicalization_candidate_pr.py::test_canonicalization_python_setup_is_portable_across_runner_accounts",
+        "tests/test_hunter_canonicalization_candidate_pr.py::test_canonicalization_provisions_github_ssh_host_key_before_push",
+        "tests/test_hunter_canonicalization_candidate_pr.py::test_canonicalization_binds_the_push_to_the_exact_known_hosts_file_it_just_verified",
+        "tests/test_hunter_canonicalization_candidate_pr.py::test_canonicalization_binds_identity_files_under_home_without_removing_defaults"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #551: production evidence across PR #730 (Python hostedtoolcache mkdir: /Users/runner: Permission denied), PR #731 (SSH host-key verification failed on the fallback runner), PR #732 (known_hosts present yet still failed -- ssh's own tilde expansion resolves the account's password-database home, confirmed directly with dscl and ssh -G, not $HOME), and PR #733 (Permission denied (publickey) once host-key verification passed -- the identical defect in ssh's default IdentityFile resolution); verified live on both self-hosted runner accounts after the fix, including the first-ever successful fallback-runner canonicalization runs (workflow runs 43147963574, 43148140320, 43148287464)."
+      ]
     }
   ]
 }
