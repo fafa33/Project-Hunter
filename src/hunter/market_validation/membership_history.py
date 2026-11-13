@@ -81,8 +81,7 @@ class ImmutableMembershipHistory:
         self._clock = clock or (lambda: datetime.now(UTC))
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
-            conn.executescript(
-                """
+            conn.executescript("""
                 CREATE TABLE IF NOT EXISTS membership_history (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                     candidate_id TEXT NOT NULL,
@@ -104,8 +103,7 @@ class ImmutableMembershipHistory:
                     BEFORE UPDATE ON membership_history BEGIN SELECT RAISE(ABORT, 'immutable history'); END;
                 CREATE TRIGGER IF NOT EXISTS membership_history_no_delete
                     BEFORE DELETE ON membership_history BEGIN SELECT RAISE(ABORT, 'immutable history'); END;
-            """
-            )
+            """)
             # Fail closed if a pre-existing database shadows a protective trigger.
             expected = {
                 "membership_history_no_replace": """CREATE TRIGGER membership_history_no_replace
