@@ -85,7 +85,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11.13"
+          python-version: "3.11.18"
 
       - name: Provision and verify trusted network namespace
         run: |
@@ -212,7 +212,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11.13"
+          python-version: "3.11.18"
 
       - name: Download replay receipt
         uses: actions/download-artifact@v4

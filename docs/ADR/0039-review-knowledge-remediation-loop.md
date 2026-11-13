@@ -506,11 +506,25 @@ closed immediately rather than merely bounded by elapsed time:
   thread's `isResolved` transition and to threads appearing or disappearing, but not to a disposition reply
   added to a thread that was *already* resolved when this verdict was computed, since no further resolve
   action occurs to change the hashed fact; that ordering still falls back to the bare freshness bound alone,
-  unchanged from the prior round. A second, unavoidable TOCTOU window remains even when every fingerprint
-  matches: the live check and the human merge action it informs are two separate moments, so a thread can
-  still resolve in the interval between this read and the click -- now bounded to that human interval rather
-  than to the ~30-minute producer cadence, but never literally zero. Closing either residual gap fully would
-  need an event-driven "thread resolved" trigger feeding the producer, or re-deriving obligations inside the
+  unchanged from the prior round. A second TOCTOU window remains even when every fingerprint matches: the
+  live check and the human merge action it informs are two separate moments. Verified against live
+  infrastructure, not assumed: `hunter-merge-readiness.yml` reconciles every open PR on a `*/5 * * * *` cron
+  (plus PR lifecycle and upstream-workflow-completion events), and each reconciliation re-runs this exact
+  live fingerprint check, so the `Hunter Merge Readiness` status self-corrects to `pending` within at most
+  one 5-minute tick of a thread resolving -- not the knowledge-receipt producer's own ~30-minute cadence.
+  But the live `Protect main` branch-protection ruleset (id 20523851, checked 2026-11-13) requires only
+  `Quality Gates`, `dependency-review`, `CodeQL` and `Hunter Pre-PR Preflight` as GitHub-native required
+  status checks -- it does not include `Hunter Governance Review` or `Hunter Merge Readiness`. GitHub's own
+  `required_review_thread_resolution` rule blocks the merge button live, at click time, while any thread is
+  unresolved, but has no knowledge of the Knowledge Receipt obligation once a thread is already resolved.
+  So the 5-minute bound above holds on Hunter's own side, but nothing on GitHub's side mechanically forces a
+  human to wait for it before clicking Merge for these two specific contexts: enforcement is procedural today
+  (the owner observing the status, and Hunter's own Candidate Admission controller gating Draft-to-Ready on
+  it), not a platform-level block. Adding `Hunter Governance Review`/`Hunter Merge Readiness` to the
+  branch-protection ruleset's required contexts would close that specific gap; it is a distinct,
+  repository-wide branch-protection policy change, reported here for the owner to decide rather than applied
+  unilaterally by this fix. Closing the first residual gap (reply-after-resolve ordering) fully would need an
+  event-driven "thread resolved" trigger feeding the producer, or re-deriving obligations inside the
   readiness controller itself; both are out of this round's scope as a new workflow/authority this amendment
   does not introduce, per the owner-bounded remediation that produced this hardening.
 

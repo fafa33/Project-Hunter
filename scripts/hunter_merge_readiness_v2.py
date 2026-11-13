@@ -424,15 +424,28 @@ def knowledge_receipt_verdict_bound(statuses: list[Any], pr_number: int) -> tupl
     resolving, or any thread appearing or disappearing, but not a disposition *reply* added to a
     thread that was already resolved before this verdict was computed (no further resolve action
     occurs, so ``isResolved`` never changes). That ordering still falls back to the bare
-    ``KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS`` bound alone, exactly as before this hardening. A second,
-    unavoidable window remains even when every fingerprint matches: the live check above and the
-    human merge action it informs are two separate moments (TOCTOU), so a thread could resolve in
-    the interval between this read and the click -- now bounded to the time a human takes to act
-    on a decision, not to the ~30-minute producer cadence, but never literally zero. Closing either
-    gap fully would require an event-driven trigger (a "thread resolved" webhook feeding the
-    producer) or re-deriving obligations inside this controller -- both out of scope here: the
-    former is new infrastructure, the latter a second obligation authority, and Phase 3 of this
-    remediation forbids inventing either as a merge-blocking gate.
+    ``KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS`` bound alone, exactly as before this hardening.
+
+    A second window remains even when every fingerprint matches: the live check above and the
+    human merge action it informs are two separate moments (TOCTOU). This is tighter than it
+    looks, but not eliminated -- verified against live infrastructure, not assumed:
+    ``hunter-merge-readiness.yml`` reconciles *every* open PR on a ``*/5 * * * *`` cron (plus PR
+    lifecycle and upstream-workflow-completion events), and each reconciliation re-runs this exact
+    live fingerprint check, so the ``Hunter Merge Readiness`` status itself self-corrects to
+    ``pending`` within at most one 5-minute tick of a thread resolving -- not the knowledge-receipt
+    producer's own ~30-minute cadence. However, the live ``Protect main`` branch-protection ruleset
+    (id 20523851, checked 2026-11-13) requires only ``Quality Gates``, ``dependency-review``,
+    ``CodeQL`` and ``Hunter Pre-PR Preflight`` as GitHub-native required status checks; it does
+    **not** include ``Hunter Governance Review`` or ``Hunter Merge Readiness``. GitHub's own
+    ``required_review_thread_resolution`` rule blocks the merge button live, at click time, while
+    any thread is unresolved -- but has no knowledge of the Knowledge Receipt obligation once a
+    thread is already resolved. So the 5-minute bound above holds on Hunter's own side, but nothing
+    on GitHub's side mechanically forces a human to wait for it before clicking Merge for these two
+    contexts specifically: that enforcement is procedural today (the owner observing the status, and
+    Hunter's own Candidate Admission controller gating Draft-to-Ready on it), not a platform-level
+    block. Adding these two contexts to the branch-protection ruleset would close that specific gap;
+    it is a distinct, repository-wide branch-protection policy change and is reported here for the
+    owner to decide, not applied unilaterally by this fix.
     """
 
     state_value, detail = knowledge_receipt_verdict_from_statuses(statuses, pr_number)

@@ -43,7 +43,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11.13"
+          python-version: "3.11.18"
 
       # Request both installed App permissions for the Ready mutation.
       # Keep admission reads on GITHUB_TOKEN and scope the App token to
