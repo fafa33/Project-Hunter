@@ -3,32 +3,38 @@
     "acceptance_criteria": [
       {
         "criterion": "backport only the two required review-verifier corrections: permit honest pending-deployment criteria in requests under trusted authorization while retaining strict final acceptance, exact content binding and unresolved-finding rejection",
-        "evidence": "Two verifier files exactly match the code already verified at PR #738 head 6d4fe922ddce1764faedc9d49fa9454c7c8e0245. Bootstrap-base RED reproductions showed missing eligibility and diagnostic behavior; 562 affected tests passed and 39 eligibility tests passed after the fixture correction. Strict final acceptance remains unchanged.",
+        "evidence": "The two verifier corrections remain confined to request eligibility; tests/test_predeployment_review_eligibility.py covers honest pending criteria, final rejection, content and unresolved-finding binding.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
         "criterion": "declare a permanent review-only standing policy with explicit repository, governing-issue dependency, literal paths, producer digest and owner-closed stop-work requirements; candidate metadata cannot authorize itself, and no execution, code-write, security, merge or canonical proof outcome authority grant is widened",
-        "evidence": "Policy diff adds only review_authority.automatic_predeployment_review. Programmatic comparison confirms every prior field is unchanged. Producer digest matches immutable main bytes. Catalog authorizes #586 dependencies, not bootstrap Issue #739; candidate policy and pending final acceptance are rejected by tests.",
+        "evidence": "The unchanged standing catalog grants only review eligibility for bounded Issue #586 paths and pinned trusted producer; Issue #739 cannot use it to authorize this candidate.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
         "criterion": "provide focused positive and adversarial regressions for normal and future matching prs, pending and invalid criteria, missing issue/policy, stale content/head/base, candidate-policy tampering, open stop-work, producer mismatch and path safety; preserve existing duplicate-invocation and bounded-unavailability behavior",
-        "evidence": "562 affected tests passed across eligibility, governance, transport, orchestrator, collector finalization, exact-head authority, external-writer binding and policy suites. A local review identified candidate/trusted producer fixture conflation; simulated changed candidate bytes reproduced RED and the pinned-main fixture correction passed all 39 eligibility cases. No orchestrator or reviewer pool change.",
+        "evidence": "Positive and adversarial eligibility, unchanged orchestrator duplicate/fail-closed behavior, and focused deadline regressions were exercised locally. Authenticated hosted review and deployment remain separate gates.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
         "criterion": "keep policy-derived endpoint values out of retry diagnostic labels, including the default fallback, while preserving the endpoint, authentication and retry behavior; verify with focused regressions and hosted codeql",
-        "evidence": "Real bounded retry tests cover both static and default path-free labels with unchanged endpoint/authentication. Same governance source blob has hosted native CodeQL success and zero Python results at PR #738 head 6d4fe92 (analysis 2158012019). The new exact-head CodeQL remains mandatory and is not claimed green before publication.",
+        "evidence": "Repository REST retry labels remain path-free; the deadline context adds a remaining-time bound without changing endpoint, authentication or normal no-deadline retry behavior. Hosted exact-head CodeQL remains required.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
       {
         "criterion": "generate a content-bound full-criteria review request for this infrastructure issue through the existing authorized signed writer, verifiable by unchanged trusted-main code without using the candidate standing-policy grant or a temporary bootstrap exception",
-        "evidence": "The writer generates this complete normal request for genuine supporting Issue #739 from the actual base-to-staged content and all applicable defect families. It is separately checked with the unchanged main verifier, without pending criteria, coverage scope, reviewer authority or candidate-policy eligibility.",
+        "evidence": "The authorized writer refreshes this six-criterion normal infrastructure request from current base-to-staged content and all applicable registry families, with no reviewer authority or bootstrap exception.",
         "id": "AC-5",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "under the owner-approved limited scope extension, enforce one monotonic reviewer attempt deadline covering triggering, blocking http and retry waits; reject terminal verdicts received after the deadline. preserve interrupted diagnostic artifacts separately from complete review receipts, retain exact-head and fail-closed authority, and add focused red-to-green regressions plus the existing dff-043 prevention update. do not enable jules or freebuff without authenticated invocation and verified review evidence",
+        "evidence": "Five original RED regression cases reproduced omitted trigger time, late terminal acceptance and blocking reads; GREEN coverage includes hard deadlines, retry waits, timer cleanup, ambiguous triggers and separate interrupted progress. DFF-043 runtime enforcement and bounded workflow cleanup are updated. Jules and FreeBuff remain disabled.",
+        "id": "AC-6",
         "verdict": "satisfied"
       }
     ],
@@ -69,7 +75,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "One ordinary signed bootstrap commit; no force-push, intermediate history repair or candidate-only evidence epoch is introduced.",
+        "evidence": "This is an ordinary signed continuation of the same authorized bootstrap branch; no force push or history repair is introduced.",
         "family": "DFF-011",
         "outcome": "clear"
       },
@@ -89,7 +95,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "562 affected tests passed; after the trusted-fixture finding, 39 eligibility tests passed. Current-head hosted checks and canonical independent review are not claimed before they run.",
+        "evidence": "Five deadline regression cases were observed RED before correction. All 663 focused collector, transport, orchestrator, policy, eligibility and generation/finalization tests now pass; Ruff, Black and configured Mypy pass. Hosted exact-head proof and authenticated independent review remain separate required gates.",
         "family": "DFF-015",
         "outcome": "clear"
       },
@@ -99,7 +105,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "No issuer bootstrap, mount, secret handoff or composition paths change in this four-file implementation diff.",
+        "evidence": "No issuer bootstrap, mount, credential handoff or composition paths change. Deadline handling uses only Python standard-library POSIX signals in the existing trusted collector.",
         "family": "DFF-019",
         "outcome": "clear"
       },
@@ -109,7 +115,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "No shutdown, accepted worker, drain or terminal execution path changes.",
+        "evidence": "SIGTERM interrupts collection fail-closed; atomic diagnostic checkpoints use a distinct non-receipt schema. Incomplete work cannot publish successful collector completion.",
         "family": "DFF-021",
         "outcome": "clear"
       },
@@ -134,23 +140,43 @@
         "outcome": "clear"
       },
       {
-        "evidence": "The ordered reviewer pool, bounded timeouts and authenticated exhaustion rules are unchanged and covered by affected tests. No unavailable provider is inferred without invocation.",
+        "evidence": "Provider order, authority and declared review/ack budgets remain unchanged. Confirmed timed-out attempts can fail over; ambiguous interrupted mutations cannot fabricate invocation or exhaustion evidence.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "New contribution stays Draft until the existing trusted admission controller acts. Exact-head branch preflight is verified before PR creation; no publication bypass is added.",
+        "evidence": "No execution readiness probe or privileged candidate execution is introduced. Local tests establish code behavior only; trusted-main exact-head proof remains required.",
+        "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The collector continues to checkout only the trusted default-branch workflow SHA, with candidate bytes treated as data. No candidate-ref execution or credential authority is added.",
+        "family": "DFF-028",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The existing trusted admission controller alone governs Ready state. Prior admission of the old head does not supply proof for this changed candidate; fresh hosted exact-head checks remain required.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "The new tests load the actual standing catalog and the immutable main producer fixture; no untracked patch or proposal document is required by test imports.",
+        "evidence": "All regression files and existing generation-fixture adaptations are committed with the implementation; imports require no external investigation artifacts.",
         "family": "DFF-033",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Every HTTP request/retry/body and retry wait inside a reviewer attempt consumes one monotonic deadline; hard interruption cannot be mistaken for a terminal provider verdict or retried after expiry.",
+        "family": "DFF-034",
         "outcome": "clear"
       },
       {
         "evidence": "Focused tests use temporary files and controlled GitHub responses. The only Git fixture reads an immutable local ancestor object, with no network or production state prerequisite.",
         "family": "DFF-035",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "New deadline and checkpoint code uses standard-library signal, contextlib, contextvars and threading only; workflow dependency provisioning is unchanged.",
+        "family": "DFF-036",
         "outcome": "clear"
       },
       {
@@ -174,8 +200,33 @@
         "outcome": "clear"
       },
       {
-        "evidence": "No provider budget, order, collector lifetime or polling/retry setting changes.",
+        "evidence": "Trigger time is counted before invocation, blocking reads and waits are interrupted by a hard deadline, late verdicts are rejected, and bounded workflow steps reserve diagnostic upload time beyond the canonical collection budget.",
         "family": "DFF-043",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Existing orchestrator is unchanged; duplicate-dispatch, generation and idempotent finalization tests remain the authority guard. No parallel orchestration or new reviewer is introduced.",
+        "family": "DFF-044",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "The existing DFF-043 record is strengthened in place; registry applicability and bounded SPM retrieval/compilation algorithms are unchanged.",
+        "family": "DFF-045",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Existing dispatch, synchronize and completion event wiring is retained. Diagnostic uploads run on interruption but cannot emit successful collector completion.",
+        "family": "DFF-046",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "A trigger returning late is timed out, never provider review evidence. An interrupted trigger with no confirmed ID aborts without fabricating provider execution or exhaustion. Native assignment still is not a start ACK.",
+        "family": "DFF-050",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Existing folded scalar CLI invocations preserve PR, HEAD, generation and output arguments; only bounded step timing and a separately named diagnostic upload are added.",
+        "family": "DFF-052",
         "outcome": "clear"
       },
       {
@@ -199,8 +250,32 @@
         "status": "added"
       },
       {
+        "blob_sha": "62734c88f616cdedcbb37bfd72232169f360002e",
+        "path": "tests/test_reviewer_collector_deadlines.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3f7b518474bec3f0c3a794334bdc0134095681cb",
+        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "ee89746b8f7e59011c6a6c32d97623bb090d5c83",
         "path": "docs/CODE_WRITE_POLICY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "73cc590851fc8d14a89a335633ff46fc70780dd7",
+        "path": "docs/DEFECT_REGISTRY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "adc94541499010b8f55ab4ec9758e0f782f78813",
+        "path": "scripts/hunter_github_transport.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -215,13 +290,25 @@
         "path": "scripts/hunter_pre_ready_review.py",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "1195e6354ce1be01ac8bcf519d4d5e5b94d5411f",
+        "path": "scripts/hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d81c4eb4b2cc7583b94694c5442685e7cfe33cb0",
+        "path": "tests/test_review_after_remediation_generation.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "81cff2647927c219f1245daacbd0e0fc5e1ebc12b9a1887c8a981b3f272c3de4"
+    "review_target_digest": "6fafc535da53a5813717cb9db8030f5f9e768c97bd895045af81466ed8b07ff7"
   },
-  "review_id": "0d38ed31a4d68f9da5392801bae68425c8166a8888db889fd832a373fdacd679",
+  "review_id": "efc4477586eeaff89416a1987d73b73fe05742179a95672ca3a8d27380090b47",
   "review_request": {
-    "claims_id": "0d38ed31a4d68f9da5392801bae68425c8166a8888db889fd832a373fdacd679",
+    "claims_id": "efc4477586eeaff89416a1987d73b73fe05742179a95672ca3a8d27380090b47",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
