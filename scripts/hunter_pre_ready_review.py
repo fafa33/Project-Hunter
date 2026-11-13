@@ -350,6 +350,7 @@ def document_for(
     claims: dict[str, Any],
     authority: dict[str, Any] | None = None,
     coverage_scope: dict[str, Any] | None = None,
+    review_eligibility: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Assemble the review document: canonical claims plus document-level metadata.
 
@@ -367,6 +368,8 @@ def document_for(
         document["authority"] = dict(sorted(authority.items()))
     if coverage_scope is not None:
         document["coverage_scope"] = dict(sorted(coverage_scope.items()))
+    if review_eligibility is not None:
+        document["review_eligibility"] = dict(sorted(review_eligibility.items()))
     return document
 
 
@@ -946,7 +949,7 @@ def _authority_error(document: dict[str, Any]) -> str | None:
     return None
 
 
-def _structural_error(claims: dict[str, Any]) -> str | None:
+def _structural_error(claims: dict[str, Any], *, request_only: bool = False) -> str | None:
     """Validate the review's own shape before comparing it to anything."""
 
     if set(claims) != CANONICAL_CLAIM_SET:
@@ -965,9 +968,11 @@ def _structural_error(claims: dict[str, Any]) -> str | None:
             return "each acceptance criterion must be an object"
         if not all(isinstance(item.get(key), str) and item[key].strip() for key in ("id", "criterion", "evidence")):
             return "each acceptance criterion must carry a non-empty id, criterion and evidence"
-        if item.get("verdict") not in CRITERION_VERDICTS:
+        allowed = CRITERION_VERDICTS | ({"pending-deployment"} if request_only else set())
+        if item.get("verdict") not in allowed:
             return f"acceptance criterion {item.get('id')!r} must be verdicted {sorted(CRITERION_VERDICTS)}"
-    if not any(item.get("verdict") == "satisfied" for item in criteria):
+    has_pending_deployment = request_only and any(item.get("verdict") == "pending-deployment" for item in criteria)
+    if not has_pending_deployment and not any(item.get("verdict") == "satisfied" for item in criteria):
         return "a review in which no acceptance criterion is satisfied is not a completed review"
 
     families = claims.get("defect_families")
@@ -1465,6 +1470,7 @@ def verify_claims(
     resolution_corrections: frozenset[str] | None = None,
     head_sha: str | None = None,
     require_authority: bool = True,
+    request_only: bool = False,
 ) -> ReviewVerdict:
     """Compare repository-owned review state against the exact candidate content.
 
@@ -1527,7 +1533,7 @@ def verify_claims(
         if authority_problem is not None:
             return ReviewVerdict("incomplete", authority_problem)
 
-    problem = _structural_error(claims)
+    problem = _structural_error(claims, request_only=request_only)
     if problem is not None:
         return ReviewVerdict("incomplete", problem)
 
@@ -1623,6 +1629,9 @@ def verify_claims(
     if unresolved:
         return ReviewVerdict("unresolved", "substantive review findings remain unresolved: " + ", ".join(unresolved))
 
+    if request_only and any(c.get("verdict") == "pending-deployment" for c in claims["acceptance_criteria"]):
+        return ReviewVerdict("request-pending-deployment", "request content is bound; review eligibility is unproven")
+
     if scope_state == SCOPED_STATE:
         return ReviewVerdict(
             SCOPED_STATE,
@@ -1650,6 +1659,9 @@ def verify_review_request(
     issue_criteria: tuple[str, ...] | None = None,
     coverage_scopes: tuple[CoverageScope, ...] | None = None,
     head_sha: str | None = None,
+    eligibility_facts: Mapping[str, Any] | None = None,
+    trusted_review_policy: Any = None,
+    trusted_root: Path | None = None,
 ) -> ReviewVerdict:
     """Validate the content a reviewer would be asked to authorize.
 
@@ -1673,7 +1685,7 @@ def verify_review_request(
     candidate = dict(document)
     candidate.pop("review_request", None)
     candidate.pop("authority", None)
-    return verify_claims(
+    verdict = verify_claims(
         candidate,
         base_sha=base_sha,
         changes=changes,
@@ -1682,6 +1694,153 @@ def verify_review_request(
         coverage_scopes=coverage_scopes,
         head_sha=head_sha,
         require_authority=False,
+        request_only=True,
+    )
+    if verdict.state != "request-pending-deployment":
+        return verdict
+    return _predeployment_review_eligibility(
+        document,
+        changes,
+        issue_criteria,
+        head_sha,
+        base_sha,
+        eligibility_facts,
+        trusted_review_policy,
+        trusted_root or ROOT,
+    )
+
+
+def _predeployment_review_eligibility(
+    document: Mapping[str, Any],
+    changes: tuple[ingress.ConnectorFileChange, ...],
+    criteria: tuple[str, ...] | None,
+    head: str | None,
+    base: str,
+    facts: Mapping[str, Any] | None,
+    policy: Any,
+    root: Path,
+) -> ReviewVerdict:
+    """Read-only review permission, never final acceptance or merge authority.
+
+    Only the trusted orchestrator supplies facts and policy. Candidate metadata
+    requests review but cannot establish its own eligibility. No commands,
+    credentials, execution scopes or final acceptance exceptions are granted.
+    """
+
+    def denied(reason: str) -> ReviewVerdict:
+        return ReviewVerdict("awaiting-trusted-review-policy", reason)
+
+    declaration = document.get("review_eligibility")
+    if not isinstance(declaration, dict) or set(declaration) != {"mode", "repository", "pr_number"}:
+        return ReviewVerdict(
+            "incomplete", "pending-deployment request must declare repository and PR review eligibility"
+        )
+    if declaration.get("mode") != "pre_deployment" or type(declaration.get("pr_number")) is not int:
+        return ReviewVerdict("incomplete", "invalid pre-deployment review declaration")
+    if not facts:
+        return denied("request prepared only; trusted live eligibility has not been established")
+    fields = {
+        "schema",
+        "repository",
+        "authorized_by",
+        "authorization",
+        "review_only",
+        "stop_work_issues",
+        "dependencies",
+    }
+    if not isinstance(policy, dict) or set(policy) != fields:
+        return denied("trusted reusable pre-deployment review policy is missing or malformed")
+    if (
+        policy.get("schema") != "hunter.predeployment-review-policy.v1"
+        or policy.get("review_only") is not True
+        or not all(
+            isinstance(policy.get(k), str) and policy[k].strip()
+            for k in ("repository", "authorized_by", "authorization")
+        )
+    ):
+        return denied("trusted policy must be versioned, owner-governed and review-only")
+    claims = document["claims"]
+    if (
+        facts.get("repository") != policy["repository"]
+        or declaration.get("repository") != policy["repository"]
+        or declaration["pr_number"] <= 0
+        or facts.get("pr_number") != declaration["pr_number"]
+        or not head
+        or _GIT_SHA.fullmatch(head) is None
+        or facts.get("head_sha") != head
+        or facts.get("base_sha") != base
+        or facts.get("issue") != claims["issue"]
+        or facts.get("preflight_state") != "success"
+        or facts.get("ingress_state") != "success"
+    ):
+        return denied("trusted repository/PR/Issue/head/base/preflight/ingress eligibility does not match")
+    stops = policy["stop_work_issues"]
+    closed = facts.get("closed_stop_work_issues")
+    if (
+        not isinstance(stops, list)
+        or not 1 <= len(stops) <= 32
+        or any(type(i) is not int or i <= 0 for i in stops)
+        or not isinstance(closed, (list, tuple, set, frozenset))
+        or any(type(i) is not int or i <= 0 for i in closed)
+        or not set(stops) <= set(closed)
+    ):
+        return denied("security STOP-WORK closure is missing or unverified")
+    pending = {
+        normalize_criterion(c["criterion"])
+        for c in claims["acceptance_criteria"]
+        if c["verdict"] == "pending-deployment"
+    }
+    if not criteria or not pending <= set(criteria) or len(pending) > 16:
+        return denied("pending criteria must be genuine bounded governing-Issue criteria")
+    dependencies = policy["dependencies"]
+    if not isinstance(dependencies, list) or not 1 <= len(dependencies) <= 64:
+        return denied("trusted deployment dependencies are missing or malformed")
+    eligible: set[str] = set()
+    paths = {p for change in changes for p in change.affected_paths()}
+    for dependency in dependencies:
+        if not isinstance(dependency, dict) or set(dependency) != {"issue", "criteria", "changed_paths", "trust_root"}:
+            return denied("deployment dependency must use the closed policy schema")
+        dep_criteria, dep_paths, trust = dependency["criteria"], dependency["changed_paths"], dependency["trust_root"]
+        if (
+            not isinstance(dependency["issue"], str)
+            or not dependency["issue"].isdigit()
+            or not isinstance(dep_criteria, list)
+            or not dep_criteria
+            or not all(isinstance(c, str) and c.strip() for c in dep_criteria)
+            or not isinstance(dep_paths, list)
+            or not dep_paths
+            or not all(
+                isinstance(p, str)
+                and p
+                and not p.startswith("/")
+                and ".." not in Path(p).parts
+                and not any(c in p for c in "*?[]\\")
+                for p in dep_paths
+            )
+            or not isinstance(trust, dict)
+            or set(trust) != {"path", "sha256"}
+            or not isinstance(trust.get("path"), str)
+            or _WORKFLOW_PATH.fullmatch(trust["path"]) is None
+            or not isinstance(trust.get("sha256"), str)
+            or _SHA256.fullmatch(trust["sha256"]) is None
+        ):
+            return denied("deployment dependency has unsafe or incomplete scope")
+        source = root / trust["path"]
+        try:
+            if source.is_symlink() or not source.resolve().is_relative_to(root.resolve()):
+                return denied("trusted producer path escapes the trusted checkout")
+            if hashlib.sha256(source.read_bytes()).hexdigest() != trust["sha256"]:
+                return denied("trusted producer definition differs from owner-approved dependency")
+        except OSError:
+            return denied("trusted producer definition is unavailable")
+        if dependency["issue"] == claims["issue"] and paths.intersection(dep_paths):
+            eligible.update(normalize_criterion(c) for c in dep_criteria)
+    if not pending <= eligible:
+        return denied("pending acceptance is not an independently verified deployment dependency")
+    return ReviewVerdict(
+        "predeployment-review-eligible",
+        f"review only for {facts['repository']} PR #{facts['pr_number']} at {head}; "
+        f"{len(pending)} deployment criteria remain pending; no acceptance, merge or deployment authority",
     )
 
 
@@ -1862,7 +2021,7 @@ OPTIONAL_JUDGEMENT_KEYS = ("coverage_scope",)
 REQUEST_JUDGEMENT_KEYS = tuple(key for key in JUDGEMENT_KEYS if key != "authority")
 
 
-def validate_request_governing_issue(issue: str, judgement: dict[str, Any]) -> None:
+def validate_request_governing_issue(issue: str, judgement: dict[str, Any]) -> tuple[str, ...]:
     """Reject stale/wrong Issue evidence before minting a review request.
 
     The authenticated hosted verifier remains authoritative. This early check
@@ -1899,6 +2058,7 @@ def validate_request_governing_issue(issue: str, judgement: dict[str, Any]) -> N
     covered = {normalize_criterion(str(item.get("criterion", ""))) for item in supplied if isinstance(item, dict)}
     if not required.issubset(covered):
         raise ValueError(f"review request does not cover governing Issue #{issue} acceptance criteria")
+    return tuple(parse_issue_acceptance_criteria(body))
 
 
 def prepare_request(
@@ -1921,6 +2081,18 @@ def prepare_request(
     if missing:
         raise ValueError("review request judgement is missing " + ", ".join(missing))
     changes = local_changes(base, head, cwd=cwd)
+    findings = list(judgement["findings"])
+    previous = read_review_document((cwd or ROOT) / REVIEW_RELATIVE_PATH)
+    if isinstance(previous, dict) and str((previous.get("claims") or {}).get("issue")) == issue:
+        supplied_ids = {item.get("id") for item in findings}
+        findings.extend(
+            item
+            for item in (previous.get("claims") or {}).get("findings", [])
+            if isinstance(item, dict)
+            and item.get("severity") == "blocking"
+            and item.get("resolution") != "resolved"
+            and item.get("id") not in supplied_ids
+        )
     claims = build_claims(
         issue=issue,
         base_ref=base_ref,
@@ -1928,10 +2100,14 @@ def prepare_request(
         changes=changes,
         acceptance_criteria=tuple(judgement["acceptance_criteria"]),
         defect_families=tuple(judgement["defect_families"]),
-        findings=tuple(judgement["findings"]),
+        findings=tuple(findings),
         adversarial_dimensions=tuple(judgement["adversarial_dimensions"]),
     )
-    document = document_for(claims, coverage_scope=judgement.get("coverage_scope"))
+    document = document_for(
+        claims,
+        coverage_scope=judgement.get("coverage_scope"),
+        review_eligibility=judgement.get("review_eligibility"),
+    )
     document["review_request"] = {"schema": "hunter.review-request.v1", "claims_id": document["review_id"]}
     return document
 
@@ -1952,7 +2128,7 @@ def finalize_writer_review_request(
     The writer remains responsible for signing and committing this artifact.
     """
     if issue_criteria is None:
-        validate_request_governing_issue(issue, judgement)
+        issue_criteria = validate_request_governing_issue(issue, judgement)
     else:
         supplied = judgement.get("acceptance_criteria")
         covered = (
@@ -1987,7 +2163,7 @@ def finalize_writer_review_request(
         issue_criteria=issue_criteria,
         head_sha=head,
     )
-    if not verdict.ok:
+    if not (verdict.ok or verdict.state == "awaiting-trusted-review-policy"):
         raise ValueError("writer review request invalid: " + verdict.reason)
     path = root / REVIEW_RELATIVE_PATH
     content = json.dumps(document, indent=2, sort_keys=True) + "\n"

@@ -2,81 +2,33 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "canonical dpm learning observations feed the canonical defect/prevention registry",
-        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
+        "criterion": "backport only the two required review-verifier corrections: permit honest pending-deployment criteria in requests under trusted authorization while retaining strict final acceptance, exact content binding and unresolved-finding rejection",
+        "evidence": "Two verifier files exactly match the code already verified at PR #738 head 6d4fe922ddce1764faedc9d49fa9454c7c8e0245. Bootstrap-base RED reproductions showed missing eligibility and diagnostic behavior; 562 affected tests passed and 39 eligibility tests passed after the fixture correction. Strict final acceptance remains unchanged.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
-        "criterion": "applicable canonical prevention rules are deterministically selected before every governed engineering spm build",
-        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
+        "criterion": "declare a permanent review-only standing policy with explicit repository, governing-issue dependency, literal paths, producer digest and owner-closed stop-work requirements; candidate metadata cannot authorize itself, and no execution, code-write, security, merge or canonical proof outcome authority grant is widened",
+        "evidence": "Policy diff adds only review_authority.automatic_predeployment_review. Programmatic comparison confirms every prior field is unchanged. Producer digest matches immutable main bytes. Catalog authorizes #586 dependencies, not bootstrap Issue #739; candidate policy and pending final acceptance are rejected by tests.",
         "id": "AC-2",
         "verdict": "satisfied"
       },
       {
-        "criterion": "selected rule ids/versions are cryptographically/auditably bound to build/envelope identity using existing canonical identity machinery",
-        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
+        "criterion": "provide focused positive and adversarial regressions for normal and future matching prs, pending and invalid criteria, missing issue/policy, stale content/head/base, candidate-policy tampering, open stop-work, producer mismatch and path safety; preserve existing duplicate-invocation and bounded-unavailability behavior",
+        "evidence": "562 affected tests passed across eligibility, governance, transport, orchestrator, collector finalization, exact-head authority, external-writer binding and policy suites. A local review identified candidate/trusted producer fixture conflation; simulated changed candidate bytes reproduced RED and the pinned-main fixture correction passed all 39 eligibility cases. No orchestrator or reviewer pool change.",
         "id": "AC-3",
         "verdict": "satisfied"
       },
       {
-        "criterion": "engineering ingress and provider failover cannot bypass or mutate the selected prevention contract",
-        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
+        "criterion": "keep policy-derived endpoint values out of retry diagnostic labels, including the default fallback, while preserving the endpoint, authentication and retry behavior; verify with focused regressions and hosted codeql",
+        "evidence": "Real bounded retry tests cover both static and default path-free labels with unchanged endpoint/authentication. Same governance source blob has hosted native CodeQL success and zero Python results at PR #738 head 6d4fe92 (analysis 2158012019). The new exact-head CodeQL remains mandatory and is not claimed green before publication.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
       {
-        "criterion": "pre-ready/preflight enforces applicable learned rules against the exact candidate",
-        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
+        "criterion": "generate a content-bound full-criteria review request for this infrastructure issue through the existing authorized signed writer, verifiable by unchanged trusted-main code without using the candidate standing-policy grant or a temporary bootstrap exception",
+        "evidence": "The writer generates this complete normal request for genuine supporting Issue #739 from the actual base-to-staged content and all applicable defect families. It is separately checked with the unchanged main verifier, without pending criteria, coverage scope, reviewer authority or candidate-policy eligibility.",
         "id": "AC-5",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "known defect recurrence is caught before ready by executable regression",
-        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
-        "id": "AC-6",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "cancellation/infrastructure/provider unavailability is never misclassified as a defect",
-        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
-        "id": "AC-7",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "exact-head stale evidence cannot mutate learning truth",
-        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
-        "id": "AC-8",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "focused tests + impact-selected tests + one final full relevant suite pass",
-        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
-        "id": "AC-9",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "ruff/black/mypy and canonical pre-push pass",
-        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
-        "id": "AC-10",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "hosted ci, governance, dependency review, codeql, trusted preflight and merge readiness are green on exact candidate head",
-        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
-        "id": "AC-11",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "one draft pr only; zero unresolved substantive p1/p2 findings before ready",
-        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
-        "id": "AC-12",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "no ready/merge/deploy without separate explicit owner approval",
-        "evidence": "Writer review request only; independent reviewer must verify against Issue #496, tests/test_issue_496_candidate_contract.py, tests/test_issue_496_prevention_loop_binding.py, trusted preflight, and current GitHub checks; no reviewer approval claimed.",
-        "id": "AC-13",
         "verdict": "satisfied"
       }
     ],
@@ -84,1229 +36,192 @@
       "authorization",
       "caller-controlled-time-state",
       "cutoff-history",
-      "exact-head-binding",
       "fail-closed",
-      "governance-reconcile",
       "malformed-unknown-authority",
       "monotonicity",
       "persistence-restrictions",
-      "regression-gate",
       "replay",
       "restart-crash-retry",
-      "review-authority",
-      "stale-proof",
       "tamper-resistance",
-      "transaction-snapshot-consistency",
-      "trusted-preflight"
+      "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "ef4ce0f005a321792ce9af8b14c83748fc628fe1",
+    "base_sha": "08f565fd14e9ded796a63c9fc45dce6f8997aeff",
     "defect_families": [
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-001",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-003",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-004",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-005",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-006",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "Exact repository/PR/Issue/head/base/preflight/ingress and producer bindings reject replayed or changed eligibility; the new standing catalog does not authorize bootstrap Issue #739.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "Content/digest tampering, producer mismatch and symlink regressions reject substituted evidence; no artifact or acknowledgement is forged.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "Candidate uses the existing clone-capable signed local push lane. No connector grant, credential or provenance contract is changed.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "Existing owner signing identity and registered SSH key are retained. No author, committer, alias or signer binding is modified.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "One ordinary signed bootstrap commit; no force-push, intermediate history repair or candidate-only evidence epoch is introduced.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "No connector receipt or receipt freshness change. The mandatory review request is regenerated from this exact staged content; it carries no reviewer authority.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "Complete infrastructure Issue #739 criteria are supplied. Parent #586 remains outstanding. The unchanged main verifier accepts this normal request without the candidate policy or a scoped exception.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "Missing deployment policy yields an explicit waiting verdict, never success. Existing pending-prerequisite and blocked-request orchestrator tests passed.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "562 affected tests passed; after the trusted-fixture finding, 39 eligibility tests passed. Current-head hosted checks and canonical independent review are not claimed before they run.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "The existing pre-push and hosted exact-head proof paths are retained. Source-code CodeQL proof at #738 is attributed to that head, not claimed as new bootstrap-head proof.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-018",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "No issuer bootstrap, mount, secret handoff or composition paths change in this four-file implementation diff.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "No runtime instance ownership, lease or execution replay semantics change.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "No shutdown, accepted worker, drain or terminal execution path changes.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "Final acceptance still rejects pending criteria. A prepared normal bootstrap request is not authenticated independent reviewer authority or merge authorization.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "No ledger claim, historical replay, signing role or execution entry point changes. The standing field grants read-only review eligibility only.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "Existing one-dispatch, stale-request, current-generation and collector-finalization regressions passed. Orchestrator implementation is unchanged.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "Bootstrap follows the existing full-criteria path for its separate infrastructure Issue. Main remains authority, candidate policy cannot activate itself, and no migration identity is added.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "The ordered reviewer pool, bounded timeouts and authenticated exhaustion rules are unchanged and covered by affected tests. No unavailable provider is inferred without invocation.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-027",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "New contribution stays Draft until the existing trusted admission controller acts. Exact-head branch preflight is verified before PR creation; no publication bypass is added.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "The new tests load the actual standing catalog and the immutable main producer fixture; no untracked patch or proposal document is required by test imports.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-034",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "Focused tests use temporary files and controlled GitHub responses. The only Git fixture reads an immutable local ancestor object, with no network or production state prerequisite.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-036",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "Eligibility remains an explicit non-ok ReviewVerdict state. No independent status publisher or proof authority is added.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "Missing/malformed authorization, preflight/ingress failure, missing Issue, STOP-WORK and producer failures deny review rather than silently degrading.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "Existing repository/global REST scope separation is unchanged. The new STOP-WORK lookup uses repository issues/<positive-int> and static retry context.",
+        "family": "DFF-039",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Trusted-main shadow verification accepts only the normal infrastructure request. Candidate evaluator tests do not self-establish deployment authority; fresh hosted upgrade/replay remain required.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-042",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "No provider budget, order, collector lifetime or polling/retry setting changes.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-044",
+        "evidence": "Existing unresolved-thread, changes-requested, security and acceptance guards are retained; no successful preflight can supply reviewer or merge authority.",
+        "family": "DFF-053",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-045",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-046",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-047",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-048",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-049",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-050",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-052",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
-        "family": "DFF-054",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Writer requests independent exact-head verification; no independent reviewer clear claimed.",
+        "evidence": "The authorized writer refreshes the current Issue/content request. Same-Issue unresolved findings are retained, while inherited unrelated Issue #496 authority is not copied.",
         "family": "DFF-055",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "496",
+    "issue": "739",
     "review_target": [
       {
-        "blob_sha": "558909befb2c5760d96e8a38beefa85ce34e6f29",
-        "path": ".github/workflows/hunter-issue586-live-canary.yml",
+        "blob_sha": "1f9d24aa82d5e10f4560f6910ca8fd56d62e1673",
+        "path": "tests/test_predeployment_review_eligibility.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "cc52bae90858f25062a5ece85ff98d879548440b",
-        "path": ".github/workflows/hunter-mac-bridge-probe.yml",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "841202d339ef3b7ed41ae84bb46af73c30fd8164",
-        "path": "config/market_validation_membership_trust.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "a34e14be748727f6b41f8c281dabf7d287084bec",
-        "path": "docs/ADR/0040-discovery-candidate-universe-admission.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "f091297ea7279e5fd948e6ce584c1b0c89164466",
-        "path": "docs/HUNTER_PUSH_TOOLCHAIN.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "ca284d98ff817a577e35e79d660bbe4e4f3f4e74",
-        "path": "docs/SKY_ECONOMIC_ATTRIBUTION_AUDIT.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "3bae850149c8091b3edb5f2b1565b27b008741fd",
-        "path": "docs/architecture-records/ADPR-0013-discovery-candidate-admission.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "d9697fe13491f3b546508b62cb8bd48db89a0c71",
-        "path": "docs/architecture-records/ISSUE-666-anchor-registry-contract.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "b37fe7806541659c65575de25bf83778847fca8e",
-        "path": "docs/evidence/historical-findings-579-581-582.md",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "53abe257df6c6368e4a0393d896add659d159c7d",
-        "path": "docs/evidence/issue-389/research-only/alternative-candidate-precutoff-screen.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "827647eb8473653046f8a3bc872cb6ad5d91370c",
-        "path": "docs/evidence/issue-389/research-only/cmc-ray-2026-08-01.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "75cd4e9faa15f7c2da3fd017a77baa882e4211b2",
-        "path": "docs/evidence/issue-389/research-only/coingecko-ray-2026-08-01-comparison.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "1c1d3229b8bb6161a5e46837addfbf6c85c14583",
-        "path": "docs/evidence/issue-389/research-only/comparison-summary.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "8e8f2c04722596bd7991c4e48010f4daf0cbecd9",
-        "path": "docs/evidence/issue-389/research-only/defillama-ray-daily-holders-revenue.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "676287d70b5d18c1411363e936c81c78b98954e2",
-        "path": "docs/evidence/issue-389/research-only/defillama-raydium-adapter-current.ts",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "5c3cd89b9bc37df07cb98f64531b5a4aa292c217",
-        "path": "docs/evidence/issue-389/research-only/defillama-raydium-adapter-precutoff.ts",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "3ae27e5150bd14382a9be6b333e32b917543d60f",
-        "path": "docs/evidence/issue-389/research-only/manifest.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "c56c4c290acc63852ecb0d7f148c07f3b654c059",
-        "path": "docs/evidence/issue-389/research-only/ray-holders-revenue-assessment.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "4080eea2dece4382c2195d1847f601cd0445cf9e",
-        "path": "docs/evidence/issue-389/research-only/ray-proof-gap-decision.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "d81c66ba9f607769b55001c8968b0b7a76590fdf",
-        "path": "evidence/issue-389/coingecko_raydium_2026_07_31.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "6769b45ee3fab21b044d6e7eca629435079a0a23",
-        "path": "evidence/issue-389/defillama_raydium_fees.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "83710806a23c81852a854b2df7b9daace91a566f",
-        "path": "evidence/issue-389/ray-research-manifest.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "4db9643cfeb2052d66965a6a1eeb4b5a138895e7",
-        "path": "evidence/issue-389/wayback_raydium_docs_index.json",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "adea39a30e51e513cd4ecce3056580a574bf4bd9",
-        "path": "scripts/hunter_issue_evidence_writer.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "8c39c991ac97182b5a9ec3d2c1c49458cad9d010",
-        "path": "scripts/hunter_mac_bridge_probe.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "4759da206991c2aeca085809344ea1479f5c3e58",
-        "path": "scripts/hunter_mac_codex_preflight.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "6b4da1337c392d1cda1227cd846feb9bb72db001",
-        "path": "scripts/hunter_opencode_diagnostic_probe.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "fd4fdff2f454ed5c338592e2626b28209fd0f271",
-        "path": "scripts/hunter_push.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "00b55ebe6d0c2c9dcacbb0333fc2a9b9007a71c3",
-        "path": "scripts/issue_agent/Dockerfile.broker-canary",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "0817d12fa2c1a90072ec7b960bb162921dd70d11",
-        "path": "scripts/issue_agent/Dockerfile.kilo-canary",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "461d7c291ff2a3e299e4fdd29ecff742c4805d0e",
-        "path": "scripts/issue_agent/broker_container_probe.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "95f3c27e6dbe063cd44c7e9a423abc03ed5e28f2",
-        "path": "scripts/issue_agent/broker_shell.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "361562859df33ac27bc4c649b8aa383e96cc6ad8",
-        "path": "scripts/issue_agent/container_broker_canary.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "7a6fc68d7fa0dfdd415defc0962cab57cd048668",
-        "path": "scripts/issue_agent/gateway_container_canary.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "f4447be7210876a7321f4aa8037060af6d564a54",
-        "path": "scripts/issue_agent/governed_shell_probe.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "6629f8eeeadd79badded52b87914306d895082f8",
-        "path": "scripts/issue_agent/isolated_workspace_canary.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "6e21404e46c4ec47c48fad21ac90ea700820a43e",
-        "path": "scripts/issue_agent/kilo_broker_client.cjs",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "0523b7de52d3deb508bcf8f1914ffb4d11f82a55",
-        "path": "scripts/issue_agent/kilo_broker_shell",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "49c9a2e72060d704bad6904cac959f9464a3496d",
-        "path": "scripts/issue_agent/kilo_canary_independent_validator.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "74ebd0ede8dce818344086f704a926d7fdde81e4",
-        "path": "scripts/issue_agent/kilo_e2e_canary.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "6b92755feb9ad5ee49e91af24f9f4f09b4500a09",
-        "path": "scripts/issue_agent/kilo_gateway_repair_canary.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "3f2875c4a87c0e6cb40ebf29a9202cb8a186db35",
-        "path": "scripts/issue_agent/kilo_real_broker_canary.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "d9e9ea1b7f05201708e834ec2fdd0871d966f71e",
-        "path": "scripts/issue_agent/kilo_workspace_repair_canary.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "9188fe646aab63abf414754a660939804a90a291",
-        "path": "scripts/issue_agent/model_egress_gateway.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "042c4ddf1fe4cae54f75c7331d134af3cd6e0e80",
-        "path": "scripts/issue_agent/real_broker_server.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "32ebb1cb3746aca364dc2080568e5199c3b2d7d6",
-        "path": "scripts/issue_agent/runner_isolation_smoke.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "0a69c8e56d64714977966cb09d82226f0ad23031",
-        "path": "src/hunter/automation/historical_finding_coverage.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "de96eceb108d6b2b14514dad98d17f5517a86240",
-        "path": "src/hunter/automation/issue_agent_governed_shell.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "4a7fb1e176db70d05f0b508b55247e1942582c6b",
-        "path": "src/hunter/automation/issue_agent_kilo_container.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "1f73a2ef7c3a0a6776f5da6c2b4ee3312a0fa308",
-        "path": "src/hunter/automation/issue_agent_shell_broker.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "3bf17c00f3cb38fa2038a79255814f9157624bb0",
-        "path": "src/hunter/automation/mac_bridge_probe.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "34aa0a544ec5e0e417a86c8e61a132112ccab3cf",
-        "path": "src/hunter/automation/mac_codex_preflight.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "a39ad6e17cf44735f219f9507d8dfa34b7054c4c",
-        "path": "src/hunter/comparative_valuation/ethereum_rpc.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "a25f604db523f2a4ea70cc8a5a12d0e4853469f1",
-        "path": "src/hunter/comparative_valuation/historical_candidates.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "242b0b157375f7911d36f4f0517f4a5e82bbcf84",
-        "path": "src/hunter/comparative_valuation/sky_burn_index.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "12e12b0894633f00d31f92539bb6c28562779eb0",
-        "path": "src/hunter/comparative_valuation/sky_checkpoint_security.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "7e7e3429dd053000c26f8349eae659b3b44914a7",
-        "path": "src/hunter/comparative_valuation/sky_economic_attribution.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "81ad5fe9582b7c007e6f8ba99de2bd23c1f85e62",
-        "path": "src/hunter/comparative_valuation/sky_historical_treasury.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "1bbe4a8fed26c2fe981f1fa63b7b05cec7e5bef5",
-        "path": "src/hunter/comparative_valuation/sky_index_attestation.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "5fe69b5332bdc58029e2b40aee1692a013f8a48e",
-        "path": "src/hunter/comparative_valuation/sky_onchain.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "e063ed685a840bb841875fa8feb6361c847d6abe",
-        "path": "src/hunter/comparative_valuation/sky_payment_provenance.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "11075a49e34f65eeab7dea414903a9c8201a6654",
-        "path": "src/hunter/comparative_valuation/sky_receipt_window.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "77a000b104e885364ca8fc74234526605fc15401",
-        "path": "src/hunter/comparative_valuation/sky_reconciliation_runner.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "9a52a79a2cf6c1b869d3a8681f7418cf50d20e78",
-        "path": "src/hunter/comparative_valuation/sky_settlement_reconciliation.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "be055f36a7ced07412f0d8cd8ac5a7b588305b4b",
-        "path": "src/hunter/comparative_valuation/sky_treasury_audit.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "3b49c7fb7a1531e03d4f89c2c1cb78fdf36a5c8d",
-        "path": "src/hunter/comparative_valuation/sky_treasury_fast_audit.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "e16f2b2792a51baedef4c1e5ce2f86de59b46f61",
-        "path": "src/hunter/comparative_valuation/sky_treasury_repair.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "a8782d533a7a29edd31430c4e80f88194c3d82b2",
-        "path": "src/hunter/discovery/canonical_history.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "731e2c265433a4b93431b6c30d42154be851bf4f",
-        "path": "src/hunter/market_validation/membership_history.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "59c0aac38d31234e7e05eb11c914e5377a166b50",
-        "path": "src/hunter/market_validation/trusted_membership.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "293876b1fe2f778f5f803f61d4d6a436722e3f13",
-        "path": "src/hunter/market_validation/universe_membership.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "d062b8570ed0c101879352c291b05cec300f3b94",
-        "path": "tests/membership_helpers.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "52b8407c9947fd2eff9d6c436f54b7e558a31400",
-        "path": "tests/test_canonical_entity_history.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "edcc7d271a1da6a5077359c8e1008434ee18d040",
-        "path": "tests/test_comparative_historical_candidates.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "3e010349b681d07166d4c04a9642aa3ecd3ec2d8",
-        "path": "tests/test_ethereum_rpc_sky.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "baaec39275e8f0d86fc7cbaab4585f38d133e60d",
-        "path": "tests/test_historical_finding_coverage.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "6758995209cd843175ffc0bab2ecf36baa646a78",
-        "path": "tests/test_historical_identity_backfill.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "f6edc172c201971ae8e127c460f0801f5ee5c450",
-        "path": "tests/test_historical_knowledge_context_cli.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "1163116b68f580551e01e425810d37ad7ccbf8a0",
-        "path": "tests/test_hunter_issue_evidence_writer.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "b734bf9c2a515960611f81fe624731bd9f266f1d",
-        "path": "tests/test_hunter_mac_bridge_probe.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "3e67f7172c7a23d11b43b876eb96b4f9ab3f0275",
-        "path": "tests/test_hunter_mac_codex_preflight.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "a98706685b0720f21a0e263f49200ea3fee1dcf9",
-        "path": "tests/test_hunter_push_toolchain.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "8e33a551818301914491e20d8afe9407c2ee5216",
-        "path": "tests/test_issue_496_candidate_contract.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "cee9d4cbb9badf4ba8ffe6a444dbd999bfc2d218",
-        "path": "tests/test_issue_agent_bind_gate.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "58c98c8f3a5451eae0bc48dd0e6d278c33f80a3a",
-        "path": "tests/test_issue_agent_broker_shell.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "a96ac49091519b2058cad8bb2f910607d4cff9b0",
-        "path": "tests/test_issue_agent_codex_adapter.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "e42dabc8e897e974d518a8e352312557ee076ed1",
-        "path": "tests/test_issue_agent_governed_shell.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "9d4a807a62139ae2eb74d33e970de279d2ffb453",
-        "path": "tests/test_issue_agent_kilo_adapter.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "bbf7e5b70a881ee172a395b58e808e948a3454ee",
-        "path": "tests/test_issue_agent_kilo_container_port.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "44c2add89b4dd710136633ff96914b92ac8728f3",
-        "path": "tests/test_issue_agent_kilo_signed_e2e.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "e1bf49398329bae5651a7e5a37bf0d5b892b76b1",
-        "path": "tests/test_issue_agent_shell_broker.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "bb7e402765ea40f630465d798bd0c7bec945fe69",
-        "path": "tests/test_issue_agent_trigger_workflow_guard.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "8db9a1e3bd29774a30dc16156e92cc4fef912800",
-        "path": "tests/test_membership_history.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "d29c74ee5196b8baffe4a3434f911c58d1158659",
-        "path": "tests/test_model_egress_gateway.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "01b9b4e859d2346c5ca9599d0918199b171651a3",
-        "path": "tests/test_opencode_diagnostic_probe.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "4e06d39d87166f0aa1bb692eb3b12cc901f7f1ca",
-        "path": "tests/test_real_broker_security.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "9385e431887797f8055e5be75d0ea312278ddc47",
-        "path": "tests/test_signed_membership_ingress.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "7d2d414044bb5058edb9695a488244d6bbb38c64",
-        "path": "tests/test_sky_burn_index.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "923f26a484839a5ba149807365c57f5deb5de2fc",
-        "path": "tests/test_sky_checkpoint_security.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "af246fe90d97085cf41c254a8fb6dbb4cf59823f",
-        "path": "tests/test_sky_economic_attribution.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "5e28398cfee806b104c9ddf0d7b99e463fa33e9f",
-        "path": "tests/test_sky_historical_treasury.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "538aab1af8d3547e87d3eb73875e934d60b6409a",
-        "path": "tests/test_sky_index_attestation.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "5de63790e5e3a2874a1a5ae832742adc23e0c692",
-        "path": "tests/test_sky_onchain.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "f429aeb681aec372b03885a445cee668ea194973",
-        "path": "tests/test_sky_payment_provenance.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "41fda4c51195d7c13efdd5bc31aaa53242c061f2",
-        "path": "tests/test_sky_receipt_window.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "9de23fb44aff5810c9fd9654f061fed4c877c849",
-        "path": "tests/test_sky_settlement_reconciliation.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "1b32a0b5c36558dcefe891668efc0704eaf9e910",
-        "path": "tests/test_trusted_membership.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "f19635d54bdd80306b5b9a719d0d20ff90228d29",
-        "path": "tests/test_universe_membership.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "a3ff50e4c9396de2fe6100c668744d376c845939",
-        "path": ".github/instructions/project-hunter.instructions.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "571dc74b920d5386d763c9a7ba03d0fa6e4fb97f",
-        "path": ".github/workflows/hunter-candidate-admission.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "d09fb203836abda2a895d8ebbc54808aa1963f31",
-        "path": ".github/workflows/hunter-governance-reconcile.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "38186cf6ea32c74e1339aed5f94eca61900fd330",
-        "path": ".github/workflows/hunter-issue-agent-knowledge.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a8f6b37292c8f8c5e6e7a13cffd5a0c9f9432f71",
-        "path": ".github/workflows/hunter-issue-agent-trigger.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "e29ae68562bc74776ac79ef0f9ba2b6c1e4040be",
-        "path": ".github/workflows/hunter-merge-readiness.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "c75b3aad5218fec4a14bab30c6ece2e00fbf5946",
-        "path": "AGENTS.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a03bff04f37fe59eb4c260e5d67f12311fa77649",
-        "path": "MISSION.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a4267c379a31634cabd4b52a418203287a1d5405",
-        "path": "configs/value_capture_sources.yaml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "6464c26b3bc1b438f614797588e51c1af98d0908",
-        "path": "docs/ADR/README.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9582eace3a9685cac8dee687a7bbfd5631f7d198",
+        "blob_sha": "ee89746b8f7e59011c6a6c32d97623bb090d5c83",
         "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "aefdd9b568b6e120c3e0082bae84bfb52694715f",
-        "path": "docs/DEFECT_REGISTRY.json",
+        "blob_sha": "0ba51b9e0754e049e7a67704f5333102edd86a3f",
+        "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "e3f7e4c3dc980ee3acf31466fd298faacbe56c56",
-        "path": "docs/HUNTER_ROADMAP.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "bf82da5eb8ea58fda11eaa7f5f331fa475c82d91",
-        "path": "docs/VISION.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "79fae68b108fc42e8aa9481719e9d7394aac276c",
-        "path": "scripts/hunter_candidate_admission.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "7d7da3f62006de23622f85d7f89b0d28cd13857a",
-        "path": "scripts/hunter_canonicalization_candidate_pr.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f81dce025001b12a01f0e990908760e0f50051bc",
-        "path": "scripts/hunter_collect_learning_observations.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "3a6d8f741438ce0c3698d70dbaf92ac73bfe8944",
-        "path": "scripts/hunter_collect_sonar_observations.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "916ebf13ced8bb1586a72fc53eacd63452a4c849",
-        "path": "scripts/hunter_governance_review/bootstrap_external_review_469.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a771b97631395eab201963d0447a8c6d7c021643",
-        "path": "scripts/hunter_issue_agent_lifecycle.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "ad7173d30e29f9a53ec53898cc1df9fc77ee6f98",
-        "path": "scripts/hunter_pre_push.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "608b5f33f0919dc1d36e2d39e0e3e92a035a90f8",
-        "path": "scripts/hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "2a835b0b540a029b5556e27e0fb5ce8e0245fb37",
-        "path": "scripts/provision_source_handling_issue_authority.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "ea3f4f36cdb578c202d957669f6af972a05281b9",
-        "path": "src/hunter/automation/issue_agent_control.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a255c13d611d856ad36d8f063dc38678920342cd",
-        "path": "src/hunter/automation/issue_agent_knowledge.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a530fa383108764c8aa4d1407b6cdf61e4ca29e2",
-        "path": "src/hunter/automation/issue_agent_replacement_executor.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "65f88ebd12f70156603fb38e315d34db608eff9d",
-        "path": "src/hunter/automation/issue_agent_roles.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a21986f0304b643a1717b604d510f0ee87afbd41",
-        "path": "src/hunter/comparative_valuation/service.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "c6b728affd75db7890b9d8fd1037b9c823db7945",
-        "path": "src/hunter/discovery/repository.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "0b442d5a9b900fec3641712bc5ef5ce6650feb11",
-        "path": "src/hunter/evidence_intelligence/smart_prompt_routing.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "cbade86bccfecff906c5c2fbd21daade325537ad",
-        "path": "tests/test_comparative_valuation_v1.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "198d853ffbd9d70183519dea583fe7f8fd8cbea8",
-        "path": "tests/test_hunter_candidate_admission.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "c953dc1020559671f9e6abb9588dff9bbbd21045",
-        "path": "tests/test_hunter_canonicalization_candidate_pr.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "8192ac9e4ed57ecda851869f56f5cb0e6bf558ec",
-        "path": "tests/test_hunter_governance_cleanup.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "0288a5a3bca69e6b4af5106aea8ff2e210497f3a",
-        "path": "tests/test_hunter_knowledge_learning_workflow.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9f3ed3af82d08b4237e3fba88153932d2eaefa5c",
-        "path": "tests/test_hunter_pr_preflight.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "fee2e259d4c4200101830ba09146d956659c6260",
-        "path": "tests/test_hunter_pre_push.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "c55c6cd0a8ae24921a364493cc7fc8e106d6743f",
-        "path": "tests/test_hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "487ca1c6159c692d67b63d7275e46de59aec2069",
-        "path": "tests/test_issue_agent_candidate_topology.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "da5f7d0fd9f349bcac7ef762cf4a5c24f41b28f8",
-        "path": "tests/test_issue_agent_control.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "cfeee2187b553ecdd8b2364a77d0b44ded1ea9ef",
-        "path": "tests/test_issue_agent_knowledge.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "c13bd00a581b4ec8faa25b41aaf7232e15513415",
-        "path": "tests/test_issue_agent_lifecycle_cli_contract.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "09f482adf425a2355820534932fd8f1d7067a3e7",
-        "path": "tests/test_issue_agent_lifecycle_entry.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "1741f2cdfcfe54d16fe64ed0a0aa45845527d2a3",
-        "path": "tests/test_issue_agent_provisioner.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "7a086ed5d1543505832b97915df9924c98c9c3d2",
-        "path": "tests/test_issue_agent_remediation_acceptance.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "0922cd37b95ce6f851bfa0e4b1082ee6d1a916ef",
-        "path": "tests/test_issue_agent_remediation_reconcile.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "295fd68a34d59b38bf5c977d7acd3e3f9bf6bfaf",
-        "path": "tests/test_issue_agent_remediation_resolution.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "1951a6f44e599f281f921dac58e9d6309be81027",
-        "path": "tests/test_issue_agent_replacement_executor.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f6537dfefafad8b3aec5944786c4a4f9be568d39",
-        "path": "tests/test_issue_agent_roles.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "6d28c031c566ccaf4d20a01b51ac9365dd7fb114",
-        "path": "tests/test_issue_agent_workflows.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "544ac83eac32d0259a5bf9dd37c1c560333f8ba1",
-        "path": "tests/test_pr473_trusted_bridge_bootstrap.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "602453e1b180e489e0f1bb8fdace52a2c4b9d8ec",
-        "path": "tests/test_sonar_learning_observations.py",
+        "blob_sha": "641e8e35d79918dffe3a34ec1aa43e5736aad2aa",
+        "path": "scripts/hunter_pre_ready_review.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "635acdac021ba7908138929536d0cc6b387809fcf0b6440f266f817c31e9a75d"
+    "review_target_digest": "81cff2647927c219f1245daacbd0e0fc5e1ebc12b9a1887c8a981b3f272c3de4"
   },
-  "review_id": "8481e098b0fd27f1db37b4409134afd1b4e1090e1c89dfbd87ea7506d1df7124",
+  "review_id": "0d38ed31a4d68f9da5392801bae68425c8166a8888db889fd832a373fdacd679",
   "review_request": {
-    "claims_id": "8481e098b0fd27f1db37b4409134afd1b4e1090e1c89dfbd87ea7506d1df7124",
+    "claims_id": "0d38ed31a4d68f9da5392801bae68425c8166a8888db889fd832a373fdacd679",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
