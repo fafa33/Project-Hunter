@@ -223,14 +223,12 @@ def test_pull_request_target_does_not_run_admission_before_trusted_preflight_com
     assert "github.event_name == 'pull_request_target'" not in condition
 
 
-def test_draft_success_marks_ready_exact_head(monkeypatch):
-    calls = []
-    states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
-    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
+def test_draft_success_waits_for_owner_ready_without_mutation(monkeypatch, capsys):
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: _pr(draft=True))
     monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
-    monkeypatch.setattr(admission, "mark_ready", lambda token, node: calls.append(node) or True)
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: (_ for _ in ()).throw(AssertionError("owner-only Ready")))
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, HEAD) == 0
-    assert calls == ["PR_test_node"]
+    assert "awaiting owner Draft-to-Ready" in capsys.readouterr().out
 
 
 def test_draft_stale_head_blocks_transition(monkeypatch):
@@ -260,11 +258,11 @@ def test_draft_fork_blocks_transition(monkeypatch):
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1
 
 
-def test_draft_permission_failure_remains_draft(monkeypatch):
+def test_draft_owner_control_does_not_require_mutation_permission(monkeypatch):
     monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: _pr(draft=True))
     monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
     monkeypatch.setattr(admission, "mark_ready", lambda *_: False)
-    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 0
 
 
 def test_duplicate_ready_event_does_not_mark_again(monkeypatch):
@@ -300,7 +298,7 @@ def test_mark_ready_requires_graphql_confirmation(monkeypatch):
     assert admission.mark_ready("token", "PR_test_node") is False
 
 
-def test_issue_616_policy_authorizes_automatic_ready_without_owner_comment(monkeypatch):
+def test_temporary_owner_ready_does_not_require_owner_comment(monkeypatch):
     """Canonical exact-head proof, not a per-HEAD owner comment, authorizes Ready."""
     states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
     monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
@@ -313,7 +311,7 @@ def test_issue_616_policy_authorizes_automatic_ready_without_owner_comment(monke
     called = []
     monkeypatch.setattr(admission, "mark_ready", lambda _token, node: (called.append(node), True)[1])
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, HEAD) == 0
-    assert called == ["PR_test_node"]
+    assert called == []
 
 
 def test_agents_policy_separates_ready_from_merge_approval():
@@ -331,11 +329,11 @@ def test_ambiguous_mutation_with_confirmed_ready_is_success(monkeypatch):
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 0
 
 
-def test_ambiguous_mutation_still_draft_is_failure(monkeypatch):
+def test_draft_success_without_mutation_remains_draft(monkeypatch):
     monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: _pr(draft=True))
     monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
     monkeypatch.setattr(admission, "mark_ready", lambda *_: False)
-    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 0
 
 
 def test_workflow_mints_app_token_with_exact_ready_mutation_scopes() -> None:
@@ -393,7 +391,7 @@ def test_reads_use_primary_token_mutations_use_app_token(monkeypatch) -> None:
         == 0
     )
     assert read_calls and all(token == "read-token" for token in read_calls)
-    assert mutation_calls == ["app-mutation-token"]
+    assert mutation_calls == []
 
 
 def test_missing_mutation_token_falls_back_to_primary_token(monkeypatch) -> None:
@@ -420,7 +418,7 @@ def test_missing_mutation_token_falls_back_to_primary_token(monkeypatch) -> None
         )
         == 0
     )
-    assert mutation_calls == ["only-token"]
+    assert mutation_calls == []
 
 
 def test_main_sources_mutation_token_from_dedicated_env_var(monkeypatch) -> None:
