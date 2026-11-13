@@ -881,6 +881,108 @@ def test_a_confirmed_finding_whose_family_tag_is_inapplicable_falls_back_to_pend
     assert receipt["family_id"] is None
 
 
+def test_a_matched_family_receipt_also_classifies_the_finding_for_dpm(store: state.GitLedgerStore) -> None:
+    """Issue #586 requirement 3 ("feed prevention into canonical DPM/SPM agent context"): a family
+
+    an owner names only in the disposition reply -- not in the original finding comment, the
+    realistic case since the reviewing bot rarely knows the family -- must still reach DPM/SPM
+    the same way a tag-in-message match already does, not stay invisible to classification.
+    """
+    view, written, refusals = ingest_with_receipt(store, receipt_observation(family="DFF-049"))
+    assert not refusals
+    identity = knowledge.finding_id(1, 561, 11)
+    assert written == 3  # finding_ingested + knowledge_receipt + the new finding_classified
+    classification = view.findings[identity].classification
+    assert classification is not None
+    assert classification["outcome"] == "matched" and classification["family_id"] == "DFF-049"
+    overlay = knowledge.overlay_families(view)
+    assert any(entry["id"] == f"KF-{identity[:12]}" and "DFF-049" in entry["invariant"] for entry in overlay)
+
+
+def test_a_pending_adjudication_receipt_never_classifies_the_finding(store: state.GitLedgerStore) -> None:
+    view, written, refusals = ingest_with_receipt(store, receipt_observation())  # no family tag at all
+    assert not refusals
+    identity = knowledge.finding_id(1, 561, 11)
+    assert written == 2  # finding_ingested + knowledge_receipt only
+    assert view.findings[identity].classification is None
+
+
+def test_a_matched_family_receipt_never_double_classifies_when_the_message_already_carries_the_tag(
+    store: state.GitLedgerStore,
+) -> None:
+    """ingestion_writes already owns classification when the *original* comment carries the tag;
+
+    receipt_writes must never add a second, potentially conflicting finding_classified record.
+    """
+    tagged = receipt_observation(family="DFF-049", message=observation()["message"] + " [family:DFF-049]")
+    view, written, refusals = ingest_with_receipt(store, tagged)
+    assert not refusals
+    identity = knowledge.finding_id(1, 561, 11)
+    # finding_ingested + the one finding_classified (from ingestion_writes's own tag match) +
+    # knowledge_receipt -- never a second finding_classified for the same finding.
+    assert written == 3
+    assert view.findings[identity].classification["family_id"] == "DFF-049"
+
+
+def test_a_matched_family_receipt_never_reclassifies_an_already_classified_finding(
+    store: state.GitLedgerStore,
+) -> None:
+    """A finding already deterministically classified by an earlier pass must never be
+
+    reclassified by a later receipt, even when the receipt's own family link would otherwise
+    qualify -- first classification wins, exactly like ingestion_writes's own rule.
+    """
+    tagged_message = observation()["message"] + " [family:DFF-049]"
+    view1, _, _ = ingest_with_receipt(store, observation(message=tagged_message))
+    identity = knowledge.finding_id(1, 561, 11)
+    assert view1.findings[identity].classification["family_id"] == "DFF-049"
+    # A later pass: the owner's reply now also carries a matching family tag. The already-existing
+    # classification must be left exactly as it is -- no second write is even attempted, same path
+    # and message (and therefore fingerprint) as the original ingestion.
+    view2, written2, refusals2 = ingest_with_receipt(
+        store, receipt_observation(family="DFF-049", message=tagged_message)
+    )
+    assert not refusals2
+    assert written2 == 1  # only the new knowledge_receipt; no finding_classified attempted
+    assert view2.findings[identity].classification["family_id"] == "DFF-049"
+
+
+@pytest.mark.parametrize("earlier_pass", [True, False])
+def test_receipt_preserves_classification_inherited_from_another_finding_in_the_batch(
+    store: state.GitLedgerStore, monkeypatch, earlier_pass: bool
+) -> None:
+    # Registry families can overlap. The fingerprint match is the ingestion planner's
+    # first deterministic classification, even though this finding's own text has no tag.
+    monkeypatch.setitem(globals(), "applicability", lambda family, _path: family in {"DFF-049", "DFF-028"})
+    original = observation(11, message="An exact-head invariant must hold. [family:DFF-049]")
+    later = receipt_observation(12, family="DFF-028", message="An exact-head invariant must hold.")
+    if earlier_pass:
+        ingest_with_receipt(store, original)
+        batch = (later,)
+    else:
+        batch = (original, later)
+    view, _, refusals = ingest_with_receipt(store, *batch)
+    assert not refusals
+    finding = view.findings[knowledge.finding_id(1, 561, 12)]
+    assert finding.classification["family_id"] == "DFF-049"
+    assert finding.receipt["family_id"] == "DFF-028"
+    # A replay is still insert-only: the two planners never fight over the same key.
+    _, written_again, refusals_again = ingest_with_receipt(store, *batch)
+    assert written_again == 0 and not refusals_again
+
+
+def test_untrusted_original_tag_cannot_suppress_authenticated_owner_receipt_classification(
+    store: state.GitLedgerStore,
+) -> None:
+    finding = receipt_observation(
+        family="DFF-049", reviewer="external-reviewer", message="An exact-head invariant must hold. [family:DFF-028]"
+    )
+    view, written, refusals = ingest_with_receipt(store, finding)
+    assert not refusals and written == 3
+    classified = view.findings[knowledge.finding_id(1, 561, 11)]
+    assert classified.classification["family_id"] == "DFF-049"
+
+
 def test_a_finding_without_complete_receipt_evidence_receives_no_receipt(store: state.GitLedgerStore) -> None:
     view, written, refusals = ingest_with_receipt(store, observation())
     assert written == 1 and not refusals  # only finding_ingested; receipt_eligible is absent

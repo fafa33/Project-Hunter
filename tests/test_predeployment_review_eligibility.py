@@ -351,24 +351,17 @@ def test_stop_work_lookup_retries_without_logging_policy_derived_endpoint(monkey
 
 
 @pytest.mark.parametrize("pr", [738, 9001])
-def test_standing_policy_reviews_future_matching_prs_without_final_acceptance(tmp_path, monkeypatch, pr):
-    """The standing catalog is reusable; candidate metadata still grants nothing."""
+def test_proposed_standing_policy_reviews_future_matching_prs_without_final_acceptance(tmp_path, pr):
+    """The inert deployment patch must work without a per-PR authorization record."""
+    base = "08f565fd14e9ded796a63c9fc45dce6f8997aeff"
     workflow = ".github/workflows/hunter-issue-agent-knowledge.yml"
     root = Path(review.__file__).resolve().parents[1]
-    read_bytes = Path.read_bytes
-    monkeypatch.setattr(
-        Path,
-        "read_bytes",
-        lambda path: b"candidate producer differs\n" if path == root / workflow else read_bytes(path),
-    )
     for path in ("docs/CODE_WRITE_POLICY.json", workflow):
         target = tmp_path / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(
-            subprocess.check_output(["git", "show", f"08f565fd14e9ded796a63c9fc45dce6f8997aeff:{workflow}"], cwd=root)
-            if path == workflow
-            else (root / path).read_bytes()
-        )
+        target.write_bytes(subprocess.check_output(["git", "show", f"{base}:{path}"], cwd=root))
+    patch = root / "docs/ISSUE_586_PERMANENT_REVIEW_POLICY.patch"
+    subprocess.run(["git", "apply", str(patch)], cwd=tmp_path, check=True, capture_output=True)
     proposed = json.loads((tmp_path / "docs/CODE_WRITE_POLICY.json").read_text())
     policy = proposed["review_progression"]["review_authority"]["automatic_predeployment_review"]
     dependency = policy["dependencies"][0]
