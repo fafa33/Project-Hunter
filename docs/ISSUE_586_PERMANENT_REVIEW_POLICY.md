@@ -106,11 +106,14 @@ metadata through `trusted_tip`/`trusted_revision`. Neither trace establishes an
 Authorization-header or token leak, and the new policy is absent on main, so
 that lookup is currently inactive. The alert is nevertheless open on `68500e4`.
 
-The PR correction keeps policy-derived endpoint values out of retry diagnostics
-by passing a static operation label through the existing transport. A focused
+The PR correction keeps endpoint values out of all repository REST retry labels,
+with a method-only default and an optional static operation label. The first
+static-label-only correction at `bf74751` preserved a path-bearing fallback;
+analysis 2157994349 still traced that fallback into the same sink. The fallback
+now contains no path values either. A focused
 regression exercises a real retry and confirms unchanged endpoint delivery,
 bounded retry behavior, visible operation context and absence of endpoint/token
-values in output. No query suppression, alert dismissal, sensitive-variable
+values in output, with and without an explicit label. No query suppression, alert dismissal, sensitive-variable
 rename, shared transport refactor or security threshold change is used. Only a
 fresh exact-head CodeQL result can establish its hosted disposition. General raw
 transport-error logging is owned by the shared GitHub governance transport and

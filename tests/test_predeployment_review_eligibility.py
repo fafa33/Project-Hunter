@@ -320,7 +320,8 @@ def test_writer_regeneration_is_deterministic_and_retains_unresolved_findings(tm
     assert changed["claims"]["findings"] == [finding]
 
 
-def test_stop_work_lookup_retries_without_logging_policy_derived_endpoint(monkeypatch, capsys):
+@pytest.mark.parametrize("operation", [None, "GET security STOP-WORK Issue state"])
+def test_stop_work_lookup_retries_without_logging_policy_derived_endpoint(monkeypatch, capsys, operation):
     import hunter_github_transport as transport
     import hunter_governance_review_v2 as gov
 
@@ -338,12 +339,12 @@ def test_stop_work_lookup_retries_without_logging_policy_derived_endpoint(monkey
         "credential-must-not-be-logged",
         "GET",
         "issues/603",
-        diagnostic_operation="GET security STOP-WORK Issue state",
+        diagnostic_operation=operation,
     )
     assert result == {"state": "closed"}
     assert attempts == ["https://api.github.com/repos/fafa33/Project-Hunter/issues/603"] * 2
     diagnostics = capsys.readouterr().out
-    assert "GET security STOP-WORK Issue state" in diagnostics
+    assert (operation or "GET repository API request") in diagnostics
     assert "retrying" in diagnostics
     assert "issues/603" not in diagnostics
     assert "credential-must-not-be-logged" not in diagnostics

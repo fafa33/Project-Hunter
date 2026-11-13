@@ -120,8 +120,9 @@ def request_json(
     because a global endpoint addressed under ``/repos/...`` is a permanent 404
     that reads like an authorization failure.
 
-    A static ``diagnostic_operation`` keeps authority-derived path values out
-    of retry logs without changing the endpoint, credentials or retry policy.
+    Retry diagnostics never include path values. A static
+    ``diagnostic_operation`` can name the operation without changing the
+    endpoint, credentials or retry policy.
     """
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     suffix = f"/{path}" if path else ""
@@ -131,7 +132,7 @@ def request_json(
         headers={},
         data=data,
         token=token,
-        what=diagnostic_operation if diagnostic_operation is not None else f"{method} {path}",
+        what=diagnostic_operation if diagnostic_operation is not None else f"{method} repository API request",
     )
 
 

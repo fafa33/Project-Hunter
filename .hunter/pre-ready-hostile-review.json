@@ -21,7 +21,7 @@
       },
       {
         "criterion": "focused tests: multiple sources, merged prs, duplicate events, lifecycle transitions, and downstream prevention consumption",
-        "evidence": "635 focused tests and hosted 8461 passed/20 skipped are verified at prior HEAD 68500e4. Continuation changes passed 468 affected eligibility, governance, transport, exact-head, orchestrator and collector tests. This includes a new real retry diagnostic regression and isolated proposed-policy application on current/future PR identities. Ruff, Black and focused Mypy passed. No unchanged full suite was rerun locally.",
+        "evidence": "Prior 68500e4: 635 focused tests and exact-head hosted 8461 passed/20 skipped. Initial continuation: 468 affected review/transport/policy tests passed. After exact-head CodeQL exposed the diagnostic fallback, a default-label regression was RED; all 117 directly affected tests passed after the path-free fallback fix. Ruff, Black and focused Mypy passed. Unchanged knowledge/orchestrator evidence is reused; no local full suite repeated.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
@@ -64,7 +64,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Existing malformed-closure and empty-acceptance guards stay enforced. 468 affected tests passed, including the new static STOP-WORK retry-diagnostic regression and real standing-policy patch application for two PRs. Candidate-only policy and open STOP-WORK cannot authorize review.",
+        "evidence": "468 affected tests passed for standing-policy proposal and static-label continuation. New exact-head CodeQL exposed the remaining path-bearing fallback. A real retry regression failed for the default case before its correction; 117 directly affected tests then passed with both explicit and default labels path-free. Candidate policy and open STOP-WORK still deny.",
         "family": "DFF-004",
         "outcome": "repaired"
       },
@@ -119,7 +119,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "68500e4 exact-head preflight 43352243077 and trusted validation 43352247211 are confirmed SUCCESS. This continuation has 468 focused affected tests and lint/type proof; no prior-head hosted proof, live policy deployment, canonical reviewer invocation or production acceptance is claimed for the new head.",
+        "evidence": "68500e4 preflight 43352243077 and trusted validation 43352247211 are confirmed success. bf74751 static-label-only remediation did not clear CodeQL; analysis 2157994349 proved the fallback path. Current correction passed 117 affected tests and lint/type checks; no current hosted success, policy deployment or canonical reviewer invocation is fabricated.",
         "family": "DFF-015",
         "outcome": "clear"
       },
@@ -273,7 +273,7 @@
     "issue": "586",
     "review_target": [
       {
-        "blob_sha": "91f09c5bc3e32b5550ea68ed244ecd7e69bfa3bc",
+        "blob_sha": "922bad97a34ef30f326b9bb03db86683605f7a88",
         "path": "docs/ISSUE_586_PERMANENT_REVIEW_POLICY.md",
         "previous_path": "",
         "status": "added"
@@ -285,7 +285,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "da404b28d136d881f2319acaaa4567b3b0daaabc",
+        "blob_sha": "06e28d6dbc0daf80003bd25d286ffa4890baf95e",
         "path": "tests/test_predeployment_review_eligibility.py",
         "previous_path": "",
         "status": "added"
@@ -309,7 +309,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "354c864e90b409f350a420c201e1b683c1abad52",
+        "blob_sha": "0ba51b9e0754e049e7a67704f5333102edd86a3f",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
@@ -351,16 +351,16 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "336a77f6ef22c39f7cb79a734a95e010205a46896f3e871804c1b4a5b1a8e980"
+    "review_target_digest": "0c59a91993e896d314adafb490b016027eec143d82b865f506ff8124f887f03d"
   },
   "review_eligibility": {
     "mode": "pre_deployment",
     "pr_number": 738,
     "repository": "fafa33/Project-Hunter"
   },
-  "review_id": "3d3a2ffc21afffeea0b111d18b0a9d71340f770c55804666871813022ae1d119",
+  "review_id": "e8d314937f7a05cd005eb8111c1977b979a8c6cd7d7be1b16421e2834d163283",
   "review_request": {
-    "claims_id": "3d3a2ffc21afffeea0b111d18b0a9d71340f770c55804666871813022ae1d119",
+    "claims_id": "e8d314937f7a05cd005eb8111c1977b979a8c6cd7d7be1b16421e2834d163283",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
