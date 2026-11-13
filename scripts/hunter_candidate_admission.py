@@ -176,21 +176,9 @@ def enforce_candidate_admission(
         ):
             print(f"PR #{pr_number} stale before Ready transition")
             return 1
-        mutation_confirmed = mark_ready(mutation_token, str(latest["node_id"]))
-        # An ambiguous transport failure may follow a committed GitHub mutation.
-        # Re-read authoritative PR state before deciding whether the operation failed.
-        confirmed = governance.read_mergeability(repository, token, pr_number)
-        if (
-            confirmed.get("state") != "open"
-            or confirmed.get("draft") is not False
-            or (confirmed.get("head") or {}).get("sha") != head_sha
-            or (confirmed.get("base") or {}).get("sha") != (pr.get("base") or {}).get("sha")
-        ):
-            print(f"PR #{pr_number} Ready confirmation failed")
-            return 1
-        if not mutation_confirmed:
-            print(f"PR #{pr_number} Ready mutation response ambiguous; GitHub state confirms Ready")
-        print(f"PR #{pr_number} automatically Ready on {head_sha}")
+        # Temporary owner-controlled Ready transition. The verified proof and
+        # exact-head/base/fork safety checks above remain mandatory.
+        print(f"PR #{pr_number} admission passed on {head_sha}; awaiting owner Draft-to-Ready transition")
         return 0
     if admission_state == "success":
         admission_state, description = ready_checks(repository, token, head_sha, pr.get("mergeable"), pr_number)
