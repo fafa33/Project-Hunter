@@ -3,6 +3,8 @@
 import copy
 import hashlib
 import json
+import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import hunter_connector_write_ingress as ingress
@@ -265,8 +267,9 @@ def test_canonical_governance_derives_eligibility_from_trusted_state(tmp_path, m
     )
     reads = []
 
-    def request(_repo, _token, _method, path):
+    def request(_repo, _token, _method, path, **kwargs):
         if path == "issues/603":
+            assert kwargs == {"diagnostic_operation": "GET security STOP-WORK Issue state"}
             return {"state": "open" if case == "stop-open" else "closed", "closed_by": {"login": "fafa33"}}
         assert path == "pulls/738"
         reads.append(path)
@@ -315,3 +318,104 @@ def test_writer_regeneration_is_deterministic_and_retains_unresolved_findings(tm
     changed = review.prepare_request(**kwargs)
     assert changed["review_id"] != rebuilt["review_id"]
     assert changed["claims"]["findings"] == [finding]
+
+
+def test_stop_work_lookup_retries_without_logging_policy_derived_endpoint(monkeypatch, capsys):
+    import hunter_github_transport as transport
+    import hunter_governance_review_v2 as gov
+
+    attempts = []
+
+    def rest(**kwargs):
+        attempts.append(kwargs["url"])
+        if len(attempts) == 1:
+            raise transport.GitHubRequestError("temporary upstream failure", category="transient", retry_after=0)
+        return {"state": "closed"}
+
+    monkeypatch.setattr(transport, "rest_json", rest)
+    result = gov.request_json(
+        "fafa33/Project-Hunter",
+        "credential-must-not-be-logged",
+        "GET",
+        "issues/603",
+        diagnostic_operation="GET security STOP-WORK Issue state",
+    )
+    assert result == {"state": "closed"}
+    assert attempts == ["https://api.github.com/repos/fafa33/Project-Hunter/issues/603"] * 2
+    diagnostics = capsys.readouterr().out
+    assert "GET security STOP-WORK Issue state" in diagnostics
+    assert "retrying" in diagnostics
+    assert "issues/603" not in diagnostics
+    assert "credential-must-not-be-logged" not in diagnostics
+
+
+@pytest.mark.parametrize("pr", [738, 9001])
+def test_proposed_standing_policy_reviews_future_matching_prs_without_final_acceptance(tmp_path, pr):
+    """The inert deployment patch must work without a per-PR authorization record."""
+    base = "08f565fd14e9ded796a63c9fc45dce6f8997aeff"
+    workflow = ".github/workflows/hunter-issue-agent-knowledge.yml"
+    root = Path(review.__file__).resolve().parents[1]
+    for path in ("docs/CODE_WRITE_POLICY.json", workflow):
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(subprocess.check_output(["git", "show", f"{base}:{path}"], cwd=root))
+    patch = root / "docs/ISSUE_586_PERMANENT_REVIEW_POLICY.patch"
+    subprocess.run(["git", "apply", str(patch)], cwd=tmp_path, check=True, capture_output=True)
+    proposed = json.loads((tmp_path / "docs/CODE_WRITE_POLICY.json").read_text())
+    policy = proposed["review_progression"]["review_authority"]["automatic_predeployment_review"]
+    dependency = policy["dependencies"][0]
+    criteria = tuple(dependency["criteria"])
+    changes = (ingress.ConnectorFileChange("modified", dependency["changed_paths"][0], "", "c" * 40),)
+    claims = review.build_claims(
+        issue="586",
+        base_ref="main",
+        base_sha=BASE,
+        changes=changes,
+        acceptance_criteria=tuple(
+            {
+                "id": f"AC-{i}",
+                "criterion": c,
+                "verdict": "pending-deployment",
+                "evidence": "deployment proof remains outstanding",
+            }
+            for i, c in enumerate(criteria, 1)
+        ),
+        defect_families=(),
+        findings=(),
+        adversarial_dimensions=review.REQUIRED_ADVERSARIAL_DIMENSIONS,
+    )
+    doc = review.document_for(
+        claims, review_eligibility={"mode": "pre_deployment", "repository": policy["repository"], "pr_number": pr}
+    )
+    doc["review_request"] = {"schema": "hunter.review-request.v1", "claims_id": doc["review_id"]}
+    facts = {
+        "repository": policy["repository"],
+        "pr_number": pr,
+        "issue": "586",
+        "head_sha": HEAD,
+        "base_sha": BASE,
+        "preflight_state": "success",
+        "ingress_state": "success",
+        "closed_stop_work_issues": [603],
+    }
+    kwargs = dict(base_sha=BASE, changes=changes, families=(), issue_criteria=criteria, head_sha=HEAD)
+    # Candidate-side copy is not authority, even when the proposed policy is valid.
+    doc["candidate_policy"] = policy
+    assert (
+        review.verify_review_request(doc, **kwargs, eligibility_facts=facts).state == "awaiting-trusted-review-policy"
+    )
+    assert (
+        review.verify_review_request(
+            doc, **kwargs, eligibility_facts=facts, trusted_review_policy=policy, trusted_root=tmp_path
+        ).state
+        == "predeployment-review-eligible"
+    )
+    facts["closed_stop_work_issues"] = []
+    assert (
+        review.verify_review_request(
+            doc, **kwargs, eligibility_facts=facts, trusted_review_policy=policy, trusted_root=tmp_path
+        ).state
+        == "awaiting-trusted-review-policy"
+    )
+    doc.pop("review_request")
+    assert not review.verify_claims(doc, **kwargs, require_authority=False).ok

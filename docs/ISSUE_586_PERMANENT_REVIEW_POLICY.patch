@@ -1,0 +1,40 @@
+--- a/docs/CODE_WRITE_POLICY.json
++++ b/docs/CODE_WRITE_POLICY.json
+@@ -233,7 +233,36 @@
+       },
+       "coverage_scopes": [],
+       "acceptance_requirements": [],
+-      "fast_fallback": "disabled-until-health-gated"
++      "fast_fallback": "disabled-until-health-gated",
++      "automatic_predeployment_review": {
++        "schema": "hunter.predeployment-review-policy.v1",
++        "repository": "fafa33/Project-Hunter",
++        "authorized_by": "fafa33",
++        "authorization": "Issue #586 standing review-only authorization; effective only after separately approved protected-main deployment",
++        "review_only": true,
++        "stop_work_issues": [
++          603
++        ],
++        "dependencies": [
++          {
++            "issue": "586",
++            "criteria": [
++              "remove reviewer-pool membership filters from knowledge ingestion (without altering independent review gates). capture all pr findings from github review comments and sonar/ci errors through the existing pipeline",
++              "record fix, resolution and test outcomes; link to original finding and feed prevention into canonical dpm/spm agent context for later prs",
++              "prove live ledger counts and prevention materialization on real prs. do not claim success from a workflow's existence alone"
++            ],
++            "changed_paths": [
++              ".github/workflows/hunter-issue-agent-knowledge.yml",
++              "scripts/hunter_issue_agent_lifecycle.py",
++              "src/hunter/automation/issue_agent_knowledge.py"
++            ],
++            "trust_root": {
++              "path": ".github/workflows/hunter-issue-agent-knowledge.yml",
++              "sha256": "d4a5ff2e2cc3ae19f5c7c31b8f94407470562289a132eee504438f72e40b7b10"
++            }
++          }
++        ]
++      }
+     },
+     "finding_resolution": "a fixed review finding resolves only with structured evidence: the exact-head correction commit and a regression test committed in the change set, verified fail-closed before Merge Readiness",
+     "requires_current_head_review_authority": false,

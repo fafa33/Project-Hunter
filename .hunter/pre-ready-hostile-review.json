@@ -21,7 +21,7 @@
       },
       {
         "criterion": "focused tests: multiple sources, merged prs, duplicate events, lifecycle transitions, and downstream prevention consumption",
-        "evidence": "635 tests passed across tests/test_predeployment_review_eligibility.py, test_exact_head_review_authority.py, test_external_writer_review_head_recheck.py, test_pre_ready_issue_validation.py, test_hunter_governance_review_v2.py, test_hunter_review_orchestrator.py, test_review_orchestrator_collector_finalization.py, test_hunter_knowledge_learning_workflow.py, test_issue_agent_knowledge.py and test_issue_agent_lifecycle_entry.py. Two additional guard regressions were observed RED then GREEN in this session.",
+        "evidence": "635 focused tests and hosted 8461 passed/20 skipped are verified at prior HEAD 68500e4. Continuation changes passed 468 affected eligibility, governance, transport, exact-head, orchestrator and collector tests. This includes a new real retry diagnostic regression and isolated proposed-policy application on current/future PR identities. Ruff, Black and focused Mypy passed. No unchanged full suite was rerun locally.",
         "id": "AC-4",
         "verdict": "satisfied"
       },
@@ -64,7 +64,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "RED then GREEN: all-not-applicable requests previously became valid, and malformed closure data raised TypeError. Both now deny; unknown verdicts and missing policy remain rejected.",
+        "evidence": "Existing malformed-closure and empty-acceptance guards stay enforced. 468 affected tests passed, including the new static STOP-WORK retry-diagnostic regression and real standing-policy patch application for two PRs. Candidate-only policy and open STOP-WORK cannot authorize review.",
         "family": "DFF-004",
         "outcome": "repaired"
       },
@@ -119,7 +119,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "635 focused tests passed; no hosted proof or live receipt/SPM success is claimed for this new candidate before publication.",
+        "evidence": "68500e4 exact-head preflight 43352243077 and trusted validation 43352247211 are confirmed SUCCESS. This continuation has 468 focused affected tests and lint/type proof; no prior-head hosted proof, live policy deployment, canonical reviewer invocation or production acceptance is claimed for the new head.",
         "family": "DFF-015",
         "outcome": "clear"
       },
@@ -214,7 +214,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate unit tests do not constitute trusted controller deployment or authority. Existing hosted trusted upgrade/replay remain required for this changed controller code.",
+        "evidence": "Static diagnostic label is used by the existing trusted consumer; no privileged candidate execution is introduced. Proposed policy patch is inert and active policy unchanged. New exact-head hosted trusted upgrade/replay remain required; previous-head green results are not reused.",
         "family": "DFF-040",
         "outcome": "clear"
       },
@@ -273,7 +273,19 @@
     "issue": "586",
     "review_target": [
       {
-        "blob_sha": "d354264e51e5dd0c0d1888b92a33fe0032e73701",
+        "blob_sha": "91f09c5bc3e32b5550ea68ed244ecd7e69bfa3bc",
+        "path": "docs/ISSUE_586_PERMANENT_REVIEW_POLICY.md",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "e285c82439c12e040c987adf281eb3d8cad110d7",
+        "path": "docs/ISSUE_586_PERMANENT_REVIEW_POLICY.patch",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "da404b28d136d881f2319acaaa4567b3b0daaabc",
         "path": "tests/test_predeployment_review_eligibility.py",
         "previous_path": "",
         "status": "added"
@@ -297,7 +309,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "abd6699d5f12d3c5cff13d979f8ce21df0ad6067",
+        "blob_sha": "354c864e90b409f350a420c201e1b683c1abad52",
         "path": "scripts/hunter_governance_review_v2.py",
         "previous_path": "",
         "status": "modified"
@@ -339,16 +351,16 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "7e6f1db7a28297c3caac1affcb18086b4edd2484aa53952f66f7767b23255269"
+    "review_target_digest": "336a77f6ef22c39f7cb79a734a95e010205a46896f3e871804c1b4a5b1a8e980"
   },
   "review_eligibility": {
     "mode": "pre_deployment",
     "pr_number": 738,
     "repository": "fafa33/Project-Hunter"
   },
-  "review_id": "e19cdcb069672537cac7da88cd43ae571e5dc4b20ae41817b0ea6af5934d3f21",
+  "review_id": "3d3a2ffc21afffeea0b111d18b0a9d71340f770c55804666871813022ae1d119",
   "review_request": {
-    "claims_id": "e19cdcb069672537cac7da88cd43ae571e5dc4b20ae41817b0ea6af5934d3f21",
+    "claims_id": "3d3a2ffc21afffeea0b111d18b0a9d71340f770c55804666871813022ae1d119",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

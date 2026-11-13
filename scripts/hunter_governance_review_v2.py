@@ -102,7 +102,15 @@ def check_reviewer_dispositions() -> tuple[bool, str]:
     return True, ""
 
 
-def request_json(repository: str, token: str, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+def request_json(
+    repository: str,
+    token: str,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    diagnostic_operation: str | None = None,
+) -> Any:
     """Repository-scoped REST request.
 
     ``path`` is always resolved *under* ``/repos/{repository}``. A handful of
@@ -111,6 +119,9 @@ def request_json(repository: str, token: str, method: str, path: str, payload: d
     those. Guessing which scope a path belongs to is deliberately not done here,
     because a global endpoint addressed under ``/repos/...`` is a permanent 404
     that reads like an authorization failure.
+
+    A static ``diagnostic_operation`` keeps authority-derived path values out
+    of retry logs without changing the endpoint, credentials or retry policy.
     """
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     suffix = f"/{path}" if path else ""
@@ -120,7 +131,7 @@ def request_json(repository: str, token: str, method: str, path: str, payload: d
         headers={},
         data=data,
         token=token,
-        what=f"{method} {path}",
+        what=diagnostic_operation if diagnostic_operation is not None else f"{method} {path}",
     )
 
 
@@ -2095,7 +2106,13 @@ def valid_current_review_request(
             for stop in (trusted_review_policy or {}).get("stop_work_issues", []):
                 if type(stop) is not int or stop <= 0:
                     return False, "malformed trusted STOP-WORK policy"
-                evidence = request_json(repository, token, "GET", f"issues/{stop}")
+                evidence = request_json(
+                    repository,
+                    token,
+                    "GET",
+                    f"issues/{stop}",
+                    diagnostic_operation="GET security STOP-WORK Issue state",
+                )
                 if (
                     isinstance(evidence, dict)
                     and evidence.get("state") == "closed"
