@@ -471,3 +471,51 @@ all closed on the same branch:
 Verification: 860 passed across the fourteen affected test files (ledger, collector, merge-readiness,
 candidate-admission, workflow-state, governance-shadow, and the review-orchestrator guard this PR's own
 `statuses: write` grant exercised). Ruff, Black and mypy green again on the full configured file list.
+
+**Obligation-fingerprint hardening (Copilot F1/F3, PR #737; Issue #586, 2026-11-13).** The prior round's
+freshness bound narrowed, but explicitly did not eliminate, the window described above: a `success`
+published before a thread resolved into a new obligation, or before a transient status-publish retry
+recovered, could still be trusted for up to `KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS`. This round binds the
+published verdict to the exact review-thread snapshot it was derived from, so the two described races are
+closed immediately rather than merely bounded by elapsed time:
+
+- `issue_agent_knowledge.review_thread_fingerprint` -- a pure, deterministic digest over the same
+  `{opening comment id: isResolved}` facts the collector already reads for `receipt_obligations`. It adds no
+  new authority: it hashes only raw, authenticated, already-public GitHub thread facts, never a
+  classification or comment content.
+- `hunter_issue_agent_lifecycle.cmd_knowledge_ingest` now fetches that snapshot unconditionally (previously
+  only when a disposition reply was present in the current comment page) and
+  `_publish_knowledge_receipt_status` embeds it as a `[rt:<16 hex>]` suffix on the verdict description. This
+  also means the status is no longer idempotent-skipped when only the live thread landscape moves, even if
+  the human-readable verdict text would have been unchanged, so `created_at` itself refreshes more often too.
+- `hunter_merge_readiness_v2.knowledge_receipt_verdict_bound` re-derives the identical fingerprint from a
+  fresh, independent live read (`_live_review_thread_resolutions`, the consumer's own GraphQL query over the
+  same shape) and downgrades a `success` or `failure` whose embedded snapshot no longer matches the live one
+  to `pending` -- in either direction, immediately, regardless of age. A verdict with no embedded snapshot
+  (every status published before this hardening) falls back unmodified to the unchanged age-bounded result,
+  so a legacy status is never newly blocked on a format it never had the chance to carry; the producer's
+  existing ~30-minute cadence republishes every live verdict with the snapshot attached. The hardened entry
+  point replaces `knowledge_receipt_verdict_from_statuses` at every production consumer that evaluates a
+  live, as-of-now decision -- `knowledge_receipt_state` (the live Merge Readiness gate and
+  `hunter_workflow_state.observe_pull_request`) and `hunter_candidate_admission.ready_checks` (the privileged
+  Draft→Ready promotion path) -- while `hunter_governance_shadow.project`, an explicitly documented
+  parity-comparison placeholder that already omits review-thread facts and performs no live GitHub calls of
+  its own, is left on the unchanged pure function rather than given a new network dependency it was never
+  designed to have.
+- **Residual boundary, not eliminated (adversarial analysis, Phase 3).** The fingerprint is sensitive to a
+  thread's `isResolved` transition and to threads appearing or disappearing, but not to a disposition reply
+  added to a thread that was *already* resolved when this verdict was computed, since no further resolve
+  action occurs to change the hashed fact; that ordering still falls back to the bare freshness bound alone,
+  unchanged from the prior round. A second, unavoidable TOCTOU window remains even when every fingerprint
+  matches: the live check and the human merge action it informs are two separate moments, so a thread can
+  still resolve in the interval between this read and the click -- now bounded to that human interval rather
+  than to the ~30-minute producer cadence, but never literally zero. Closing either residual gap fully would
+  need an event-driven "thread resolved" trigger feeding the producer, or re-deriving obligations inside the
+  readiness controller itself; both are out of this round's scope as a new workflow/authority this amendment
+  does not introduce, per the owner-bounded remediation that produced this hardening.
+
+Verification: the shared pure fingerprint function, the producer's embedding/truncation/idempotency
+behavior, the consumer's live re-derivation, pagination and malformed-payload handling, and the
+success/failure/pending symmetry of a fingerprint mismatch are covered in `test_issue_agent_knowledge.py`,
+`test_issue_agent_lifecycle_entry.py` and `test_hunter_merge_readiness_v2.py`. Ruff, Black and mypy green on
+every changed file and on the full configured file list (1035 source files).

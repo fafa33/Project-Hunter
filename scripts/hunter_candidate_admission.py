@@ -103,9 +103,11 @@ def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | N
         latest = max(governance_statuses, key=lambda s: int(s.get("id") or 0)) if governance_statuses else None
         # Copilot F6 (PR #737): StaticReadinessObservation no longer defaults this to success, so it
         # must be supplied explicitly -- reusing the statuses already fetched above, never a second
-        # network call, and the same trusted authentication/freshness/PR-binding checks the live
-        # merge-readiness controller applies.
-        knowledge_receipt = readiness.knowledge_receipt_verdict_from_statuses(statuses, pr_number)
+        # commit-status network call, and the same trusted authentication/freshness/PR-binding
+        # checks the live merge-readiness controller applies. ``_bound`` additionally re-validates
+        # a fingerprinted verdict against live review-thread state before this privileged Draft
+        # Promotion path trusts it (ADR 0039 L11 hardening, Copilot F1/F3, PR #737; Issue #586).
+        knowledge_receipt = readiness.knowledge_receipt_verdict_bound(statuses, pr_number)
         decision = readiness.evaluate(
             readiness.StaticReadinessObservation(
                 draft=False,

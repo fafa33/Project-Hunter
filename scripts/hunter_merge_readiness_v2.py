@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -254,6 +255,22 @@ def _status_age_seconds(status: dict[str, Any]) -> float | None:
     return (datetime.now(UTC) - created_at).total_seconds()
 
 
+def _trusted_receipt_status(statuses: list[Any], pr_number: int) -> dict[str, Any] | None:
+    """The single, authenticated, PR-bound Knowledge Receipt status, or ``None`` when absent."""
+
+    context = f"{KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}{pr_number}"
+    matches = [
+        status
+        for status in statuses
+        if isinstance(status, dict)
+        and status.get("context") == context
+        and str((status.get("creator") or {}).get("login") or "") == KNOWLEDGE_RECEIPT_TRUSTED_CREATOR
+    ]
+    if not matches:
+        return None
+    return max(matches, key=lambda entry: int(entry.get("id") or 0))
+
+
 def knowledge_receipt_verdict_from_statuses(statuses: list[Any], pr_number: int) -> tuple[str, str]:
     """ADR 0039 L11 (Issue #527): the fast-path Knowledge Receipt obligation, from an already-fetched
 
@@ -278,22 +295,15 @@ def knowledge_receipt_verdict_from_statuses(statuses: list[Any], pr_number: int)
       ``success`` posted before an obligation existed outlive its truth. A status older than
       ``KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS`` (comfortably wider than that cadence) is downgraded to
       ``pending`` rather than trusted forever -- bounding, not eliminating, the reliance on
-      catch-up, and never fabricating a ``failure`` verdict for a stale status either.
+      catch-up, and never fabricating a ``failure`` verdict for a stale status either. This bare
+      age bound is narrowed further, but never replaced, by ``knowledge_receipt_verdict_bound``.
     - **Fail-closed absence (F6).** No status, an unauthenticated one, or a read failure is
       ``pending`` -- never treated as a satisfied (``success``) obligation.
     """
 
-    context = f"{KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}{pr_number}"
-    matches = [
-        status
-        for status in statuses
-        if isinstance(status, dict)
-        and status.get("context") == context
-        and str((status.get("creator") or {}).get("login") or "") == KNOWLEDGE_RECEIPT_TRUSTED_CREATOR
-    ]
-    if not matches:
+    status = _trusted_receipt_status(statuses, pr_number)
+    if status is None:
         return "pending", f"Waiting for an authenticated Knowledge Receipt verdict for PR #{pr_number}"
-    status = max(matches, key=lambda entry: int(entry.get("id") or 0))
     age_seconds = _status_age_seconds(status)
     if age_seconds is None or age_seconds > KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS:
         return (
@@ -310,6 +320,143 @@ def knowledge_receipt_verdict_from_statuses(statuses: list[Any], pr_number: int)
     return "pending", description or "Knowledge Receipt verdict pending"
 
 
+#: Matches the ``[rt:<16 hex>]`` suffix ``hunter_issue_agent_lifecycle._publish_knowledge_receipt_status``
+#: appends to the verdict description (ADR 0039 L11 hardening, Copilot F1/F3, PR #737; Issue #586).
+_OBLIGATION_FINGERPRINT_PATTERN = re.compile(r"\[rt:([0-9a-f]{16})\]\s*$")
+
+
+def _embedded_obligation_fingerprint(statuses: list[Any], pr_number: int) -> str | None:
+    """The review-thread resolution fingerprint the trusted verdict was derived from, if any."""
+
+    status = _trusted_receipt_status(statuses, pr_number)
+    if status is None:
+        return None
+    match = _OBLIGATION_FINGERPRINT_PATTERN.search(str(status.get("description") or ""))
+    return match.group(1) if match else None
+
+
+_REVIEW_THREAD_RESOLUTION_QUERY = """
+query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        nodes { isResolved comments(first: 1) { nodes { databaseId } } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}
+"""
+
+
+def _live_review_thread_resolutions(pr_number: int) -> dict[int, bool]:
+    """The live ``{opening comment id: isResolved}`` map for *pr_number* -- the exact shape
+
+    ``hunter_collect_learning_observations._review_threads`` fetches, so both sides fingerprint
+    the identical facts (ADR 0039 L11 hardening, Copilot F1/F3, PR #737; Issue #586).
+    """
+
+    owner, name = REPO.split("/", 1)
+    cursor: str | None = None
+    result: dict[int, bool] = {}
+    while True:
+        data = graphql_json(
+            _REVIEW_THREAD_RESOLUTION_QUERY,
+            {"owner": owner, "name": name, "number": int(pr_number), "after": cursor},
+        )
+        threads = (((data or {}).get("repository") or {}).get("pullRequest") or {}).get("reviewThreads") or {}
+        nodes = threads.get("nodes")
+        info = threads.get("pageInfo") or {}
+        if not isinstance(nodes, list):
+            raise ValueError("review thread payload is malformed")
+        for node in nodes:
+            if not isinstance(node, dict) or not isinstance(node.get("isResolved"), bool):
+                raise ValueError("review thread evidence is malformed")
+            comments = (node.get("comments") or {}).get("nodes") if isinstance(node.get("comments"), dict) else None
+            if not isinstance(comments, list) or not comments or not isinstance(comments[0], dict):
+                raise ValueError("review thread opening comment is malformed")
+            comment_id = comments[0].get("databaseId")
+            if not isinstance(comment_id, int):
+                raise ValueError("review thread opening comment id is malformed")
+            result[comment_id] = node["isResolved"]
+        if not info.get("hasNextPage"):
+            return result
+        cursor = info.get("endCursor")
+        if not isinstance(cursor, str) or not cursor:
+            raise ValueError("review thread pagination cursor is malformed")
+
+
+def knowledge_receipt_obligation_fingerprint(pr_number: int) -> str | None:
+    """The live obligation fingerprint for *pr_number*, or ``None`` on any read failure.
+
+    Never a second obligation authority: only enough raw, authenticated, already-public
+    review-thread facts (never comment content, never a classification) to detect that the
+    landscape a cached Knowledge Receipt verdict was derived against has moved. ``None`` must be
+    treated exactly like any other unavailable evidence -- never as a match.
+    """
+
+    from hunter.automation.issue_agent_knowledge import review_thread_fingerprint
+
+    try:
+        resolutions = _live_review_thread_resolutions(pr_number)
+    except Exception:
+        return None
+    return review_thread_fingerprint(resolutions)
+
+
+def knowledge_receipt_verdict_bound(statuses: list[Any], pr_number: int) -> tuple[str, str]:
+    """``knowledge_receipt_verdict_from_statuses`` plus a live re-validation against the exact
+
+    review-thread snapshot the verdict was derived from (ADR 0039 L11 hardening, Copilot F1/F3,
+    PR #737; Issue #586). The bare age bound only narrows how long a thread that resolves (or a
+    publish retry that recovers) after publication can outlive its truth; this closes the window
+    for that exact case, immediately, regardless of age: a ``success`` or ``failure`` whose
+    embedded snapshot no longer matches the live one is downgraded to ``pending``, never upgraded,
+    and a transient failure to re-read live thread state is treated the same way -- never as a
+    silent pass-through to the (possibly now-stale) cached verdict. A verdict with no embedded
+    snapshot (every status published before this hardening) falls back to the unchanged
+    age-bounded result unmodified, so a legacy status is never blocked on a format it never had
+    the chance to carry; the very next producer pass republishes with the snapshot attached
+    (ADR 0039 L11's existing ~30-minute cadence), after which this check is live for that PR.
+
+    **Residual boundary (documented, not eliminated; owner decision required to close further).**
+    The fingerprint hashes only ``(opening comment id, isResolved)``: it detects a thread
+    resolving, or any thread appearing or disappearing, but not a disposition *reply* added to a
+    thread that was already resolved before this verdict was computed (no further resolve action
+    occurs, so ``isResolved`` never changes). That ordering still falls back to the bare
+    ``KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS`` bound alone, exactly as before this hardening. A second,
+    unavoidable window remains even when every fingerprint matches: the live check above and the
+    human merge action it informs are two separate moments (TOCTOU), so a thread could resolve in
+    the interval between this read and the click -- now bounded to the time a human takes to act
+    on a decision, not to the ~30-minute producer cadence, but never literally zero. Closing either
+    gap fully would require an event-driven trigger (a "thread resolved" webhook feeding the
+    producer) or re-deriving obligations inside this controller -- both out of scope here: the
+    former is new infrastructure, the latter a second obligation authority, and Phase 3 of this
+    remediation forbids inventing either as a merge-blocking gate.
+    """
+
+    state_value, detail = knowledge_receipt_verdict_from_statuses(statuses, pr_number)
+    if state_value == "pending":
+        return state_value, detail
+    embedded = _embedded_obligation_fingerprint(statuses, pr_number)
+    if embedded is None:
+        return state_value, detail
+    live_fingerprint = knowledge_receipt_obligation_fingerprint(pr_number)
+    if live_fingerprint is None:
+        return (
+            "pending",
+            f"Knowledge Receipt verdict for PR #{pr_number} could not be re-validated against live "
+            "review-thread state; waiting for readable evidence",
+        )
+    if live_fingerprint != embedded:
+        return (
+            "pending",
+            f"Knowledge Receipt verdict for PR #{pr_number} predates a review-thread change since "
+            "it was published; waiting for a refreshed verdict",
+        )
+    return state_value, detail
+
+
 def knowledge_receipt_state(head_sha: str, pr_number: int) -> tuple[str, str]:
     """I/O wrapper: fetch this exact head's commit statuses and derive the Knowledge Receipt verdict."""
 
@@ -317,7 +464,7 @@ def knowledge_receipt_state(head_sha: str, pr_number: int) -> tuple[str, str]:
         statuses = paged(f"commits/{head_sha}/statuses")
     except Exception as exc:
         return "pending", f"Knowledge Receipt evidence unavailable: {type(exc).__name__}: {exc}"
-    return knowledge_receipt_verdict_from_statuses(statuses, pr_number)
+    return knowledge_receipt_verdict_bound(statuses, pr_number)
 
 
 _REVIEW_THREADS_QUERY = """

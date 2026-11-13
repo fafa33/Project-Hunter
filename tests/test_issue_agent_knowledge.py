@@ -1098,6 +1098,42 @@ def test_the_verdict_counts_every_missing_obligation_among_several(store: state.
     assert "1 of 2" in detail
 
 
+# --- ADR 0039 L11 hardening (Copilot F1/F3, PR #737; Issue #586): obligation fingerprint --------
+
+
+def test_review_thread_fingerprint_is_deterministic() -> None:
+    assert knowledge.review_thread_fingerprint({1: True, 2: False}) == knowledge.review_thread_fingerprint(
+        {1: True, 2: False}
+    )
+
+
+def test_review_thread_fingerprint_is_order_independent() -> None:
+    assert knowledge.review_thread_fingerprint({1: True, 2: False}) == knowledge.review_thread_fingerprint(
+        {2: False, 1: True}
+    )
+
+
+def test_review_thread_fingerprint_changes_when_any_thread_resolves() -> None:
+    """The exact F1 signal: resolving one more thread must change the fingerprint, even though
+
+    every other thread's state is unchanged -- this is what lets a consumer detect that a cached
+    verdict now predates a new obligation, without re-deriving the obligation itself.
+    """
+    before = knowledge.review_thread_fingerprint({1: True, 2: False})
+    after = knowledge.review_thread_fingerprint({1: True, 2: True})
+    assert before != after
+
+
+def test_review_thread_fingerprint_changes_when_a_new_thread_appears() -> None:
+    before = knowledge.review_thread_fingerprint({1: True})
+    after = knowledge.review_thread_fingerprint({1: True, 2: False})
+    assert before != after
+
+
+def test_review_thread_fingerprint_of_no_threads_is_stable() -> None:
+    assert knowledge.review_thread_fingerprint({}) == knowledge.review_thread_fingerprint({})
+
+
 def test_receipt_writes_refuses_an_abbreviated_sha_instead_of_building_an_invalid_write(
     store: state.GitLedgerStore,
 ) -> None:

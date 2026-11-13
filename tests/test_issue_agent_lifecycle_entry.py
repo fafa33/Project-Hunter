@@ -168,9 +168,15 @@ def test_pr737_replay_uses_existing_signed_ledger_and_never_invents_receipts(tmp
     monkeypatch.setattr(lifecycle, "_store", lambda *_args, **_kw: store)
     monkeypatch.setattr(control, "require_anchor", lambda *_args: None)
     monkeypatch.setattr(control, "run_provenance", lambda *_args: provenance)
-    monkeypatch.setattr(collector, "collect", lambda *_args: observations)
+    monkeypatch.setattr(collector, "_review_threads", lambda *_args: {1: True, 2: False})
+    monkeypatch.setattr(collector, "collect", lambda *_args, **_kwargs: observations)
     published = []
-    monkeypatch.setattr(lifecycle, "_publish_knowledge_receipt_status", lambda *args: published.append(args))
+    published_kwargs = []
+    monkeypatch.setattr(
+        lifecycle,
+        "_publish_knowledge_receipt_status",
+        lambda *args, **kwargs: (published.append(args), published_kwargs.append(kwargs)),
+    )
     args = lifecycle._parser().parse_args(["knowledge-ingest", "--replay-pr737"])
     if not preflight_success:
         with pytest.raises(lifecycle.LifecycleRefused, match="MISSING_EVIDENCE"):
@@ -183,6 +189,9 @@ def test_pr737_replay_uses_existing_signed_ledger_and_never_invents_receipts(tmp
     assert len(view.findings) == 8
     assert all(finding.receipt is None and finding.proven is None for finding in view.findings.values())
     assert published[-1][5] == "failure"  # eight genuine obligations remain unsatisfied
+    # ADR 0039 L11 hardening (Copilot F1/F3, PR #737; Issue #586): cmd_knowledge_ingest fetches the
+    # live review-thread snapshot once and binds the published verdict to its fingerprint.
+    assert published_kwargs[-1]["obligation_fingerprint"] == knowledge.review_thread_fingerprint({1: True, 2: False})
     assert lifecycle.cmd_knowledge_ingest(config, args) == 0
     second_head, repeated = knowledge.read(store, trust=config.trust, provenance=provenance)
     assert second_head == first_head and len(repeated.findings) == 8
@@ -433,6 +442,92 @@ def test_knowledge_receipt_status_publish_truncates_to_the_github_description_li
     _method, _path, payload = calls[1]
     assert payload is not None
     assert len(payload["description"]) == 140
+
+
+def test_knowledge_receipt_status_publish_embeds_the_obligation_fingerprint() -> None:
+    """ADR 0039 L11 hardening (Copilot F1/F3, PR #737; Issue #586): the verdict binds to the exact
+
+    review-thread snapshot it was derived from, so a consumer can detect it has moved on.
+    """
+    calls: list[tuple[str, str, dict | None]] = []
+    collector = _FakeCollector({"statuses": []}, calls)
+    lifecycle._publish_knowledge_receipt_status(
+        collector,
+        "fafa33/Project-Hunter",
+        "token",
+        "a" * 40,
+        737,
+        "success",
+        "no obligation",
+        obligation_fingerprint="a" * 16,
+    )
+    _method, _path, payload = calls[1]
+    assert payload is not None
+    assert payload["description"] == f"no obligation [rt:{'a' * 16}]"
+
+
+def test_knowledge_receipt_status_publish_truncates_leaving_room_for_the_fingerprint_suffix() -> None:
+    calls: list[tuple[str, str, dict | None]] = []
+    collector = _FakeCollector({"statuses": []}, calls)
+    lifecycle._publish_knowledge_receipt_status(
+        collector,
+        "fafa33/Project-Hunter",
+        "token",
+        "a" * 40,
+        737,
+        "failure",
+        "x" * 200,
+        obligation_fingerprint="a" * 16,
+    )
+    _method, _path, payload = calls[1]
+    assert payload is not None
+    assert len(payload["description"]) == 140
+    assert payload["description"].endswith(f"[rt:{'a' * 16}]")
+
+
+def test_knowledge_receipt_status_publish_republishes_when_only_the_fingerprint_changed() -> None:
+    """Unlike an unchanged human-readable verdict, a moved review-thread snapshot is never
+
+    idempotent-skipped: the status (and its ``created_at``) must refresh so a consumer sees the
+    new snapshot, even though the verdict text alone would have looked unchanged.
+    """
+    calls: list[tuple[str, str, dict | None]] = []
+    combined = {
+        "statuses": [
+            {
+                "context": f"{lifecycle.KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}737",
+                "state": "success",
+                "description": f"no obligation [rt:{'a' * 16}]",
+            }
+        ]
+    }
+    collector = _FakeCollector(combined, calls)
+    lifecycle._publish_knowledge_receipt_status(
+        collector,
+        "fafa33/Project-Hunter",
+        "token",
+        "a" * 40,
+        737,
+        "success",
+        "no obligation",
+        obligation_fingerprint="b" * 16,
+    )
+    assert len(calls) == 2  # a real post, not a skip, despite the identical human-readable text
+    _method, _path, payload = calls[1]
+    assert payload is not None
+    assert payload["description"] == f"no obligation [rt:{'b' * 16}]"
+
+
+def test_knowledge_receipt_status_publish_without_a_fingerprint_is_unchanged() -> None:
+    """Backward compatibility: omitting ``obligation_fingerprint`` behaves exactly as before."""
+    calls: list[tuple[str, str, dict | None]] = []
+    collector = _FakeCollector({"statuses": []}, calls)
+    lifecycle._publish_knowledge_receipt_status(
+        collector, "fafa33/Project-Hunter", "token", "a" * 40, 737, "success", "no obligation"
+    )
+    _method, _path, payload = calls[1]
+    assert payload is not None
+    assert payload["description"] == "no obligation"
 
 
 def test_knowledge_receipt_status_publish_is_bound_to_pr_identity_not_only_the_head() -> None:

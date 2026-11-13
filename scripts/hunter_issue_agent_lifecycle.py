@@ -487,7 +487,14 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
         if pull.get("state") != "open" and not ((arguments.pr or replay_pr737) and pull.get("merged_at")):
             continue
         head, base = str(pull["head"]["sha"]), str(pull["base"]["sha"])
-        observations = collector.collect(configuration.repository, token, number, head, base)
+        # ADR 0039 L11 hardening (Copilot F1/F3, PR #737; Issue #586): fetched once, up front, so
+        # the verdict published below can bind to the exact review-thread snapshot it was derived
+        # from, not merely to the moment it was computed. Previously only fetched conditionally
+        # (inside collect(), when a disposition reply existed in this pass's comment page); now
+        # unconditional, because a legacy/no-obligation PR needs this snapshot too, to detect the
+        # thread that *first* resolves into a new obligation after this status is published.
+        thread_state = collector._review_threads(configuration.repository, token, number)
+        observations = collector.collect(configuration.repository, token, number, head, base, thread_state=thread_state)
         if replay_pr737:
             observations = _pr737_replay_scope(configuration, pull, observations)
             conclusion, run_id = control._preflight(github, configuration, PR737_REPLAY_HEAD)
@@ -540,9 +547,17 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
         verdict_state, verdict_detail = knowledge.receipt_verdict(
             view, observations, repository_id=configuration.repository_id, trusted_reviewers=trusted
         )
+        obligation_fingerprint = knowledge.review_thread_fingerprint(thread_state)
         try:
             _publish_knowledge_receipt_status(
-                collector, configuration.repository, token, head, number, verdict_state, verdict_detail
+                collector,
+                configuration.repository,
+                token,
+                head,
+                number,
+                verdict_state,
+                verdict_detail,
+                obligation_fingerprint=obligation_fingerprint,
             )
         except Exception as exc:
             print(f"PR #{number}: Knowledge Receipt status publish failed (non-fatal): {type(exc).__name__}: {exc}")
@@ -565,19 +580,33 @@ def _publish_knowledge_receipt_status(
     pr_number: int,
     state_value: str,
     description: str,
+    *,
+    obligation_fingerprint: str | None = None,
 ) -> None:
     """Idempotent transport publish: an unchanged verdict at this exact head is never republished.
 
     Published under ``GITHUB_TOKEN`` by the trusted ``hunter-issue-agent-knowledge.yml`` job, so
     GitHub itself records the creator as ``github-actions[bot]`` -- the identity
     ``hunter_merge_readiness_v2.KNOWLEDGE_RECEIPT_TRUSTED_CREATOR`` requires (Copilot F5, PR #737).
+
+    *obligation_fingerprint*, when supplied, is appended as a ``[rt:<digest>]`` suffix (ADR 0039
+    L11 hardening, Copilot F1/F3, PR #737; Issue #586): the live review-thread resolution snapshot
+    this verdict was derived from, so a consumer that independently re-reads that same live fact
+    can detect the verdict now predates a thread resolving into a new obligation -- without
+    becoming a second obligation authority itself. A status carrying no fingerprint (every status
+    published before this hardening) is unaffected; the consumer falls back to the unchanged
+    age-bounded verdict for those. Embedding it here, rather than relying on the verdict text
+    alone, also means any change to the live thread landscape is no longer idempotent-skipped,
+    so the status (and its ``created_at``) refreshes whenever the snapshot moves, not only when
+    the human-readable verdict changes.
     """
 
     context = f"{KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}{pr_number}"
     combined = collector.governance.request_json(repository, token, "GET", f"commits/{head_sha}/status")
     if not isinstance(combined, dict) or not isinstance(combined.get("statuses"), list):
         raise ValueError("malformed combined commit status response")
-    description = description[:140]
+    suffix = f" [rt:{obligation_fingerprint}]" if obligation_fingerprint else ""
+    description = description[: 140 - len(suffix)] + suffix
     previous = next(
         (entry for entry in combined["statuses"] if isinstance(entry, dict) and entry.get("context") == context),
         None,
