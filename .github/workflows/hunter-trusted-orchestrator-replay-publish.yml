@@ -158,7 +158,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.11.13"
+          python-version: "3.11.18"
 
       - name: Download replay evidence from exact triggering validation run
         id: download_replay
