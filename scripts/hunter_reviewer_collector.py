@@ -13,14 +13,16 @@ import io
 import json
 import os
 import re
+import signal
 import time
 import urllib.error
 import urllib.request
 import zipfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
+import hunter_github_transport as transport
 import hunter_governance_review_v2 as governance
 import hunter_pre_ready_review as review
 import hunter_review_orchestrator as orchestration
@@ -522,16 +524,22 @@ class Backend(Protocol):
     def acknowledged(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool: ...
 
 
-def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[dict[str, Any]]:
+def collect_attempts(
+    pool: dict[str, Any],
+    head: str,
+    backend: Backend,
+    *,
+    progress: Callable[[list[dict[str, Any]], dict[str, Any]], None] | None = None,
+) -> list[dict[str, Any]]:
     """Invoke every enabled reviewer in priority order and record what happened.
 
     Each invocation is budgeted twice, exactly as the pool declares it. The
     acknowledgement budget answers only "did this reviewer actually receive and
     start this exact-head job?", so a provider whose runner is absent yields to
     the next reviewer in seconds instead of parking the candidate for the whole
-    review budget. The review budget is separate and only starts mattering once
-    the invocation was acknowledged, so ordinary review execution time is never
-    read as unavailability. Both budgets are recorded on every attempt, because
+    review budget. The review deadline covers triggering, blocking reads and
+    retry waits, and never restarts on acknowledgement. Both budgets are
+    recorded on every attempt, because
     the trusted receipt verifier re-derives them from the pool.
 
     A reviewer the pool marks triage-only (``authority_eligible`` false) has its
@@ -544,41 +552,82 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
     for agent in agents:
         count = 1 + (pool["timeout_policy"]["retries_per_agent"] if agent["retryable"] else 0)
         for number in range(1, count + 1):
-            if backend.head() != head:
-                raise ValueError("HEAD changed before reviewer invocation")
-            trigger = backend.trigger(agent, number)
             start = backend.now()
             ack_deadline = start + agent["ack_timeout_seconds"]
             review_deadline = start + agent["review_timeout_seconds"]
-            # GitHub review assignment confirms only that GitHub recorded the request.
-            # No provider-start ACK is exposed, so do not abort after 30 seconds:
-            # a normal Codex review has historically taken 21–29 minutes.
-            native_review_request = trigger_scheme(agent) == "github-review-request"
+            trigger: dict[str, Any] | None = None
             acknowledged = False
             ack_elapsed: float | None = None
             state = "waiting"
-            while True:
-                if backend.head() != head:
-                    raise ValueError("HEAD changed during reviewer invocation")
-                state = backend.response_state(agent, trigger)
-                if state in {"clear", "blocking", "unavailable"}:
-                    break
-                if state != "waiting":
-                    raise ValueError(f"unsupported reviewer response state: {state}")
-                if not native_review_request and not acknowledged and backend.acknowledged(agent, trigger):
-                    acknowledged = True
-                    ack_elapsed = backend.now() - start
-                now = backend.now()
-                if not native_review_request and not acknowledged and now >= ack_deadline:
-                    state = "unacknowledged"
-                    break
-                if now >= review_deadline:
-                    state = "timed_out"
-                    break
-                if acknowledged or native_review_request:
-                    backend.sleep(min(15, review_deadline - now))
-                else:
-                    backend.sleep(min(5, ack_deadline - now))
+
+            def checkpoint(
+                stage: str,
+                trigger: dict[str, Any] | None,
+                agent_id: str = agent["id"],
+                attempt_number: int = number,
+                started: float = start,
+            ) -> None:
+                if progress is not None:
+                    progress(
+                        records,
+                        {
+                            "agent_id": agent_id,
+                            "attempt_number": attempt_number,
+                            "stage": stage,
+                            "trigger_id": trigger.get("id") if trigger else None,
+                            "elapsed_seconds": backend.now() - started,
+                        },
+                    )
+
+            checkpoint("before-trigger", trigger)
+            try:
+                with transport.request_deadline(review_deadline, clock=backend.now):
+                    if backend.head() != head:
+                        raise ValueError("HEAD changed before reviewer invocation")
+                    transport.bounded_timeout(30)
+                    trigger = backend.trigger(agent, number)
+                    checkpoint("triggered", trigger)
+                    transport.bounded_timeout(30)
+                    # Native assignment is not a provider-start acknowledgement.
+                    native_review_request = trigger_scheme(agent) == "github-review-request"
+                    while True:
+                        transport.bounded_timeout(30)
+                        if backend.head() != head:
+                            raise ValueError("HEAD changed during reviewer invocation")
+                        transport.bounded_timeout(30)
+                        checkpoint("response", trigger)
+                        state = backend.response_state(agent, trigger)
+                        transport.bounded_timeout(30)
+                        if state in {"clear", "blocking", "unavailable"}:
+                            break
+                        if state != "waiting":
+                            raise ValueError(f"unsupported reviewer response state: {state}")
+                        if not native_review_request and not acknowledged and backend.acknowledged(agent, trigger):
+                            acknowledged = True
+                            ack_elapsed = backend.now() - start
+                        transport.bounded_timeout(30)
+                        now = backend.now()
+                        if not native_review_request and not acknowledged and now >= ack_deadline:
+                            state = "unacknowledged"
+                            break
+                        if now >= review_deadline:
+                            state = "timed_out"
+                            break
+                        if acknowledged or native_review_request:
+                            backend.sleep(min(15, review_deadline - now))
+                        else:
+                            backend.sleep(min(5, ack_deadline - now))
+            except transport.RequestDeadlineExceeded:
+                checkpoint("deadline-exceeded", trigger)
+                if trigger is None:
+                    # An interrupted POST may have reached the provider. Do not
+                    # forge an attempt ID or an exhaustion receipt for it.
+                    raise ValueError("reviewer trigger interrupted; invocation is ambiguous") from None
+                state = "timed_out"
+            except BaseException:
+                checkpoint("interrupted", trigger)
+                raise
+            assert trigger is not None
             if ack_elapsed is None:
                 ack_elapsed = backend.now() - start
             records.append(
@@ -623,6 +672,7 @@ def collect_attempts(pool: dict[str, Any], head: str, backend: Backend) -> list[
                     **({k: trigger[k] for k in ("provider", "response_digest", "head_sha") if k in trigger}),
                 }
             )
+            checkpoint("attempt-complete", trigger)
             if state in {"clear", "blocking"}:
                 if agent.get("authority_eligible") is not False:
                     return records
@@ -1006,7 +1056,7 @@ class GitHubBackend:
         req = urllib.request.Request(
             url, headers={"Authorization": f"Bearer {self.token}", "Accept": "application/vnd.github.v3.diff"}
         )
-        with urllib.request.urlopen(req, timeout=30) as response:
+        with urllib.request.urlopen(req, timeout=transport.bounded_timeout(30)) as response:
             data = response.read(EXTERNAL_PROMPT_LIMIT + 1)
         if len(data) > EXTERNAL_PROMPT_LIMIT:
             return None
@@ -1054,7 +1104,9 @@ class GitHubBackend:
         try:
             # The provider call is the review execution itself, so it is bounded
             # by the reviewer's review budget, not by its acknowledgement budget.
-            with urllib.request.urlopen(req, timeout=int(agent["review_timeout_seconds"])) as response:
+            with urllib.request.urlopen(
+                req, timeout=transport.bounded_timeout(int(agent["review_timeout_seconds"]))
+            ) as response:
                 raw = response.read(LIMIT + 1)
         except urllib.error.HTTPError as exc:
             if exc.code in {400, 401, 403, 408, 413, 429, 500, 502, 503, 504}:
@@ -1572,14 +1624,14 @@ def download_artifact(repository: str, token: str, artifact_id: int) -> bytes:
         url, headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
     )
     try:
-        with urllib.request.build_opener(_NoRedirect).open(request, timeout=30) as response:
+        with urllib.request.build_opener(_NoRedirect).open(request, timeout=transport.bounded_timeout(30)) as response:
             data = response.read(LIMIT + 1)
     except urllib.error.HTTPError as exc:
         location = exc.headers.get("Location", "")
         if exc.code != 302 or not location.startswith("https://"):
             raise
         # The signed download URL is issued by GitHub. Never forward the API bearer token.
-        with urllib.request.urlopen(location, timeout=30) as response:
+        with urllib.request.urlopen(location, timeout=transport.bounded_timeout(30)) as response:
             data = response.read(LIMIT + 1)
     if len(data) > LIMIT:
         raise ValueError("review receipt archive is too large")
@@ -1963,7 +2015,7 @@ def load_exhaustion(
     return evidence
 
 
-def main() -> int:
+def _main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pr", type=int, required=True)
     parser.add_argument("--head", required=True)
@@ -2004,7 +2056,29 @@ def main() -> int:
     if declared_generation and declared_generation != generation:
         raise ValueError("dispatched remediation generation is not the one trusted review-thread state derives")
     backend = GitHubBackend(repository, token, args.pr, args.head, claims_id, run_id, run_attempt, generation)
-    attempts = collect_attempts(pool, args.head, backend)
+    progress_path = args.output.with_name("reviewer-progress.json")
+
+    def checkpoint(attempts: list[dict[str, Any]], current: dict[str, Any]) -> None:
+        # Diagnostic-only schema/name: never admissible as a completed receipt.
+        diagnostic = {
+            "schema": "hunter.reviewer-progress.v1",
+            "complete": False,
+            "repository": repository,
+            "pr_number": args.pr,
+            "head_sha": args.head,
+            "run_id": run_id,
+            "run_attempt": run_attempt,
+            "claims_id": claims_id,
+            "remediation_generation_id": generation,
+            "configuration_digest": configuration_digest(pool),
+            "attempts": attempts,
+            "current": current,
+        }
+        temporary = progress_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(diagnostic, indent=2) + "\n")
+        temporary.replace(progress_path)
+
+    attempts = collect_attempts(pool, args.head, backend, progress=checkpoint)
     if backend.head() != args.head:
         raise ValueError("HEAD changed before receipt publication")
     receipt = {
@@ -2021,6 +2095,29 @@ def main() -> int:
     }
     args.output.write_text(json.dumps(receipt, indent=2) + "\n")
     return 0
+
+
+class CollectorInterrupted(BaseException):
+    """Runner termination is incomplete evidence, never provider exhaustion."""
+
+
+def main() -> int:
+    pool, error = review.load_reviewer_pool()
+    if pool is None or error:
+        raise ValueError(error)
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def terminate(_signum: int, _frame: Any) -> None:
+        raise CollectorInterrupted("collector runner interrupted")
+
+    signal.signal(signal.SIGTERM, terminate)
+    try:
+        # Includes admission reads and final publication checks; the workflow
+        # reserves additional time for artifact upload and runner shutdown.
+        with transport.request_deadline(time.monotonic() + review.reviewer_chain_worst_case_seconds(pool)):
+            return _main()
+    finally:
+        signal.signal(signal.SIGTERM, previous)
 
 
 if __name__ == "__main__":

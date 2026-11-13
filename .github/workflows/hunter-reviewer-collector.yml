@@ -48,25 +48,19 @@ jobs:
   collect:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
-    # Global independent-review opportunity budget. Completion triggers trusted
-    # reconcile, which finalizes timeout/unavailability without blocking.
-    #
-    # PR #535 live evidence: this must never be shorter than the worst case every enabled
-    # reviewer in docs/CODE_WRITE_POLICY.json's reviewer_pool can spend before
-    # the collector moves on (each agent's review_timeout_seconds, summed in
-    # priority order) plus this job's own checkout/publish overhead --
-    # otherwise GitHub cancels the job mid-invocation and silently turns a
-    # reviewer that was still within its own configured budget into an
-    # incomplete run. `test_collector_workflow_lifetime_covers_the_reviewer_chain_budget`
-    # (tests/test_hunter_review_orchestrator.py) derives that minimum from the
-    # same pool and fails the moment this value stops covering it.
-    timeout-minutes: 47
+    # Collection enforces the canonical 47-minute total internally (including
+    # trigger, HTTP bodies and retries). Reserve bounded runner/artifact cleanup
+    # outside that deadline; a job cancellation must not erase partial evidence.
+    # Per-step limits sum to this job limit; provider budgets remain unchanged.
+    timeout-minutes: 52
     steps:
       - uses: actions/checkout@v7
+        timeout-minutes: 1
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Collect actual configured reviewer invocations
+        timeout-minutes: 48
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -80,12 +74,23 @@ jobs:
           --generation "$REMEDIATION_GENERATION"
           --output reviewer-results.json
       - uses: actions/upload-artifact@v4
+        timeout-minutes: 1
         with:
           name: hunter-reviewer-results-${{ inputs.head_sha }}-${{ github.run_attempt }}
           path: reviewer-results.json
           if-no-files-found: error
           retention-days: 30
+      - name: Preserve incomplete-run diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        timeout-minutes: 1
+        with:
+          name: hunter-reviewer-progress-${{ inputs.head_sha }}-${{ github.run_attempt }}
+          path: reviewer-progress.json
+          if-no-files-found: warn
+          retention-days: 30
       - name: Publish collector completion
+        timeout-minutes: 1
         # This run always executes from the trusted default branch, so its own
         # workflow_run.head_sha is main's, never the candidate's: reconcile
         # cannot correlate a completed run back to this PR/head from the event

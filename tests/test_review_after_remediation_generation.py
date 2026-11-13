@@ -436,11 +436,15 @@ def test_a_base_generation_may_not_be_spelled_as_an_explicit_field():
 
 def _collector_main(monkeypatch, tmp_path, dispatched, derived):
     document = {"claims": {}, "review_request": {"schema": "hunter.review-request.v1", "claims_id": CLAIMS}}
-    monkeypatch.setattr(collector.review, "load_reviewer_pool", lambda *_a, **_k: ({"agents": []}, ""))
+    monkeypatch.setattr(
+        collector.review,
+        "load_reviewer_pool",
+        lambda *_a, **_k: ({"agents": [], "timeout_policy": {"retries_per_agent": 0}}, ""),
+    )
     monkeypatch.setattr(collector.review, "review_id", lambda _claims: CLAIMS)
     monkeypatch.setattr(collector.governance, "read_head_pre_ready_review", lambda *_a: ("present", document, None))
     monkeypatch.setattr(collector.orchestration, "current_remediation_generation", lambda *_a: derived)
-    monkeypatch.setattr(collector, "collect_attempts", lambda *_a: [])
+    monkeypatch.setattr(collector, "collect_attempts", lambda *_a, **_k: [])
     monkeypatch.setattr(collector.GitHubBackend, "head", lambda _self: HEAD)
     monkeypatch.setattr(collector, "configuration_digest", lambda _pool: "c" * 64)
     monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")

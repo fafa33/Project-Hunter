@@ -102,7 +102,15 @@ def check_reviewer_dispositions() -> tuple[bool, str]:
     return True, ""
 
 
-def request_json(repository: str, token: str, method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+def request_json(
+    repository: str,
+    token: str,
+    method: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    diagnostic_operation: str | None = None,
+) -> Any:
     """Repository-scoped REST request.
 
     ``path`` is always resolved *under* ``/repos/{repository}``. A handful of
@@ -111,6 +119,10 @@ def request_json(repository: str, token: str, method: str, path: str, payload: d
     those. Guessing which scope a path belongs to is deliberately not done here,
     because a global endpoint addressed under ``/repos/...`` is a permanent 404
     that reads like an authorization failure.
+
+    Retry diagnostics never include path values. A static
+    ``diagnostic_operation`` can name the operation without changing the
+    endpoint, credentials or retry policy.
     """
     data = None if payload is None else json.dumps(payload).encode("utf-8")
     suffix = f"/{path}" if path else ""
@@ -120,7 +132,7 @@ def request_json(repository: str, token: str, method: str, path: str, payload: d
         headers={},
         data=data,
         token=token,
-        what=f"{method} {path}",
+        what=diagnostic_operation if diagnostic_operation is not None else f"{method} repository API request",
     )
 
 
@@ -2056,6 +2068,71 @@ def valid_current_review_request(
     coverage_scopes, scopes_error = pre_ready.load_coverage_scopes()
     if scopes_error or coverage_scopes is None:
         return False, f"owner coverage authorizations are unavailable ({scopes_error})"
+    eligibility_facts = None
+    trusted_review_policy = None
+    pending_deployment = any(
+        isinstance(item, dict) and item.get("verdict") == "pending-deployment"
+        for item in (claims or {}).get("acceptance_criteria", [])
+    )
+    if pending_deployment:
+        try:
+            # This module executes from the default-branch checkout. Candidate
+            # policy fields are never read as authorization, even if present.
+            policy = json.loads(pre_ready.CODE_WRITE_POLICY_PATH.read_text(encoding="utf-8"))
+            trusted_review_policy = policy["review_progression"]["review_authority"].get(
+                "automatic_predeployment_review"
+            )
+            bound_issue = issue_for_branch(str((initial.get("head") or {}).get("ref") or ""))
+            # Issue-agent branches carry an additional binding. Authorized clone
+            # writers also use ordinary branches; those remain bound by the
+            # trusted dependency's Issue/path selection and ingress provenance.
+            if (bound_issue is not None and str(bound_issue) != issue) or not issue_criteria:
+                return False, "pre-deployment review requires a genuine branch-bound governing Issue"
+            repo = (initial.get("base") or {}).get("repo")
+            if (
+                not isinstance(repo, dict)
+                or repo.get("full_name") != repository
+                or type(repo.get("id")) is not int
+                or repo["id"] <= 0
+                or initial.get("number") != pr_number
+                or base_ref != repo.get("default_branch")
+                or (claims or {}).get("base_ref") != base_ref
+            ):
+                return False, "repository identity is unavailable"
+            if ((initial.get("head") or {}).get("repo") or {}).get("id") != repo.get("id"):
+                return False, "pre-deployment review refuses a foreign head repository"
+            preflight_state, _ = read_trusted_upgrade_status(repository, token, head_sha, pr_number)
+            ingress_state, _ = verify_code_write_ingress_provenance(repository, token, head_sha, pr_number)
+            closed = []
+            for stop in (trusted_review_policy or {}).get("stop_work_issues", []):
+                if type(stop) is not int or stop <= 0:
+                    return False, "malformed trusted STOP-WORK policy"
+                evidence = request_json(
+                    repository,
+                    token,
+                    "GET",
+                    f"issues/{stop}",
+                    diagnostic_operation="GET security STOP-WORK Issue state",
+                )
+                if (
+                    isinstance(evidence, dict)
+                    and evidence.get("state") == "closed"
+                    and (evidence.get("closed_by") or {}).get("login")
+                    == (trusted_review_policy or {}).get("authorized_by")
+                ):
+                    closed.append(stop)
+            eligibility_facts = {
+                "repository": repository,
+                "pr_number": pr_number,
+                "head_sha": head_sha,
+                "base_sha": merge_base,
+                "issue": issue,
+                "preflight_state": preflight_state,
+                "ingress_state": ingress_state,
+                "closed_stop_work_issues": closed,
+            }
+        except Exception as exc:
+            return False, f"trusted pre-deployment eligibility is unavailable ({type(exc).__name__}: {exc})"
     verdict = pre_ready.verify_review_request(
         document,
         base_sha=merge_base,
@@ -2064,8 +2141,11 @@ def valid_current_review_request(
         issue_criteria=issue_criteria,
         coverage_scopes=coverage_scopes,
         head_sha=head_sha,
+        eligibility_facts=eligibility_facts,
+        trusted_review_policy=trusted_review_policy,
+        trusted_root=pre_ready.ROOT,
     )
-    if not (verdict.ok or verdict.state == pre_ready.SCOPED_STATE):
+    if not (verdict.ok or verdict.state in {pre_ready.SCOPED_STATE, "predeployment-review-eligible"}):
         return False, verdict.reason
     # GitHub PR file listings are mutable. Recheck after validation so a push
     # from a remote/API writer cannot authorize review of a superseded head.
@@ -2076,6 +2156,8 @@ def valid_current_review_request(
         current_head = str(current["head"].get("sha") or "").strip()
         if current_head != head_sha:
             return False, "exact-head review request PR head changed during verification"
+        if pending_deployment and (current.get("base") or {}).get("sha") != (initial.get("base") or {}).get("sha"):
+            return False, "pre-deployment review base moved during verification"
     except Exception as exc:
         return False, f"exact-head review request PR recheck unavailable ({type(exc).__name__}: {exc})"
     return True, verdict.reason

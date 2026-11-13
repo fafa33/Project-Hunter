@@ -11,7 +11,7 @@ from test_hunter_candidate_admission import HEAD, _pr
 from test_issue_496_prevention_loop_binding import _build, _compiled_prompt_content, _family, _request, _scope
 
 
-def test_known_defect_reintroduced_blocks_ready_then_corrected_proof_allows_ready(monkeypatch, tmp_path):
+def test_known_defect_blocks_admission_then_corrected_proof_waits_for_owner_ready(monkeypatch, tmp_path):
     """An applicable prevention rule remains in the signed build; a failing
     exact-head trusted preflight must not transition Draft to Ready.
     """
@@ -27,7 +27,7 @@ def test_known_defect_reintroduced_blocks_ready_then_corrected_proof_allows_read
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 496, HEAD) == 1
     assert marked == []
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 496, HEAD) == 0
-    assert marked == ["PR_test_node"]
+    assert marked == []
 
 
 def test_provider_retry_preserves_build_and_stale_or_cancelled_event_cannot_ready(monkeypatch, tmp_path):

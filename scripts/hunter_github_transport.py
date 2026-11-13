@@ -30,10 +30,14 @@ from __future__ import annotations
 
 import json
 import re
+import signal
+import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -58,6 +62,68 @@ _REST_HEADERS = {
     "X-GitHub-Api-Version": "2022-11-28",
     "Content-Type": "application/json",
 }
+
+
+class RequestDeadlineExceeded(BaseException):
+    """Hard deadline, deliberately not swallowed by provider Exception handlers.
+
+    An interrupted mutation may have succeeded remotely. Only its caller can
+    decide whether a confirmed invocation exists; this is never an HTTP retry.
+    """
+
+
+_REQUEST_DEADLINE: ContextVar[tuple[float, Callable[[], float]] | None] = ContextVar(
+    "hunter_request_deadline", default=None
+)
+
+
+def bounded_timeout(seconds: float) -> float:
+    """Clamp a socket timeout to the active attempt's remaining wall budget."""
+    active = _REQUEST_DEADLINE.get()
+    if active is None:
+        return seconds
+    remaining = active[0] - active[1]()
+    if remaining <= 0:
+        raise RequestDeadlineExceeded("reviewer request deadline exceeded")
+    return min(seconds, remaining)
+
+
+@contextmanager
+def request_deadline(deadline: float, *, clock: Callable[[], float] = time.monotonic) -> Iterator[None]:
+    """Bound the entire operation, including DNS, body reads and retry sleeps.
+
+    Socket timeouts alone bound inactivity, not slow response bodies. The
+    trusted Linux collector uses a main-thread POSIX timer for a total bound.
+    Unsupported execution fails closed. Nested timers preserve the outer bound.
+    """
+    if threading.current_thread() is not threading.main_thread() or not hasattr(signal, "setitimer"):
+        raise RuntimeError("hard request deadlines require the POSIX main thread")
+    remaining = deadline - clock()
+    if remaining <= 0:
+        raise RequestDeadlineExceeded("reviewer request deadline exceeded")
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+    entered = time.monotonic()
+
+    def expired(_signum: int, _frame: Any) -> None:
+        raise RequestDeadlineExceeded("reviewer request deadline exceeded")
+
+    token = _REQUEST_DEADLINE.set((deadline, clock))
+    signal.signal(signal.SIGALRM, expired)
+    signal.setitimer(signal.ITIMER_REAL, min(remaining, previous_timer[0]) if previous_timer[0] else remaining)
+    try:
+        yield
+        bounded_timeout(1)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        _REQUEST_DEADLINE.reset(token)
+        if previous_timer[0]:
+            signal.setitimer(
+                signal.ITIMER_REAL,
+                max(0.000001, previous_timer[0] - (time.monotonic() - entered)),
+                previous_timer[1],
+            )
 
 
 class GitHubRequestError(RuntimeError):
@@ -210,7 +276,10 @@ def execute_with_retry(
     last_error: GitHubRequestError | None = None
     for attempt in range(1, policy.attempts + 1):
         try:
-            return fn()
+            bounded_timeout(_REQUEST_TIMEOUT_SECONDS)
+            result = fn()
+            bounded_timeout(_REQUEST_TIMEOUT_SECONDS)
+            return result
         except GitHubRequestError as exc:
             last_error = exc
         except urllib.error.HTTPError as exc:
@@ -220,6 +289,7 @@ def execute_with_retry(
         except json.JSONDecodeError as exc:
             last_error = GitHubRequestError(f"GitHub returned malformed JSON: {exc}", category="transport")
 
+        bounded_timeout(_REQUEST_TIMEOUT_SECONDS)
         if not last_error.retryable:
             raise last_error
         if attempt < policy.attempts:
@@ -231,7 +301,7 @@ def execute_with_retry(
                 f"... {what} failed ({last_error.category}): {last_error}; "
                 f"retrying in {delay:.1f}s (attempt {attempt}/{policy.attempts})"
             )
-            sleeper(delay)
+            sleeper(bounded_timeout(delay))
 
     assert last_error is not None
     raise GitHubUnavailable(what, attempts=policy.attempts, last=last_error)
@@ -256,7 +326,7 @@ def rest_json(
             **headers,
         },
     )
-    with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+    with urllib.request.urlopen(request, timeout=bounded_timeout(_REQUEST_TIMEOUT_SECONDS)) as response:
         raw_body = response.read().decode("utf-8")
         if not raw_body:
             return None
@@ -302,7 +372,7 @@ def graphql_json(
             **headers,
         },
     )
-    with urllib.request.urlopen(request, timeout=_REQUEST_TIMEOUT_SECONDS) as response:
+    with urllib.request.urlopen(request, timeout=bounded_timeout(_REQUEST_TIMEOUT_SECONDS)) as response:
         payload = json.loads(response.read().decode("utf-8"))
     errors = payload.get("errors")
     if errors:
