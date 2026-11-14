@@ -1018,6 +1018,7 @@ def event_payload() -> dict[str, Any]:
 
 def candidate_prs() -> tuple[int, ...]:
     event = event_payload()
+    review_event = os.environ.get("GITHUB_EVENT_NAME") in {"pull_request_review", "pull_request_review_comment"}
     pull = event.get("pull_request") or {}
     if isinstance(pull, dict) and pull.get("number"):
         return (int(pull["number"]),)
@@ -1040,6 +1041,9 @@ def candidate_prs() -> tuple[int, ...]:
         head_sha = str(workflow_run.get("head_sha") or "").strip()
         if head_sha:
             return open_prs_for_head(head_sha)
+
+    if review_event:
+        raise ValueError("review event has no pull request identity; refusing unbounded sweep")
 
     inputs = event.get("inputs") or {}
     if isinstance(inputs, dict) and inputs.get("pr_number"):
