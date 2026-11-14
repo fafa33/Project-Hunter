@@ -772,6 +772,39 @@ def test_ordinary_workflow_completion_without_association_uses_exact_head(monkey
     assert core.candidate_prs() == (501,)
 
 
+@pytest.mark.parametrize("kind", ["pull_request_review", "pull_request_review_comment"])
+def test_review_wakeup_targets_only_affected_pr(monkeypatch, kind):
+    monkeypatch.setenv("GITHUB_EVENT_NAME", kind)
+    monkeypatch.setattr(core, "event_payload", lambda: {"pull_request": {"number": 588}, "action": "created"})
+    monkeypatch.setattr(
+        core,
+        "open_pull_requests",
+        lambda: (_ for _ in ()).throw(AssertionError("review wakeup must not sweep all PRs")),
+    )
+    assert core.candidate_prs() == (588,)
+
+
+@pytest.mark.parametrize("invalid_number", [0, -1, "not-a-number"])
+def test_review_wakeup_rejects_invalid_pr_identity(monkeypatch, invalid_number):
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request_review_comment")
+    monkeypatch.setattr(core, "event_payload", lambda: {"pull_request": {"number": invalid_number}})
+    monkeypatch.setattr(core, "open_pull_requests", lambda: (_ for _ in ()).throw(AssertionError("no sweep")))
+    with pytest.raises(ValueError):
+        core.candidate_prs()
+
+
+def test_review_wakeup_with_missing_pr_identity_fails_closed_without_sweep(monkeypatch):
+    monkeypatch.setenv("GITHUB_EVENT_NAME", "pull_request_review_comment")
+    monkeypatch.setattr(core, "event_payload", lambda: {"action": "created", "comment": {"id": 123}})
+    monkeypatch.setattr(
+        core,
+        "open_pull_requests",
+        lambda: (_ for _ in ()).throw(AssertionError("unattributed review must not trigger sweep")),
+    )
+    with pytest.raises(ValueError, match="review event has no pull request identity"):
+        core.candidate_prs()
+
+
 # --- Completion authority: a worker's self-report is never the source of truth ---
 #
 # These prove the "premature agent completion" failure mode is already
