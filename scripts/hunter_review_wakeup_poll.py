@@ -114,7 +114,7 @@ def save_state(previous: dict[int, str], dispatched: list[float], path: Path = S
 
 
 def loop() -> None:
-    previous, dispatched = load_state()
+    previous, dispatched = load_state(STATE_PATH)
     while True:
         started = time.monotonic()
         try:
@@ -127,10 +127,13 @@ def loop() -> None:
                         dispatched = [t for t in dispatched if 0 <= time.time() - t < 3600]
                         if len(dispatched) >= MAX_DISPATCHES_PER_HOUR:
                             raise RuntimeError("dispatch budget exhausted")
+                        # Reserve the hourly budget durably before the external side effect.
+                        # An uncertain dispatch outcome is never replayed automatically.
+                        reserved = dispatched + [time.time()]
+                        checkpoint = {**previous, number: revision}
+                        save_state(checkpoint, reserved, STATE_PATH)
+                        previous, dispatched = checkpoint, reserved
                         dispatch(number)
-                        dispatched.append(time.time())
-                        previous[number] = revision
-                        save_state(previous, dispatched)
                         print(
                             json.dumps(
                                 {
@@ -142,13 +145,19 @@ def loop() -> None:
                             ),
                             flush=True,
                         )
-                    current[number] = revision
+                    current[number] = previous.get(number, revision)
+                except OSError:
+                    raise
                 except Exception as exc:
                     # Do not mark an unknown revision as baseline; retry next cycle.
                     current.pop(number, None)
                     print(f"PR #{number}: {type(exc).__name__}: {exc}", flush=True)
             previous = {**{n: previous[n] for n in numbers if n in previous and n not in current}, **current}
-            save_state(previous, dispatched)
+            save_state(previous, dispatched, STATE_PATH)
+        except OSError:
+            # Persistence is an authority prerequisite: stop rather than dispatch
+            # further changes with an unaccounted budget. LaunchAgent retries.
+            raise
         except Exception as exc:
             print(f"poll unavailable: {type(exc).__name__}: {exc}", flush=True)
         time.sleep(max(0, INTERVAL_SECONDS - (time.monotonic() - started)))

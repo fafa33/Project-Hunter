@@ -102,3 +102,34 @@ def test_corrupt_checkpoint_fails_closed(tmp_path):
 
 def test_missing_checkpoint_is_initial_baseline(tmp_path):
     assert poll.load_state(tmp_path / "absent") == ({}, [])
+
+
+def test_budget_is_reserved_before_dispatch_and_never_replayed(monkeypatch, tmp_path):
+    path = tmp_path / "state.json"
+    calls = []
+    monkeypatch.setattr(poll, "STATE_PATH", path)
+    monkeypatch.setattr(poll, "active_prs", lambda: (746,))
+    monkeypatch.setattr(poll, "review_revision", lambda number: "changed")
+    monkeypatch.setattr(poll, "dispatch", lambda number: calls.append(poll.load_state(path)))
+    monkeypatch.setattr(poll.time, "sleep", lambda _: (_ for _ in ()).throw(KeyboardInterrupt()))
+    poll.save_state({746: "before"}, [], path)
+    with pytest.raises(KeyboardInterrupt):
+        poll.loop()
+    assert len(calls) == 1
+    assert calls[0][0] == {746: "changed"}
+    assert len(calls[0][1]) == 1
+    with pytest.raises(KeyboardInterrupt):
+        poll.loop()
+    assert len(calls) == 1
+
+
+def test_checkpoint_write_failure_prevents_dispatch(monkeypatch, tmp_path):
+    path = tmp_path / "state.json"
+    poll.save_state({746: "before"}, [], path)
+    monkeypatch.setattr(poll, "STATE_PATH", path)
+    monkeypatch.setattr(poll, "active_prs", lambda: (746,))
+    monkeypatch.setattr(poll, "review_revision", lambda number: "changed")
+    monkeypatch.setattr(poll, "save_state", lambda *args: (_ for _ in ()).throw(OSError("disk full")))
+    monkeypatch.setattr(poll, "dispatch", lambda number: pytest.fail("unsafe dispatch"))
+    with pytest.raises(OSError, match="disk full"):
+        poll.loop()

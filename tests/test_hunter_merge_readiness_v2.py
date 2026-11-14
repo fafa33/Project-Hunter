@@ -1117,6 +1117,12 @@ def test_merge_readiness_reconciles_both_exact_head_preflight_completions(monkey
     completed = triggers["workflow_run"]["workflows"]
     assert "Hunter / Pre-PR Preflight" in completed
     assert "Hunter / Trusted Preflight Upgrade" in completed
+    assert "Hunter / Issue Agent Knowledge" in completed
+    monkeypatch.setattr(
+        core, "event_payload", lambda: {"workflow_run": {"name": "Hunter / Issue Agent Knowledge", "pull_requests": []}}
+    )
+    monkeypatch.setattr(core, "open_pull_requests", lambda: (746,))
+    assert core.candidate_prs() == (746,)
     assert "|| 'sweep'" in workflow["concurrency"]["group"]
     for name in ("Hunter / Pre-PR Preflight", "Hunter / Trusted Preflight Upgrade"):
         monkeypatch.setattr(
