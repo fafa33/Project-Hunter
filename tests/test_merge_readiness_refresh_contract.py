@@ -104,3 +104,19 @@ def test_no_hunter_workflow_accepts_a_dispatch_payload_or_selects_a_ref():
         block = on.get("workflow_dispatch") or {}
         inputs = set(block.get("inputs") or {}) if isinstance(block, dict) else set()
         assert not (inputs & selectors), path.name
+
+
+def test_knowledge_receipt_producer_has_direct_trusted_pr_wakeup_and_bounded_recovery():
+    """A missed GitHub cron cannot be the only path to a fresh receipt on a new head."""
+    knowledge = load("hunter-issue-agent-knowledge.yml")
+    on = triggers(knowledge)
+    assert on["pull_request_target"]["branches"] == ["main"]
+    assert {"opened", "reopened", "synchronize", "ready_for_review"} <= set(on["pull_request_target"]["types"])
+    assert on["schedule"] == [{"cron": "7,17,27,37,47,57 * * * *"}]
+    job = knowledge["jobs"]["knowledge-ingest"]
+    assert job["environment"] == "hunter-issue-agent-control"
+    assert "github.ref == 'refs/heads/main'" in job["if"]
+    checkout = next(step for step in job["steps"] if step.get("name") == "Checkout trusted main")
+    assert checkout["with"]["ref"] == "${{ github.sha }}"
+    assert checkout["with"]["persist-credentials"] is False
+    assert "pull_request" not in str(checkout["with"]["ref"])
