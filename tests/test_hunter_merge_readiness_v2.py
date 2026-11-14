@@ -473,6 +473,167 @@ def test_an_unparseable_created_at_is_treated_as_stale(monkeypatch):
     assert state == "pending"
 
 
+# --- Issue #586 / ADR 0039 L11 hardening (Copilot F1/F3, PR #737): obligation-fingerprint binding
+
+
+def _with_fingerprint(description: str, fingerprint: str) -> str:
+    return f"{description} [rt:{fingerprint}]"
+
+
+def test_a_live_obligation_fingerprint_mismatch_downgrades_a_fresh_success_to_pending(monkeypatch):
+    """F1: a thread resolving into a new obligation after publish must invalidate the cached
+
+    success immediately, not merely after the bare age bound expires.
+    """
+    status = _receipt_status(501, state="success", description=_with_fingerprint("no obligation", "a" * 16))
+    monkeypatch.setattr(core, "paged", lambda _path: [status])
+    monkeypatch.setattr(core, "knowledge_receipt_obligation_fingerprint", lambda _pr: "b" * 16)
+    state, detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "pending"
+    assert "review-thread change" in detail
+
+
+def test_a_live_obligation_fingerprint_mismatch_downgrades_a_fresh_failure_to_pending_too(monkeypatch):
+    """Staleness under obligation-fingerprint mismatch is symmetric with the age bound: a
+
+    now-outdated verdict is simply unknown in either direction, never a fabricated block.
+    """
+    status = _receipt_status(501, state="failure", description=_with_fingerprint("1 missing", "a" * 16))
+    monkeypatch.setattr(core, "paged", lambda _path: [status])
+    monkeypatch.setattr(core, "knowledge_receipt_obligation_fingerprint", lambda _pr: "b" * 16)
+    state, _detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "pending"
+
+
+def test_a_matching_obligation_fingerprint_keeps_a_fresh_success(monkeypatch):
+    status = _receipt_status(501, state="success", description=_with_fingerprint("1 receipt(s) verified", "a" * 16))
+    monkeypatch.setattr(core, "paged", lambda _path: [status])
+    monkeypatch.setattr(core, "knowledge_receipt_obligation_fingerprint", lambda _pr: "a" * 16)
+    state, _detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "success"
+
+
+def test_an_unreadable_live_obligation_snapshot_is_pending_never_a_silent_passthrough(monkeypatch):
+    """F3: a transient failure re-reading live thread state must never fall back to trusting the
+
+    cached (possibly now-stale) verdict.
+    """
+    status = _receipt_status(501, state="success", description=_with_fingerprint("no obligation", "a" * 16))
+    monkeypatch.setattr(core, "paged", lambda _path: [status])
+    monkeypatch.setattr(core, "knowledge_receipt_obligation_fingerprint", lambda _pr: None)
+    state, detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "pending"
+    assert "re-validated" in detail
+
+
+def test_a_legacy_status_with_no_embedded_fingerprint_falls_back_to_the_age_bound_only(monkeypatch):
+    """A status published before this hardening carries no ``[rt:...]`` suffix; it must not be
+
+    newly blocked on a format it never had the chance to carry, and must never trigger a live
+    network read it cannot need.
+    """
+    called: list[int] = []
+    monkeypatch.setattr(core, "knowledge_receipt_obligation_fingerprint", lambda pr: called.append(pr) or "x" * 16)
+    monkeypatch.setattr(core, "paged", lambda _path: [_receipt_status(501, state="success", description="ok")])
+    state, _detail = core.knowledge_receipt_state("a" * 40, 501)
+    assert state == "success"
+    assert called == []
+
+
+def test_knowledge_receipt_obligation_fingerprint_returns_none_on_read_failure(monkeypatch):
+    def raising(_pr: int) -> dict:
+        raise RuntimeError("transport failure")
+
+    monkeypatch.setattr(core, "_live_review_thread_resolutions", raising)
+    assert core.knowledge_receipt_obligation_fingerprint(501) is None
+
+
+def test_knowledge_receipt_obligation_fingerprint_matches_the_shared_pure_function(monkeypatch):
+    from hunter.automation.issue_agent_knowledge import review_thread_fingerprint
+
+    monkeypatch.setattr(core, "_live_review_thread_resolutions", lambda _pr: {11: True, 12: False})
+    assert core.knowledge_receipt_obligation_fingerprint(501) == review_thread_fingerprint({11: True, 12: False})
+
+
+def test_fingerprint_in_dependency_free_hosted_controller(monkeypatch):
+    """Regression for Codex P1: hosted bootstrap has scripts, not src/hunter."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    scripts = str(Path(core.__file__).resolve().parent)
+    snippet = (
+        "import hunter_merge_readiness_v2 as readiness; "
+        "readiness._live_review_thread_resolutions = lambda _pr: {11: True, 12: False}; "
+        "print(readiness.knowledge_receipt_obligation_fingerprint(501))"
+    )
+    env = {**os.environ, "PYTHONPATH": scripts}
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", "import sys; sys.path.insert(0, " + repr(scripts) + "); " + snippet],
+        cwd=Path(core.__file__).resolve().parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    expected = (
+        __import__("hashlib")
+        .sha256(json.dumps({"11": True, "12": False}, sort_keys=True, separators=(",", ":")).encode())
+        .hexdigest()[:16]
+    )
+    assert result.stdout.strip() == expected
+
+
+def test_live_review_thread_resolutions_paginates(monkeypatch):
+    pages = [
+        {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {
+                        "nodes": [{"isResolved": True, "comments": {"nodes": [{"databaseId": 1}]}}],
+                        "pageInfo": {"hasNextPage": True, "endCursor": "c1"},
+                    }
+                }
+            }
+        },
+        {
+            "repository": {
+                "pullRequest": {
+                    "reviewThreads": {
+                        "nodes": [{"isResolved": False, "comments": {"nodes": [{"databaseId": 2}]}}],
+                        "pageInfo": {"hasNextPage": False, "endCursor": None},
+                    }
+                }
+            }
+        },
+    ]
+    calls: list[Any] = []
+
+    def fake_graphql(_query, variables):
+        calls.append(variables["after"])
+        return pages.pop(0)
+
+    monkeypatch.setattr(core, "REPO", "fafa33/Project-Hunter")
+    monkeypatch.setattr(core, "graphql_json", fake_graphql)
+    result = core._live_review_thread_resolutions(501)
+    assert result == {1: True, 2: False}
+    assert calls == [None, "c1"]
+
+
+def test_live_review_thread_resolutions_rejects_a_malformed_payload(monkeypatch):
+    monkeypatch.setattr(core, "REPO", "fafa33/Project-Hunter")
+    monkeypatch.setattr(
+        core,
+        "graphql_json",
+        lambda _q, _v: {
+            "repository": {"pullRequest": {"reviewThreads": {"nodes": [{"isResolved": True}], "pageInfo": {}}}}
+        },
+    )
+    with pytest.raises(ValueError):
+        core._live_review_thread_resolutions(501)
+
+
 @pytest.mark.parametrize(
     ("overrides", "expected_state"),
     [

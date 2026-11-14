@@ -113,7 +113,15 @@ def _owner_replies(
     return replies
 
 
-def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[dict[str, Any]]:
+def collect(
+    repository: str,
+    token: str,
+    pr: int,
+    head: str,
+    base: str,
+    *,
+    thread_state: dict[int, bool] | None = None,
+) -> list[dict[str, Any]]:
     """Collect the durable review history for *pr*, including remediated older heads.
 
     A review comment is never promoted to confirmed knowledge merely because a
@@ -122,6 +130,11 @@ def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[
     thread.  Resolution is additionally required for a confirmed finding, so a
     half-remediated thread cannot enter canonical learning.  Neutral findings
     remain durable observations instead of disappearing when HEAD moves.
+
+    *thread_state*, when supplied, is used instead of a fresh fetch (ADR 0039 L11 hardening,
+    Issue #586): a caller that already fetched this PR's live thread-resolution state for its own
+    Knowledge Receipt obligation-fingerprint purposes reuses it here rather than a duplicate
+    GraphQL request.
     """
     comments: list[dict[str, Any]] = []
     page = 1
@@ -178,7 +191,8 @@ def collect(repository: str, token: str, pr: int, head: str, base: str) -> list[
 
     trusted_reviewers = _trusted_reviewer_logins()  # top-level review authority only
     dispositions = _owner_replies(comments, owner)
-    thread_state = _review_threads(repository, token, pr) if dispositions else {}
+    if thread_state is None:
+        thread_state = _review_threads(repository, token, pr) if dispositions else {}
     observations: list[dict[str, Any]] = []
     for item in comments:
         if item.get("in_reply_to_id") is not None:

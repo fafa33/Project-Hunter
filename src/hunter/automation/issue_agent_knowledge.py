@@ -936,6 +936,22 @@ def receipt_verdict(
     return "failure", f"{len(missing)} of {len(obligated)} confirmed finding(s) missing a Knowledge Receipt"
 
 
+def review_thread_fingerprint(thread_resolutions: Mapping[int, bool]) -> str:
+    """A short, deterministic fingerprint of exactly which review threads are resolved right now
+    (ADR 0039 L11 hardening, Copilot F1/F3, PR #737; Issue #586).
+
+    Bound into the published Knowledge Receipt verdict so a consumer that independently re-reads
+    this same live, authenticated fact -- never comment content, never a classification -- can
+    detect that the review-thread landscape has moved since the verdict was derived, without
+    becoming a second obligation authority itself: this hashes only the ``(opening comment id,
+    isResolved)`` pairs both the collector and the consumer already read for their own existing
+    purposes, nothing the status or the ledger invents.
+    """
+
+    canon = {str(comment_id): bool(resolved) for comment_id, resolved in thread_resolutions.items()}
+    return sha256_hex(canonical_json(canon))[:16]
+
+
 # --- DPM overlay (L2) -------------------------------------------------------------------------------------
 
 
@@ -1006,4 +1022,5 @@ __all__ = [
     "receipt_verdict",
     "receipt_writes",
     "record_key",
+    "review_thread_fingerprint",
 ]

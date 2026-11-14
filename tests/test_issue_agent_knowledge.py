@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 from pathlib import Path
@@ -1096,6 +1097,56 @@ def test_the_verdict_counts_every_missing_obligation_among_several(store: state.
     )
     assert verdict_state == "failure"
     assert "1 of 2" in detail
+
+
+# --- ADR 0039 L11 hardening (Copilot F1/F3, PR #737; Issue #586): obligation fingerprint --------
+
+
+def test_review_thread_fingerprint_matches_its_documented_canonical_serialization() -> None:
+    """SonarCloud python:S5863: assert against a fixed digest computed independently from the
+
+    documented canonical form (``{str(comment_id): bool(resolved)}``, sorted-key compact JSON,
+    sha256, first 16 hex chars) -- never the function compared against its own repeated call --
+    so a change to the serialization or hash algorithm is caught, not just internal self-consistency.
+    """
+    canon = json.dumps({"1": True, "2": False}, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    expected = hashlib.sha256(canon).hexdigest()[:16]
+    assert expected == "193b2603f462547c"  # pinned, independently recomputed above
+    assert knowledge.review_thread_fingerprint({1: True, 2: False}) == expected
+
+
+def test_review_thread_fingerprint_is_order_independent() -> None:
+    assert knowledge.review_thread_fingerprint({1: True, 2: False}) == knowledge.review_thread_fingerprint(
+        {2: False, 1: True}
+    )
+
+
+def test_review_thread_fingerprint_changes_when_any_thread_resolves() -> None:
+    """The exact F1 signal: resolving one more thread must change the fingerprint, even though
+
+    every other thread's state is unchanged -- this is what lets a consumer detect that a cached
+    verdict now predates a new obligation, without re-deriving the obligation itself.
+    """
+    before = knowledge.review_thread_fingerprint({1: True, 2: False})
+    after = knowledge.review_thread_fingerprint({1: True, 2: True})
+    assert before != after
+
+
+def test_review_thread_fingerprint_changes_when_a_new_thread_appears() -> None:
+    before = knowledge.review_thread_fingerprint({1: True})
+    after = knowledge.review_thread_fingerprint({1: True, 2: False})
+    assert before != after
+
+
+def test_review_thread_fingerprint_of_no_threads_matches_the_documented_empty_contract() -> None:
+    """SonarCloud python:S5863: the empty-mapping case against a fixed, independently derived
+
+    digest -- the documented canonical form of no threads is the empty JSON object ``{}`` -- never
+    the function compared against its own repeated call.
+    """
+    expected = hashlib.sha256(b"{}").hexdigest()[:16]
+    assert expected == "44136fa355b3678a"  # pinned, independently recomputed above
+    assert knowledge.review_thread_fingerprint({}) == expected
 
 
 def test_receipt_writes_refuses_an_abbreviated_sha_instead_of_building_an_invalid_write(
