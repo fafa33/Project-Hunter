@@ -31,6 +31,7 @@ def test_merge_readiness_wakes_on_trusted_events_with_identity_only_dispatch():
         "CI",
         "Dependency review",
         "Hunter Governance Review Reconcile",
+        "Hunter / Issue Agent Knowledge",
         "Hunter / Pre-PR Preflight",
         "Hunter / Trusted Preflight Upgrade",
         "CodeQL default setup bridge",
