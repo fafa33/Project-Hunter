@@ -1021,7 +1021,10 @@ def candidate_prs() -> tuple[int, ...]:
     review_event = os.environ.get("GITHUB_EVENT_NAME") in {"pull_request_review", "pull_request_review_comment"}
     pull = event.get("pull_request") or {}
     if isinstance(pull, dict) and pull.get("number"):
-        return (int(pull["number"]),)
+        number = int(pull["number"])
+        if number <= 0:
+            raise ValueError("invalid pull request identity")
+        return (number,)
 
     issue = event.get("issue") or {}
     if isinstance(issue, dict) and issue.get("number") and issue.get("pull_request"):
