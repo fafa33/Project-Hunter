@@ -555,6 +555,36 @@ def test_knowledge_receipt_obligation_fingerprint_matches_the_shared_pure_functi
     assert core.knowledge_receipt_obligation_fingerprint(501) == review_thread_fingerprint({11: True, 12: False})
 
 
+def test_fingerprint_in_dependency_free_hosted_controller(monkeypatch):
+    """Regression for Codex P1: hosted bootstrap has scripts, not src/hunter."""
+    import json
+    import os
+    import subprocess
+    import sys
+
+    scripts = str(Path(core.__file__).resolve().parent)
+    snippet = (
+        "import hunter_merge_readiness_v2 as readiness; "
+        "readiness._live_review_thread_resolutions = lambda _pr: {11: True, 12: False}; "
+        "print(readiness.knowledge_receipt_obligation_fingerprint(501))"
+    )
+    env = {**os.environ, "PYTHONPATH": scripts}
+    result = subprocess.run(
+        [sys.executable, "-I", "-c", "import sys; sys.path.insert(0, " + repr(scripts) + "); " + snippet],
+        cwd=Path(core.__file__).resolve().parent,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    expected = (
+        __import__("hashlib")
+        .sha256(json.dumps({"11": True, "12": False}, sort_keys=True, separators=(",", ":")).encode())
+        .hexdigest()[:16]
+    )
+    assert result.stdout.strip() == expected
+
+
 def test_live_review_thread_resolutions_paginates(monkeypatch):
     pages = [
         {

@@ -7,6 +7,7 @@ not merge authority.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -395,13 +396,15 @@ def knowledge_receipt_obligation_fingerprint(pr_number: int) -> str | None:
     treated exactly like any other unavailable evidence -- never as a match.
     """
 
-    from hunter.automation.issue_agent_knowledge import review_thread_fingerprint
-
     try:
         resolutions = _live_review_thread_resolutions(pr_number)
+        # Same documented canonical wire contract as the trusted producer, using only
+        # stdlib: hosted bootstrap controllers deliberately do not install `hunter`.
+        canon = {str(comment_id): bool(resolved) for comment_id, resolved in resolutions.items()}
+        payload = json.dumps(canon, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()[:16]
     except Exception:
         return None
-    return review_thread_fingerprint(resolutions)
 
 
 def knowledge_receipt_verdict_bound(statuses: list[Any], pr_number: int) -> tuple[str, str]:
