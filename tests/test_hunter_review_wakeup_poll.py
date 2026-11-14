@@ -84,3 +84,21 @@ def test_poll_interval_is_bounded_below_latency_budget():
     assert 0 < poll.INTERVAL_SECONDS <= 10
     assert poll.MAX_ACTIVE_PRS <= 5
     assert poll.MAX_DISPATCHES_PER_HOUR <= 60
+
+
+def test_checkpoint_survives_restart(tmp_path):
+    path = tmp_path / "state.json"
+    poll.save_state({745: "revision"}, [1000.0], path)
+    assert poll.load_state(path) == ({745: "revision"}, [1000.0])
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_corrupt_checkpoint_fails_closed(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text("{invalid")
+    with pytest.raises(RuntimeError, match="checkpoint unavailable"):
+        poll.load_state(path)
+
+
+def test_missing_checkpoint_is_initial_baseline(tmp_path):
+    assert poll.load_state(tmp_path / "absent") == ({}, [])

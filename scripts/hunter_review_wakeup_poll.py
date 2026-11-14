@@ -8,15 +8,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 REPOSITORY = "fafa33/Project-Hunter"
 MAX_ACTIVE_PRS = 5
 INTERVAL_SECONDS = 8
 MAX_DISPATCHES_PER_HOUR = 60
+STATE_PATH = Path(os.environ.get("HUNTER_REVIEW_WAKEUP_STATE", str(Path.home() / ".hunter-review-wakeup-state.json")))
 
 
 def gh(*args: str) -> Any:
@@ -82,9 +85,36 @@ def dispatch(number: int) -> None:
     )
 
 
+def load_state(path: Path = STATE_PATH) -> tuple[dict[int, str], list[float]]:
+    try:
+        payload = json.loads(path.read_text())
+        if payload.get("version") != 1:
+            raise ValueError("unsupported state version")
+        previous = {int(k): str(v) for k, v in payload["revisions"].items()}
+        dispatched = [float(t) for t in payload["dispatches"]]
+        return previous, dispatched
+    except FileNotFoundError:
+        return {}, []
+    except (ValueError, KeyError, TypeError) as exc:
+        # Never silently replace an unknown checkpoint with a new baseline.
+        raise RuntimeError(f"wakeup checkpoint unavailable: {exc}") from exc
+
+
+def save_state(previous: dict[int, str], dispatched: list[float], path: Path = STATE_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    try:
+        with temp.open("x") as stream:
+            json.dump({"version": 1, "revisions": previous, "dispatches": dispatched}, stream)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
 def loop() -> None:
-    previous: dict[int, str] = {}
-    dispatched: list[float] = []
+    previous, dispatched = load_state()
     while True:
         started = time.monotonic()
         try:
@@ -94,12 +124,13 @@ def loop() -> None:
                 try:
                     revision = review_revision(number)
                     if number in previous and previous[number] != revision:
-                        now = time.monotonic()
-                        dispatched = [t for t in dispatched if now - t < 3600]
+                        dispatched = [t for t in dispatched if 0 <= time.time() - t < 3600]
                         if len(dispatched) >= MAX_DISPATCHES_PER_HOUR:
                             raise RuntimeError("dispatch budget exhausted")
                         dispatch(number)
-                        dispatched.append(now)
+                        dispatched.append(time.time())
+                        previous[number] = revision
+                        save_state(previous, dispatched)
                         print(
                             json.dumps(
                                 {
@@ -117,6 +148,7 @@ def loop() -> None:
                     current.pop(number, None)
                     print(f"PR #{number}: {type(exc).__name__}: {exc}", flush=True)
             previous = {**{n: previous[n] for n in numbers if n in previous and n not in current}, **current}
+            save_state(previous, dispatched)
         except Exception as exc:
             print(f"poll unavailable: {type(exc).__name__}: {exc}", flush=True)
         time.sleep(max(0, INTERVAL_SECONDS - (time.monotonic() - started)))
