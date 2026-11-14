@@ -25,6 +25,7 @@ on:
       - CI
       - Dependency review
       - Hunter Governance Review Reconcile
+      - Hunter / Issue Agent Knowledge
       - Hunter / Pre-PR Preflight
       - Hunter / Trusted Preflight Upgrade
       - CodeQL default setup bridge

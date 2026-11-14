@@ -1032,7 +1032,10 @@ def candidate_prs() -> tuple[int, ...]:
 
     workflow_run = event.get("workflow_run") or {}
     if isinstance(workflow_run, dict):
-        if str(workflow_run.get("name") or "").strip() == GOVERNANCE_RECONCILE_WORKFLOW:
+        if str(workflow_run.get("name") or "").strip() in {
+            GOVERNANCE_RECONCILE_WORKFLOW,
+            "Hunter / Issue Agent Knowledge",
+        }:
             return open_pull_requests()
         numbers = [
             int(item["number"])

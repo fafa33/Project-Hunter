@@ -14,13 +14,23 @@ name: Hunter / Issue Agent Knowledge
 # Inert until S6 (MISSING_CONFIGURATION).
 
 on:
+  # Trusted main-only producer wakes on the PR lifecycle, independently of
+  # best-effort GitHub schedules. Never checkout or execute candidate code.
+  pull_request_target:
+    branches:
+      - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
   workflow_run:
     workflows:
       - Hunter Knowledge Learning
     types:
       - completed
   schedule:
-    - cron: "7,37 * * * *"
+    - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:
     inputs:
       pr:
