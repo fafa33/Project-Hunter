@@ -78,3 +78,9 @@ def test_dispatch_targets_trusted_main_and_identity_only(monkeypatch):
             "pr_number=745",
         )
     ]
+
+
+def test_poll_interval_is_bounded_below_latency_budget():
+    assert 0 < poll.INTERVAL_SECONDS <= 10
+    assert poll.MAX_ACTIVE_PRS <= 5
+    assert poll.MAX_DISPATCHES_PER_HOUR <= 60

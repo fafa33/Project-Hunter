@@ -10,11 +10,12 @@ import hashlib
 import json
 import subprocess
 import time
+from datetime import UTC, datetime
 from typing import Any
 
 REPOSITORY = "fafa33/Project-Hunter"
 MAX_ACTIVE_PRS = 5
-INTERVAL_SECONDS = 20
+INTERVAL_SECONDS = 8
 MAX_DISPATCHES_PER_HOUR = 60
 
 
@@ -105,6 +106,7 @@ def loop() -> None:
                                     "event": "review_changed",
                                     "pr": number,
                                     "dispatch_seconds": round(time.monotonic() - started, 3),
+                                    "observed_at": datetime.now(UTC).isoformat(),
                                 }
                             ),
                             flush=True,
