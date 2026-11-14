@@ -120,3 +120,17 @@ def test_knowledge_receipt_producer_has_direct_trusted_pr_wakeup_and_bounded_rec
     assert checkout["with"]["ref"] == "${{ github.sha }}"
     assert checkout["with"]["persist-credentials"] is False
     assert "pull_request" not in str(checkout["with"]["ref"])
+
+
+def test_knowledge_receipt_completion_wakes_same_trusted_readiness_controller():
+    """Issue #588 post-rollout canary: producer and consumer share the event contract."""
+    producer = load("hunter-issue-agent-knowledge.yml")
+    consumer = load("hunter-merge-readiness.yml")
+    producer_events = triggers(producer)
+    consumer_events = triggers(consumer)
+    assert "synchronize" in producer_events["pull_request_target"]["types"]
+    assert producer["name"] in consumer_events["workflow_run"]["workflows"]
+    assert "completed" in consumer_events["workflow_run"]["types"]
+    assert consumer["jobs"]["controller"]["if"] == (
+        "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+    )
