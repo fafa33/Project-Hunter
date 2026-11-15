@@ -254,7 +254,7 @@ def test_historical_assessment_only_runs_on_trusted_main_with_existing_signer() 
     assert "refs/heads/main" in job["if"]
     assert job["environment"] == "hunter-issue-agent-control"
     assert job["permissions"]["contents"] == "write"
-    assert job["permissions"]["checks"] == "read"
+    assert job["permissions"]["checks"] == "write"
     step = next(step for step in job["steps"] if "historical-assess" in str(step.get("run", "")))
     assert "579|581|582)" in step["run"]
     assert "historical-assess --pr" in step["run"]

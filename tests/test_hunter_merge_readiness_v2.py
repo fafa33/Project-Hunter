@@ -37,7 +37,7 @@ def _install_green(monkeypatch, pr: dict | None = None, *, mock_knowledge_receip
         # Callers exercising the real knowledge_receipt_state (its paged()/authentication/
         # freshness mechanics) pass mock_knowledge_receipt=False to keep this fixture from
         # shadowing the exact function under test.
-        monkeypatch.setattr(core, "knowledge_receipt_state", lambda _sha, _number: ("success", "verified"))
+        monkeypatch.setattr(core, "knowledge_receipt_check_state", lambda _sha, _number: ("success", "verified"))
     monkeypatch.setattr(core, "open_prs_for_head", lambda _sha: (501,))
     monkeypatch.setattr(core, "review_authority_state", lambda _sha, _number: ("success", "reviewed"))
     monkeypatch.setattr(core, "candidate_admission_state", lambda _sha, _number: ("success", "admitted"))
@@ -315,7 +315,7 @@ def _now_iso() -> str:
 
 def test_missing_knowledge_receipt_fails_closed(monkeypatch):
     _install_green(monkeypatch)
-    monkeypatch.setattr(core, "knowledge_receipt_state", lambda _sha, _n: ("failure", "1 missing"))
+    monkeypatch.setattr(core, "knowledge_receipt_check_state", lambda _sha, _n: ("failure", "1 missing"))
     _sha, decision = core.decide(501)
     assert decision.state == "failure"
     assert "Knowledge Receipt" in decision.description
@@ -346,7 +346,7 @@ def test_valid_pending_adjudication_receipt_permits_progression(monkeypatch):
     """AC3/AC7: a receipt the producer verified as satisfied -- even with a pending family link --
     is success, never a block, once the trusted producer has published that verdict."""
     _install_green(monkeypatch)
-    monkeypatch.setattr(core, "knowledge_receipt_state", lambda _sha, _n: ("success", "1 receipt(s) verified"))
+    monkeypatch.setattr(core, "knowledge_receipt_check_state", lambda _sha, _n: ("success", "1 receipt(s) verified"))
     _sha, decision = core.decide(501)
     assert decision.state == "success"
 
@@ -354,7 +354,7 @@ def test_valid_pending_adjudication_receipt_permits_progression(monkeypatch):
 def test_legacy_pr_with_no_verified_obligation_is_not_retroactively_blocked(monkeypatch):
     _install_green(monkeypatch)
     monkeypatch.setattr(
-        core, "knowledge_receipt_state", lambda _sha, _n: ("success", "no verified applicable receipt obligation")
+        core, "knowledge_receipt_check_state", lambda _sha, _n: ("success", "no verified applicable receipt obligation")
     )
     _sha, decision = core.decide(501)
     assert decision.state == "success"

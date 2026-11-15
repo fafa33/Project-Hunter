@@ -549,7 +549,7 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
         )
         obligation_fingerprint = knowledge.review_thread_fingerprint(thread_state)
         try:
-            _publish_knowledge_receipt_status(
+            _publish_knowledge_receipt_check(
                 collector,
                 configuration.repository,
                 token,
@@ -583,7 +583,7 @@ def _publish_knowledge_receipt_status(
     *,
     obligation_fingerprint: str | None = None,
 ) -> None:
-    """Idempotent transport publish: an unchanged verdict at this exact head is never republished.
+    """Bounded-idempotent transport: unchanged verdicts refresh before consumer expiry.
 
     Published under ``GITHUB_TOKEN`` by the trusted ``hunter-issue-agent-knowledge.yml`` job, so
     GitHub itself records the creator as ``github-actions[bot]`` -- the identity
@@ -612,7 +612,19 @@ def _publish_knowledge_receipt_status(
         None,
     )
     if previous is not None and previous.get("state") == state_value and previous.get("description") == description:
-        return
+        # An unchanged verdict is not permanently fresh. Re-attest from the signed ledger
+        # at a bounded interval shorter than the consumer's 45-minute fail-closed TTL.
+        # Missing timestamps retain legacy idempotence; GitHub always supplies created_at.
+        created_at = previous.get("created_at")
+        if not isinstance(created_at, str):
+            return
+        try:
+            published_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            age_seconds = (datetime.now(UTC) - published_at.astimezone(UTC)).total_seconds()
+        except (ValueError, OverflowError):
+            age_seconds = 30 * 60
+        if 0 <= age_seconds < 30 * 60:
+            return
     collector.governance.request_json(
         repository,
         token,
@@ -620,6 +632,82 @@ def _publish_knowledge_receipt_status(
         f"statuses/{head_sha}",
         {"state": state_value, "context": context, "description": description},
     )
+
+
+def _publish_knowledge_receipt_check(
+    collector: Any,
+    repository: str,
+    token: str,
+    head_sha: str,
+    pr_number: int,
+    state_value: str,
+    description: str,
+    *,
+    obligation_fingerprint: str | None = None,
+) -> None:
+    """Bounded-idempotent transport: unchanged verdicts refresh before consumer expiry.
+
+    Published under ``GITHUB_TOKEN`` by the trusted ``hunter-issue-agent-knowledge.yml`` job, so
+    GitHub itself records the creator as ``github-actions[bot]`` -- the identity
+    ``hunter_merge_readiness_v2.KNOWLEDGE_RECEIPT_TRUSTED_CREATOR`` requires (Copilot F5, PR #737).
+
+    *obligation_fingerprint*, when supplied, is appended as a ``[rt:<digest>]`` suffix (ADR 0039
+    L11 hardening, Copilot F1/F3, PR #737; Issue #586): the live review-thread resolution snapshot
+    this verdict was derived from, so a consumer that independently re-reads that same live fact
+    can detect the verdict now predates a thread resolving into a new obligation -- without
+    becoming a second obligation authority itself. A status carrying no fingerprint (every status
+    published before this hardening) is unaffected; the consumer falls back to the unchanged
+    age-bounded verdict for those. Embedding it here, rather than relying on the verdict text
+    alone, also means any change to the live thread landscape is no longer idempotent-skipped,
+    so the status (and its ``created_at``) refreshes whenever the snapshot moves, not only when
+    the human-readable verdict changes.
+    """
+
+    # GitHub commit statuses are append-only and limited to 1000 per head/context.
+    # A single PR/head-scoped Check Run is updated in place, never appended on polling.
+    context = f"{KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}{pr_number}"
+    external_id = f"knowledge-receipt:v1:{pr_number}:{head_sha}"
+    suffix = f" [rt:{obligation_fingerprint}]" if obligation_fingerprint else ""
+    description = description[: 140 - len(suffix)] + suffix
+    matches: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        payload = collector.governance.request_json(
+            repository, token, "GET", f"commits/{head_sha}/check-runs?per_page=100&page={page}&filter=all"
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("check_runs"), list):
+            raise ValueError("malformed Knowledge Receipt check run response")
+        batch = payload["check_runs"]
+        if any(not isinstance(run, dict) for run in batch):
+            raise ValueError("malformed Knowledge Receipt check run entry")
+        matches.extend(
+            run
+            for run in batch
+            if run.get("name") == context
+            and run.get("external_id") == external_id
+            and (run.get("app") or {}).get("slug") == "github-actions"
+        )
+        if len(matches) > 1:
+            raise ValueError("ambiguous canonical Knowledge Receipt check run")
+        if len(batch) < 100:
+            break
+        page += 1
+    if len(matches) > 1:
+        raise ValueError("ambiguous canonical Knowledge Receipt check run")
+    conclusion = {"success": "success", "failure": "failure", "error": "failure"}.get(state_value, "neutral")
+    body = {
+        "name": context,
+        "head_sha": head_sha,
+        "external_id": external_id,
+        "status": "completed",
+        "conclusion": conclusion,
+        "completed_at": datetime.now(UTC).isoformat(),
+        "output": {"title": f"Knowledge Receipt / PR #{pr_number}", "summary": description},
+    }
+    if matches:
+        collector.governance.request_json(repository, token, "PATCH", f"check-runs/{matches[0]['id']}", body)
+    else:
+        collector.governance.request_json(repository, token, "POST", "check-runs", body)
 
 
 #: ADR 0039 L2 (owner decision D3, Issue #705, 2026-11-09/11): the one owner-approved positive-outcome

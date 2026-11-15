@@ -14,19 +14,13 @@ name: Hunter / Issue Agent Knowledge
 # Inert until S6 (MISSING_CONFIGURATION).
 
 on:
-  # Trusted main-only producer wakes on the PR lifecycle, independently of
-  # best-effort GitHub schedules. Never checkout or execute candidate code.
-  pull_request_target:
-    branches:
-      - main
-    types:
-      - opened
-      - reopened
-      - synchronize
-      - ready_for_review
+  # Never write the signed ledger from pull_request_target: GitHub reports its
+  # head_branch/head_sha as the candidate PR, which fails main-only run provenance.
+  # The existing trusted workflow_run, schedule and owner dispatch are the write lane.
   workflow_run:
     workflows:
       - Hunter Knowledge Learning
+      - Hunter Governance Review
     types:
       - completed
   schedule:
@@ -57,16 +51,16 @@ jobs:
     name: knowledge-ingest
     if: >-
       github.ref == 'refs/heads/main' &&
-      (github.event_name != 'workflow_run' || github.event.workflow_run.head_repository.full_name == github.repository)
+      (github.event_name == 'workflow_run' && github.event.workflow_run.head_repository.full_name == github.repository ||
+       github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     environment: hunter-issue-agent-control
     permissions:
       contents: write
       actions: read
-      checks: read
+      checks: write
       pull-requests: read
-      statuses: write
     steps:
       - name: Checkout trusted main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
