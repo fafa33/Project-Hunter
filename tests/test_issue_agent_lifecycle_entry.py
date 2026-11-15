@@ -550,3 +550,43 @@ def test_knowledge_receipt_status_publish_is_bound_to_pr_identity_not_only_the_h
     _method, _path, payload = calls[1]
     assert payload is not None
     assert payload["context"] == f"{lifecycle.KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}200"
+
+
+def test_knowledge_receipt_republishes_unchanged_verdict_before_consumer_ttl_expires() -> None:
+    """Issue #588: schedule reruns must refresh status, not strand readiness after 45m."""
+    calls: list[tuple[str, str, dict | None]] = []
+    combined = {
+        "statuses": [
+            {
+                "context": f"{lifecycle.KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}747",
+                "state": "success",
+                "description": "ok",
+                "created_at": "2026-11-14T20:10:52Z",
+            }
+        ]
+    }
+    lifecycle._publish_knowledge_receipt_status(
+        _FakeCollector(combined, calls), "fafa33/Project-Hunter", "token", "a" * 40, 747, "success", "ok"
+    )
+    assert [method for method, _, _ in calls] == ["GET", "POST"]
+
+
+def test_knowledge_receipt_recent_unchanged_verdict_does_not_churn(monkeypatch: Any) -> None:
+    """Reattestation is bounded; every scheduled poll must not post a duplicate."""
+    from datetime import UTC, datetime
+
+    calls: list[tuple[str, str, dict | None]] = []
+    combined = {
+        "statuses": [
+            {
+                "context": f"{lifecycle.KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}747",
+                "state": "success",
+                "description": "ok",
+                "created_at": datetime.now(UTC).isoformat(),
+            }
+        ]
+    }
+    lifecycle._publish_knowledge_receipt_status(
+        _FakeCollector(combined, calls), "fafa33/Project-Hunter", "token", "a" * 40, 747, "success", "ok"
+    )
+    assert [method for method, _, _ in calls] == ["GET"]

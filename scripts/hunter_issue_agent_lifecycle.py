@@ -583,7 +583,7 @@ def _publish_knowledge_receipt_status(
     *,
     obligation_fingerprint: str | None = None,
 ) -> None:
-    """Idempotent transport publish: an unchanged verdict at this exact head is never republished.
+    """Bounded-idempotent transport: unchanged verdicts refresh before consumer expiry.
 
     Published under ``GITHUB_TOKEN`` by the trusted ``hunter-issue-agent-knowledge.yml`` job, so
     GitHub itself records the creator as ``github-actions[bot]`` -- the identity
@@ -612,7 +612,19 @@ def _publish_knowledge_receipt_status(
         None,
     )
     if previous is not None and previous.get("state") == state_value and previous.get("description") == description:
-        return
+        # An unchanged verdict is not permanently fresh. Re-attest from the signed ledger
+        # at a bounded interval shorter than the consumer's 45-minute fail-closed TTL.
+        # Missing timestamps retain legacy idempotence; GitHub always supplies created_at.
+        created_at = previous.get("created_at")
+        if not isinstance(created_at, str):
+            return
+        try:
+            published_at = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            age_seconds = (datetime.now(UTC) - published_at.astimezone(UTC)).total_seconds()
+        except (ValueError, OverflowError):
+            age_seconds = 30 * 60
+        if 0 <= age_seconds < 30 * 60:
+            return
     collector.governance.request_json(
         repository,
         token,
