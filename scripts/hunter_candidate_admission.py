@@ -87,7 +87,8 @@ def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | N
         items = []
         page = 1
         while True:
-            payload = governance.request_json(repository, token, "GET", f"{path}?per_page=100&page={page}")
+            separator = "&" if "?" in path else "?"
+            payload = governance.request_json(repository, token, "GET", f"{path}{separator}per_page=100&page={page}")
             batch = payload.get(key) if key and isinstance(payload, dict) else payload
             if not isinstance(batch, list) or not all(isinstance(item, dict) for item in batch):
                 raise ValueError("malformed check evidence")
@@ -97,7 +98,7 @@ def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | N
             page += 1
 
     try:
-        checks = paged(f"commits/{head_sha}/check-runs", "check_runs")
+        checks = paged(f"commits/{head_sha}/check-runs?filter=all", "check_runs")
         statuses = paged(f"commits/{head_sha}/statuses")
         governance_statuses = [s for s in statuses if s.get("context") == readiness.GOVERNANCE_CONTEXT]
         latest = max(governance_statuses, key=lambda s: int(s.get("id") or 0)) if governance_statuses else None

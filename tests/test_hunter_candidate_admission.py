@@ -537,3 +537,38 @@ def test_ready_checks_is_not_success_with_no_knowledge_receipt_status(monkeypatc
     )
     state, _description = admission.ready_checks("fafa33/Project-Hunter", "token", HEAD, True, 371)
     assert state == "pending"
+
+
+def test_ready_checks_rejects_duplicate_receipts_hidden_by_default_latest_filter(monkeypatch) -> None:
+    """Candidate admission must inspect every check run, including older same-name receipts."""
+    import hunter_merge_readiness_v2 as readiness
+
+    paths: list[str] = []
+    receipt = {
+        "name": "Hunter Knowledge Receipt / PR #371",
+        "external_id": f"knowledge-receipt:v1:371:{HEAD}",
+        "head_sha": HEAD,
+        "app": {"slug": "github-actions"},
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-11-15T13:00:00Z",
+        "output": {"summary": "verified [rt:44136fa355b3678a]"},
+    }
+
+    def fake_request(_repo: str, _token: str, _method: str, path: str):
+        paths.append(path)
+        if "check-runs" in path:
+            return {
+                "check_runs": [
+                    {"name": name, "status": "completed", "conclusion": "success"}
+                    for name in ("Quality Gates", "dependency-review", "CodeQL")
+                ]
+                + [receipt, {**receipt, "id": 99}]
+            }
+        return []
+
+    monkeypatch.setattr(admission.governance, "request_json", fake_request)
+    monkeypatch.setattr(readiness, "_status_age_seconds", lambda _status: 1.0)
+    state, _description = admission.ready_checks("fafa33/Project-Hunter", "token", HEAD, True, 371)
+    assert state != "success"
+    assert any("check-runs?filter=all&per_page=100&page=1" in path for path in paths)

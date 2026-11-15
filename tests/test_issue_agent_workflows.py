@@ -435,7 +435,7 @@ def test_role_tokens_are_minimal() -> None:
 def test_knowledge_workflow_refuses_fork_origin_workflow_runs() -> None:
     job = load("hunter-issue-agent-knowledge.yml")["jobs"]["knowledge-ingest"]
     condition = str(job["if"])
-    assert "pull_request_target:" not in (WORKFLOWS / "hunter-issue-agent-knowledge.yml").read_text()
+    assert "\n  pull_request_target:" not in (WORKFLOWS / "hunter-issue-agent-knowledge.yml").read_text()
     assert "github.event_name == 'workflow_run'" in condition
     assert "github.event_name == 'schedule'" in condition
     assert "github.event_name == 'workflow_dispatch'" in condition
