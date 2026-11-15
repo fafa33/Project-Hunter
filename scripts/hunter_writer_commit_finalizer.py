@@ -15,6 +15,38 @@ from pathlib import Path
 import hunter_pre_ready_review as review
 
 
+def _staged_review_head(root: Path) -> str:
+    """An unreferenced commit object for the exact staged (indexed) tree.
+
+    ``git write-tree`` serializes the current index -- the staged snapshot this
+    pre-commit hook is about to commit -- without touching HEAD, the index, or
+    the working tree. Wrapping that tree in a ``commit-tree`` object (parented
+    at HEAD, never written to any ref) gives ``local_changes`` an exact-SHA
+    "head" to diff against, so the finalized review binds to what is actually
+    about to be committed rather than to the stale pre-commit HEAD. The object
+    is plumbing only -- it is never pushed, never reachable from a branch, and
+    is discarded as soon as this process exits -- so it is signed with
+    ``--no-gpg-sign`` to avoid an interactive signing prompt for a commit that
+    represents no authored history and that nobody will ever read or trust.
+    """
+    tree = subprocess.check_output(("git", "write-tree"), cwd=root, text=True).strip()
+    parent = subprocess.check_output(("git", "rev-parse", "HEAD"), cwd=root, text=True).strip()
+    return subprocess.check_output(
+        (
+            "git",
+            "commit-tree",
+            "--no-gpg-sign",
+            tree,
+            "-p",
+            parent,
+            "-m",
+            "hunter-writer-finalizer: staged-content review snapshot (not a ref, never pushed)",
+        ),
+        cwd=root,
+        text=True,
+    ).strip()
+
+
 def main() -> int:
     root = Path(__file__).resolve().parents[1]
     source = os.environ.get("HUNTER_REVIEW_JUDGEMENT")
@@ -32,8 +64,9 @@ def main() -> int:
         if not isinstance(judgement, dict):
             raise ValueError("judgement must be a JSON object")
         base = subprocess.check_output(("git", "merge-base", "HEAD", "origin/main"), cwd=root, text=True).strip()
+        head = _staged_review_head(root)
         changed = review.finalize_writer_review_request(
-            issue=issue, base=base, head="HEAD", base_ref="main", judgement=judgement, cwd=root
+            issue=issue, base=base, head=head, base_ref="main", judgement=judgement, cwd=root
         )
         if changed:
             subprocess.run(("git", "add", "--", review.REVIEW_RELATIVE_PATH), cwd=root, check=True)
