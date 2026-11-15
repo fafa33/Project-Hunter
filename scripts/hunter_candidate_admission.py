@@ -107,7 +107,7 @@ def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | N
         # checks the live merge-readiness controller applies. ``_bound`` additionally re-validates
         # a fingerprinted verdict against live review-thread state before this privileged Draft
         # Promotion path trusts it (ADR 0039 L11 hardening, Copilot F1/F3, PR #737; Issue #586).
-        knowledge_receipt = readiness.knowledge_receipt_verdict_bound(statuses, pr_number)
+        knowledge_receipt = readiness.knowledge_receipt_check_bound(checks, pr_number, head_sha)
         decision = readiness.evaluate(
             readiness.StaticReadinessObservation(
                 draft=False,

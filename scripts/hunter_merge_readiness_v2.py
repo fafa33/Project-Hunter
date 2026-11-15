@@ -272,6 +272,59 @@ def _trusted_receipt_status(statuses: list[Any], pr_number: int) -> dict[str, An
     return max(matches, key=lambda entry: int(entry.get("id") or 0))
 
 
+def knowledge_receipt_verdict_from_checks(checks: list[Any], pr_number: int, head_sha: str) -> tuple[str, str]:
+    """Authenticated, PR/head-scoped, bounded-freshness mutable receipt transport."""
+    name = f"{KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}{pr_number}"
+    external_id = f"knowledge-receipt:v1:{pr_number}:{head_sha}"
+    matches = [
+        c
+        for c in checks
+        if isinstance(c, dict)
+        and c.get("name") == name
+        and c.get("external_id") == external_id
+        and c.get("head_sha") == head_sha
+        and (c.get("app") or {}).get("slug") == "github-actions"
+    ]
+    if len(matches) != 1:
+        return "pending", f"Missing or ambiguous authenticated Knowledge Receipt check for PR #{pr_number}"
+    check = matches[0]
+    if check.get("status") != "completed":
+        return "pending", "Knowledge Receipt check not completed"
+    age = _status_age_seconds({"created_at": check.get("completed_at")})
+    if age is None or age < 0 or age > KNOWLEDGE_RECEIPT_MAX_AGE_SECONDS:
+        return "pending", "Knowledge Receipt check completion is stale or malformed"
+    detail = str((check.get("output") or {}).get("summary") or "")
+    if not detail:
+        return "pending", "Knowledge Receipt check verdict is missing"
+    conclusion = check.get("conclusion")
+    state = "success" if conclusion == "success" else "failure" if conclusion == "failure" else "pending"
+    return state, detail
+
+
+def knowledge_receipt_check_bound(checks: list[Any], pr_number: int, head_sha: str) -> tuple[str, str]:
+    state, detail = knowledge_receipt_verdict_from_checks(checks, pr_number, head_sha)
+    if state == "pending":
+        return state, detail
+    name = f"{KNOWLEDGE_RECEIPT_CONTEXT_PREFIX}{pr_number}"
+    matching = [
+        c
+        for c in checks
+        if isinstance(c, dict)
+        and c.get("name") == name
+        and c.get("external_id") == f"knowledge-receipt:v1:{pr_number}:{head_sha}"
+        and (c.get("app") or {}).get("slug") == "github-actions"
+    ]
+    if len(matching) != 1:
+        return "pending", "Knowledge Receipt check ambiguous"
+    match = _OBLIGATION_FINGERPRINT_PATTERN.search(str((matching[0].get("output") or {}).get("summary") or ""))
+    if not match:
+        return "pending", "Knowledge Receipt review-thread fingerprint missing"
+    live = knowledge_receipt_obligation_fingerprint(pr_number)
+    if live is None or live != match.group(1):
+        return "pending", "Knowledge Receipt review-thread evidence changed or unavailable"
+    return state, detail
+
+
 def knowledge_receipt_verdict_from_statuses(statuses: list[Any], pr_number: int) -> tuple[str, str]:
     """ADR 0039 L11 (Issue #527): the fast-path Knowledge Receipt obligation, from an already-fetched
 
@@ -481,6 +534,14 @@ def knowledge_receipt_state(head_sha: str, pr_number: int) -> tuple[str, str]:
     except Exception as exc:
         return "pending", f"Knowledge Receipt evidence unavailable: {type(exc).__name__}: {exc}"
     return knowledge_receipt_verdict_bound(statuses, pr_number)
+
+
+def knowledge_receipt_check_state(head_sha: str, pr_number: int) -> tuple[str, str]:
+    """Read the one authenticated mutable receipt Check Run for this exact PR/head."""
+    try:
+        return knowledge_receipt_check_bound(all_check_runs(head_sha), pr_number, head_sha)
+    except Exception as exc:
+        return "pending", f"Knowledge Receipt evidence unavailable: {type(exc).__name__}: {exc}"
 
 
 _REVIEW_THREADS_QUERY = """
@@ -733,7 +794,7 @@ class LiveReadinessObservation:
 
     @cached_property
     def knowledge_receipt(self) -> tuple[str, str]:
-        return knowledge_receipt_state(self._head_sha, self._pr_number)
+        return knowledge_receipt_check_state(self._head_sha, self._pr_number)
 
     @cached_property
     def review_authority(self) -> tuple[str, str]:

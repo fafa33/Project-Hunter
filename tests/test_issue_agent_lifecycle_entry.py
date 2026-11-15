@@ -174,7 +174,7 @@ def test_pr737_replay_uses_existing_signed_ledger_and_never_invents_receipts(tmp
     published_kwargs = []
     monkeypatch.setattr(
         lifecycle,
-        "_publish_knowledge_receipt_status",
+        "_publish_knowledge_receipt_check",
         lambda *args, **kwargs: (published.append(args), published_kwargs.append(kwargs)),
     )
     args = lifecycle._parser().parse_args(["knowledge-ingest", "--replay-pr737"])

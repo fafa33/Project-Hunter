@@ -633,7 +633,7 @@ def observe_pull_request(pr_number: int) -> PullRequestObservation | None:
         check_runs=tuple(readiness.all_check_runs(head_sha)),
         governance_status=readiness.latest_status(head_sha, readiness.GOVERNANCE_CONTEXT),
         shared_open_prs=tuple(number for number in readiness.open_prs_for_head(head_sha) if number != int(pr_number)),
-        knowledge_receipt=readiness.knowledge_receipt_state(head_sha, int(pr_number)),
+        knowledge_receipt=readiness.knowledge_receipt_check_state(head_sha, int(pr_number)),
     )
 
 

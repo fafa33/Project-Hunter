@@ -63,7 +63,7 @@ def project(snap: dict[str, Any]) -> dict[str, dict[str, Any]]:
     # default in place, consistent with "remains UNKNOWN" rather than fabricating a verdict.
     pr_number = snap.get("pr_number")
     extra = (
-        {"knowledge_receipt": readiness.knowledge_receipt_verdict_from_statuses(snap["statuses"], pr_number)}
+        {"knowledge_receipt": readiness.knowledge_receipt_verdict_from_checks(snap["checks"], pr_number, head)}
         if isinstance(pr_number, int)
         else {}
     )
