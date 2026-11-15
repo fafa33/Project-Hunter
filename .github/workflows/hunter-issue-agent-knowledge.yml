@@ -20,6 +20,7 @@ on:
   workflow_run:
     workflows:
       - Hunter Knowledge Learning
+      - Hunter Governance Review
     types:
       - completed
   schedule:
