@@ -669,19 +669,29 @@ def _publish_knowledge_receipt_check(
     external_id = f"knowledge-receipt:v1:{pr_number}:{head_sha}"
     suffix = f" [rt:{obligation_fingerprint}]" if obligation_fingerprint else ""
     description = description[: 140 - len(suffix)] + suffix
-    payload = collector.governance.request_json(
-        repository, token, "GET", f"commits/{head_sha}/check-runs?per_page=100&filter=all"
-    )
-    if not isinstance(payload, dict) or not isinstance(payload.get("check_runs"), list):
-        raise ValueError("malformed Knowledge Receipt check run response")
-    matches = [
-        run
-        for run in payload["check_runs"]
-        if isinstance(run, dict)
-        and run.get("name") == context
-        and run.get("external_id") == external_id
-        and (run.get("app") or {}).get("slug") == "github-actions"
-    ]
+    matches: list[dict[str, Any]] = []
+    page = 1
+    while True:
+        payload = collector.governance.request_json(
+            repository, token, "GET", f"commits/{head_sha}/check-runs?per_page=100&page={page}&filter=all"
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("check_runs"), list):
+            raise ValueError("malformed Knowledge Receipt check run response")
+        batch = payload["check_runs"]
+        if any(not isinstance(run, dict) for run in batch):
+            raise ValueError("malformed Knowledge Receipt check run entry")
+        matches.extend(
+            run
+            for run in batch
+            if run.get("name") == context
+            and run.get("external_id") == external_id
+            and (run.get("app") or {}).get("slug") == "github-actions"
+        )
+        if len(matches) > 1:
+            raise ValueError("ambiguous canonical Knowledge Receipt check run")
+        if len(batch) < 100:
+            break
+        page += 1
     if len(matches) > 1:
         raise ValueError("ambiguous canonical Knowledge Receipt check run")
     conclusion = {"success": "success", "failure": "failure", "error": "failure"}.get(state_value, "neutral")

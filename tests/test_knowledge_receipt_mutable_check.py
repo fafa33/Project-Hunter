@@ -15,7 +15,10 @@ class Governance:
 
     def request_json(self, _repo: str, _token: str, method: str, path: str, body: dict | None = None) -> Any:
         if method == "GET":
-            return {"check_runs": self.checks}
+            from urllib.parse import parse_qs, urlsplit
+
+            page = int(parse_qs(urlsplit(path).query).get("page", [1])[0])
+            return {"check_runs": self.checks[(page - 1) * 100 : page * 100]}
         assert body is not None
         if method == "POST":
             self.posts += 1
@@ -23,7 +26,7 @@ class Governance:
         elif method == "PATCH":
             self.patches += 1
             assert path == "check-runs/42"
-            self.checks[0].update(body)
+            next(run for run in self.checks if run.get("id") == 42).update(body)
         return {}
 
 
@@ -86,3 +89,59 @@ def test_stale_foreign_and_wrong_head_checks_fail_closed() -> None:
         )[0]
         == "pending"
     )
+
+
+def test_receipt_beyond_first_hundred_check_runs_is_patched_not_duplicated() -> None:
+    governance = Governance()
+    governance.checks = [
+        {"id": index, "name": f"unrelated-{index}", "app": {"slug": "github-actions"}} for index in range(100)
+    ] + [
+        {
+            "id": 42,
+            "name": "Hunter Knowledge Receipt / PR #747",
+            "external_id": "knowledge-receipt:v1:747:" + "a" * 40,
+            "app": {"slug": "github-actions"},
+        }
+    ]
+    lifecycle._publish_knowledge_receipt_check(
+        Collector(governance),
+        "fafa33/Project-Hunter",
+        "token",
+        "a" * 40,
+        747,
+        "success",
+        "receipt refreshed",
+        obligation_fingerprint="a" * 16,
+    )
+    assert governance.posts == 0
+    assert governance.patches == 1
+    assert len(governance.checks) == 101
+
+
+def test_ambiguous_receipt_across_pages_fails_closed() -> None:
+    governance = Governance()
+    canonical = {
+        "id": 42,
+        "name": "Hunter Knowledge Receipt / PR #747",
+        "external_id": "knowledge-receipt:v1:747:" + "a" * 40,
+        "app": {"slug": "github-actions"},
+    }
+    governance.checks = (
+        [canonical]
+        + [{"id": index + 100, "name": f"unrelated-{index}"} for index in range(99)]
+        + [{**canonical, "id": 43}]
+    )
+    import pytest
+
+    with pytest.raises(ValueError, match="ambiguous canonical"):
+        lifecycle._publish_knowledge_receipt_check(
+            Collector(governance),
+            "fafa33/Project-Hunter",
+            "token",
+            "a" * 40,
+            747,
+            "success",
+            "receipt refreshed",
+            obligation_fingerprint="a" * 16,
+        )
+    assert governance.posts == governance.patches == 0
