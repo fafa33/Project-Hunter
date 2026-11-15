@@ -499,19 +499,6 @@ def test_ready_checks_is_success_with_a_trusted_knowledge_receipt_status(monkeyp
                     {"id": n, "name": name, "status": "completed", "conclusion": "success"}
                     for n, name in enumerate(("Quality Gates", "dependency-review", "CodeQL"), 1)
                 ]
-                + [
-                    {
-                        "id": 4,
-                        "name": "Hunter Knowledge Receipt / PR #371",
-                        "status": "completed",
-                        "conclusion": "success",
-                        "head_sha": HEAD,
-                        "external_id": f"knowledge-receipt:v1:371:{HEAD}",
-                        "app": {"slug": "github-actions"},
-                        "completed_at": "2026-11-15T09:00:00Z",
-                        "output": {"summary": "no verified applicable receipt obligation [rt:44136fa355b3678a]"},
-                    }
-                ]
             }
             if "check-runs" in args[-1]
             else [receipt_status]
@@ -524,7 +511,7 @@ def test_ready_checks_is_success_with_a_trusted_knowledge_receipt_status(monkeyp
     import hunter_merge_readiness_v2 as readiness
 
     monkeypatch.setattr(readiness, "_status_age_seconds", fixed_age)
-    monkeypatch.setattr(readiness, "knowledge_receipt_obligation_fingerprint", lambda _pr: "44136fa355b3678a")
+    monkeypatch.setattr(readiness, "knowledge_receipt_check_bound", lambda _checks, _pr, _head: ("success", "verified"))
     state, _description = admission.ready_checks("fafa33/Project-Hunter", "token", HEAD, True, 371)
     assert state == "success"
 
