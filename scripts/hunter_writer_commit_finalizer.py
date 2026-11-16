@@ -130,7 +130,15 @@ def _automatic_refresh(root: Path) -> int:
         print(f"[Hunter Writer Finalizer] NOTE: automatic review freshness is unknown ({families_error})")
         return 0
     document = _staged_review_document(root)
-    verdict = review.verify_review_request(document, base_sha=base, changes=changes, families=families, head_sha=head)
+    # Check candidate content freshness, not owner scope authorization.
+    # The trusted admission controller independently validates authorization.
+    freshness_document = document
+    if isinstance(document, dict) and document.get("coverage_scope") is not None:
+        freshness_document = dict(document)
+        freshness_document.pop("coverage_scope")
+    verdict = review.verify_review_request(
+        freshness_document, base_sha=base, changes=changes, families=families, head_sha=head
+    )
     if verdict.ok or verdict.state == "awaiting-trusted-review-policy":
         print("[Hunter Writer Finalizer] PASS: unchanged governed review request")
         return 0

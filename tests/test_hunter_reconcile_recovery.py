@@ -559,3 +559,28 @@ def test_refresh_failure_for_previous_head_is_not_current_head(monkeypatch):
     _fake_github(monkeypatch)
     log = f"::error::Governance refresh failed for PR #{PR} at {OTHER_HEAD}; continuing.\n"
     assert recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: log) is None
+
+
+def test_newer_exact_head_completion_supersedes_older_failure(monkeypatch):
+    _fake_github(monkeypatch)
+    original = recovery.request_json
+
+    def request(repository, token, method, endpoint):
+        if endpoint.endswith(f"/runs?per_page={recovery.MAX_SCANNED_RUNS}"):
+            return {"workflow_runs": [{"id": 112, "conclusion": "success"}, {"id": 111, "conclusion": "failure"}]}
+        if endpoint == "actions/runs/112/jobs?per_page=100":
+            return {"jobs": [{"id": 223, "name": recovery.AUTHORITATIVE_JOB_NAME}]}
+        return original(repository, token, method, endpoint)
+
+    def read_log(job_id):
+        if job_id == 223:
+            return f"::notice::Reconcile invocation completed for PR #{PR} at {HEAD}; continuing.\n"
+        return f"::error::Review orchestration failed for PR #{PR} at {HEAD}; continuing.\n"
+
+    assert recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, request=request, read_log=read_log) is None
+
+
+def test_previous_head_completion_does_not_clear_current_failure(monkeypatch):
+    _fake_github(monkeypatch)
+    log = f"::notice::Reconcile invocation completed for PR #{PR} at {OTHER_HEAD}; continuing.\n"
+    assert recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: log) is None

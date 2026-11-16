@@ -338,3 +338,43 @@ def test_non_object_staged_request_is_rejected(tmp_path, monkeypatch):
     (tmp_path / "src" / "module.py").write_text("v2\n")
     _git(tmp_path, "add", "src/module.py")
     assert finalizer.main(tmp_path) == 2
+
+
+def test_current_bounded_correction_request_does_not_deadlock_offline_hook(tmp_path, monkeypatch):
+    _governed_repo(tmp_path, monkeypatch)
+    path = tmp_path / review.REVIEW_RELATIVE_PATH
+    document = json.loads(path.read_text())
+    document["coverage_scope"] = {
+        "issue": ISSUE,
+        "mode": "bounded_correction",
+        "authorized_by": "owner",
+        "authorization": "trusted-authorization",
+        "reason": "bounded remediation",
+        "criteria": ["criterion one"],
+    }
+    path.write_text(json.dumps(document))
+    _git(tmp_path, "add", review.REVIEW_RELATIVE_PATH)
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    assert finalizer.main(tmp_path) == 0
+
+
+def test_stale_bounded_correction_request_still_fails_closed(tmp_path, monkeypatch):
+    _governed_repo(tmp_path, monkeypatch)
+    path = tmp_path / review.REVIEW_RELATIVE_PATH
+    document = json.loads(path.read_text())
+    document["coverage_scope"] = {
+        "issue": ISSUE,
+        "mode": "bounded_correction",
+        "authorized_by": "owner",
+        "authorization": "trusted-authorization",
+        "reason": "bounded remediation",
+        "criteria": ["criterion one"],
+    }
+    path.write_text(json.dumps(document))
+    _git(tmp_path, "add", review.REVIEW_RELATIVE_PATH)
+    (tmp_path / "src" / "module.py").write_text("stale change\n")
+    _git(tmp_path, "add", "src/module.py")
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    assert finalizer.main(tmp_path) == 2

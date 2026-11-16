@@ -95,6 +95,7 @@ TRANSIENT_CONTEXT_LINES = 10
 STALE_REQUEST_MARKER = "WAITING_FOR_EXACT_HEAD_REVIEW"
 REFRESH_FAILURE_MARKER = "Governance refresh failed"
 ORCHESTRATION_FAILURE_MARKER = "Review orchestration failed"
+RECONCILE_COMPLETED_MARKER = "Reconcile invocation completed"
 #: One reconcile job log is a bounded read; a larger body is unknown, not evidence.
 MAX_LOG_BYTES = 8 * 1024 * 1024
 
@@ -255,6 +256,9 @@ def observe_failure(
                 and re.search(rf"PR #{pr_number}(?![0-9]) at {re.escape(head_sha)}(?![0-9a-f])", line) is not None
             )
 
+        completed = [line for line in lines if bound_failure(line, RECONCILE_COMPLETED_MARKER)]
+        if completed:
+            return None
         refresh_failed = [line for line in lines if bound_failure(line, REFRESH_FAILURE_MARKER)]
         orchestration_failed = [line for line in lines if bound_failure(line, ORCHESTRATION_FAILURE_MARKER)]
         if orchestration_failed:
