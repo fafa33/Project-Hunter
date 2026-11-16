@@ -16,6 +16,7 @@ from types import SimpleNamespace
 
 import hunter_pre_ready_review as review
 import hunter_writer_commit_finalizer as finalizer
+import pytest
 from review_request_fixture import ISSUE, JUDGEMENT, REGISTRY
 
 
@@ -424,4 +425,54 @@ def test_missing_merge_base_without_governed_request_remains_optional(tmp_path, 
     monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
     _git(tmp_path, "rm", "--cached", ".hunter/pre-ready-hostile-review.json", check=False)
     _git(tmp_path, "update-ref", "-d", "refs/remotes/origin/main")
+    assert finalizer.main(tmp_path) == 0
+
+
+@pytest.mark.parametrize("staged_request", ["unchanged", "malformed", "stale"])
+def test_missing_base_never_admits_governed_request_variants(tmp_path, monkeypatch, staged_request):
+    """No merge-base means no proof of freshness, regardless of request contents."""
+    _governed_repo(tmp_path, monkeypatch)
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    if staged_request == "malformed":
+        (tmp_path / review.REVIEW_RELATIVE_PATH).write_text("{ broken json")
+        _git(tmp_path, "add", review.REVIEW_RELATIVE_PATH)
+    elif staged_request == "stale":
+        (tmp_path / "src" / "module.py").write_text("changed candidate\n")
+        _git(tmp_path, "add", "src/module.py")
+    _git(tmp_path, "update-ref", "-d", "refs/remotes/origin/main")
+    assert finalizer.main(tmp_path) == 2
+
+
+def test_missing_base_with_unstaged_only_review_request_is_optional(tmp_path, monkeypatch):
+    """The hook binds to the index, not a review document only in the worktree."""
+    _governed_repo(tmp_path, monkeypatch)
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    _git(tmp_path, "rm", "--cached", review.REVIEW_RELATIVE_PATH)
+    (tmp_path / review.REVIEW_RELATIVE_PATH).write_text("{ worktree-only broken review")
+    _git(tmp_path, "update-ref", "-d", "refs/remotes/origin/main")
+    assert finalizer.main(tmp_path) == 0
+
+
+def test_missing_base_with_explicit_judgement_fails_closed(tmp_path, monkeypatch):
+    """Even a supplied judgement cannot mint a request without trusted Git ancestry."""
+    _governed_repo(tmp_path, monkeypatch)
+    _git(tmp_path, "update-ref", "-d", "refs/remotes/origin/main")
+    assert finalizer.main(tmp_path) == 2
+
+
+def test_staged_registry_deleted_fails_closed_for_governed_request(tmp_path, monkeypatch):
+    _governed_repo(tmp_path, monkeypatch)
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    _git(tmp_path, "rm", "docs/DEFECT_REGISTRY.json")
+    assert finalizer.main(tmp_path) == 2
+
+
+def test_unstaged_review_corruption_does_not_change_staged_freshness(tmp_path, monkeypatch):
+    _governed_repo(tmp_path, monkeypatch)
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    (tmp_path / review.REVIEW_RELATIVE_PATH).write_text("{ corrupt only in worktree")
     assert finalizer.main(tmp_path) == 0

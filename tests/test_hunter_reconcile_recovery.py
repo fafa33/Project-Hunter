@@ -774,3 +774,24 @@ def test_exact_head_transient_refresh_failure_survives_interrupted_sweep(monkeyp
     assert failure is not None
     assert failure.kind == recovery.KIND_TRANSIENT
     assert failure.run_id == 111
+
+
+@pytest.mark.parametrize("conclusion", ["timed_out", "cancelled", "success", None])
+def test_other_head_refresh_failure_never_attributed_even_if_sweep_interrupted(monkeypatch, conclusion):
+    log = f"::error::Governance refresh failed for PR #{PR} at {OTHER_HEAD}; continuing.\n"
+    _fake_github(monkeypatch, run={"id": 111, "conclusion": conclusion}, log=log)
+    assert recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda _: log) is None
+
+
+@pytest.mark.parametrize("conclusion", ["timed_out", "cancelled", "success"])
+def test_other_pr_refresh_failure_never_attributed_even_if_sweep_interrupted(monkeypatch, conclusion):
+    log = f"::error::Governance refresh failed for PR #{PR + 1} at {HEAD}; continuing.\n"
+    _fake_github(monkeypatch, run={"id": 111, "conclusion": conclusion}, log=log)
+    assert recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda _: log) is None
+
+
+@pytest.mark.parametrize("conclusion", ["timed_out", "cancelled", "success"])
+def test_unbound_refresh_failure_never_attributed_even_if_sweep_interrupted(monkeypatch, conclusion):
+    log = f"::error::Governance refresh failed for PR #{PR}; continuing.\n"
+    _fake_github(monkeypatch, run={"id": 111, "conclusion": conclusion}, log=log)
+    assert recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda _: log) is None
