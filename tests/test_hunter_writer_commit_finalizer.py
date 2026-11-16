@@ -406,3 +406,22 @@ def test_invalid_staged_registry_fails_closed_for_governed_request(tmp_path, mon
     (tmp_path / "docs" / "DEFECT_REGISTRY.json").write_text("{ malformed staged")
     _git(tmp_path, "add", "docs/DEFECT_REGISTRY.json")
     assert finalizer.main(tmp_path) == 2
+
+
+def test_missing_merge_base_fails_closed_for_governed_candidate(tmp_path, monkeypatch):
+    _governed_repo(tmp_path, monkeypatch)
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    (tmp_path / "src" / "module.py").write_text("remediation v2\n")
+    _git(tmp_path, "add", "src/module.py")
+    _git(tmp_path, "update-ref", "-d", "refs/remotes/origin/main")
+    assert finalizer.main(tmp_path) == 2
+
+
+def test_missing_merge_base_without_governed_request_remains_optional(tmp_path, monkeypatch):
+    _governed_repo(tmp_path, monkeypatch)
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    _git(tmp_path, "rm", "--cached", ".hunter/pre-ready-hostile-review.json", check=False)
+    _git(tmp_path, "update-ref", "-d", "refs/remotes/origin/main")
+    assert finalizer.main(tmp_path) == 0

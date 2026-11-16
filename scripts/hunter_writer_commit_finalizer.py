@@ -140,8 +140,16 @@ def _automatic_refresh(root: Path) -> int:
         head = _staged_review_head(root)
         changes = review.local_changes(base, head, cwd=root)
     except (OSError, ValueError, subprocess.CalledProcessError, review.GitEvidenceUnavailable) as exc:
-        print(f"[Hunter Writer Finalizer] NOTE: automatic review freshness is unknown ({type(exc).__name__}: {exc})")
-        return 0
+        # Optional review stays nonblocking only when no review request is in
+        # the staged candidate. A governed request requires the merge-base and
+        # staged-head evidence before its freshness can be trusted.
+        if _staged_review_document(root) is None:
+            print(f"[Hunter Writer Finalizer] NOTE: optional review freshness is unknown ({type(exc).__name__}: {exc})")
+            return 0
+        print(
+            f"[Hunter Writer Finalizer] FAIL: governed review freshness evidence unavailable ({exc})", file=sys.stderr
+        )
+        return 2
     document = _staged_review_document(root)
     if document is None:
         print("[Hunter Writer Finalizer] SKIP: no governed review request is staged")
