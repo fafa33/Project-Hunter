@@ -3,13 +3,13 @@
     "acceptance_criteria": [
       {
         "criterion": "a review-finding fix proceeds to a valid review opportunity and terminal readiness/advisory state without manual review-request rebuilding",
-        "evidence": "Fresh Issue 585 staged-diff evidence: workflow emits an exact PR/head-bound reconcile completion marker; recovery uses it to supersede older failures; offline finalizer separates bounded-correction content freshness from trusted authorization. Four focused regressions added; 50 focused tests passed. No external review authority claimed.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
         "criterion": "failed recovery must terminate with a specific diagnosis, not stay pending indefinitely",
-        "evidence": "Fresh Issue 585 staged-diff evidence: workflow emits an exact PR/head-bound reconcile completion marker; recovery uses it to supersede older failures; offline finalizer separates bounded-correction content freshness from trusted authorization. Four focused regressions added; 50 focused tests passed. No external review authority claimed.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed.",
         "id": "AC-2",
         "verdict": "satisfied"
       }
@@ -31,157 +31,157 @@
     "base_sha": "2e629ec6890853d319e4d753f644694a778a952f",
     "defect_families": [
       {
-        "evidence": "Newer PR/full-SHA reconcile completion marker supersedes older failures; prior-head marker does not.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Current bounded-correction review request remains admissible to offline freshness check; stale changed-content request fails closed.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer freshness check does not grant scope authorization; trusted admission controller remains authoritative.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Completion evidence is emitted only when both refresh and orchestration succeeded; review wait is not treated as completion.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "PR and full-head SHA bound completion prevents cross-head evidence contamination.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-042",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-052",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of existing Issue 585 candidate and staged five-file patch: no new authority path introduced for this family; 50 focused tests passed. Independent hostile review remains required.",
+        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
         "family": "DFF-055",
         "outcome": "clear"
       }
@@ -190,7 +190,7 @@
     "issue": "585",
     "review_target": [
       {
-        "blob_sha": "341d06f951b2f09aa94a9090694e5936fa04c27e",
+        "blob_sha": "9e2a536a712806b0dc8d0a180d5460bd8cca6d01",
         "path": "scripts/hunter_reconcile_recovery.py",
         "previous_path": "",
         "status": "added"
@@ -202,7 +202,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "7fa27890ff7cb665d282178c8f7ed3941d3a7799",
+        "blob_sha": "0fa1b56842148be8d066cb560067aaa824e08da9",
         "path": "tests/test_hunter_reconcile_recovery.py",
         "previous_path": "",
         "status": "added"
@@ -238,11 +238,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "72ac38daf87d7c28ed7b131b9517c56cfe211667f32f0366c9f13d91a88e95aa"
+    "review_target_digest": "bc3233255f96ad595498ec124cf79ed74ff5aff3491b9e3e811c845d6e12709b"
   },
-  "review_id": "448d0b17c080428367cc7098ed4a650bb04b78c76eda8ef6e3cf0fec58cc01e5",
+  "review_id": "4dca5da1c85bec5d46a18e4665118567393dd2c53942db818a1bcebc2df6fdb5",
   "review_request": {
-    "claims_id": "448d0b17c080428367cc7098ed4a650bb04b78c76eda8ef6e3cf0fec58cc01e5",
+    "claims_id": "4dca5da1c85bec5d46a18e4665118567393dd2c53942db818a1bcebc2df6fdb5",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

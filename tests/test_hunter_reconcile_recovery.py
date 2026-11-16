@@ -584,3 +584,77 @@ def test_previous_head_completion_does_not_clear_current_failure(monkeypatch):
     _fake_github(monkeypatch)
     log = f"::notice::Reconcile invocation completed for PR #{PR} at {OTHER_HEAD}; continuing.\n"
     assert recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: log) is None
+
+
+def test_zero_diagnostic_budget_drops_all_diagnostics(tmp_path):
+    state = tmp_path / "zero-budget.json"
+    document = recovery.load_state(state)
+    for i in range(recovery.MAX_TRACKED_EVENTS):
+        document["events"].append({"pr_number": i, "attempt": 1, "run_id": i})
+    document["events"].extend({"refused": "TRANSIENT", "run_id": i} for i in range(20))
+    recovery.save_state(document, state)
+    saved = recovery.load_state(state)["events"]
+    assert len(saved) == recovery.MAX_TRACKED_EVENTS
+    assert all(item.get("attempt") == 1 for item in saved)
+    recovery.save_state({"events": saved}, state)
+    assert recovery.load_state(state)["events"] == saved
+
+
+def test_failed_execution_reserves_attempt_before_judgement_validation(monkeypatch, tmp_path):
+    _fake_github(monkeypatch)
+    state = tmp_path / "failed-attempt.json"
+    args = [
+        "--pr",
+        str(PR),
+        "--head",
+        HEAD,
+        "--state",
+        str(state),
+        "--execute",
+        "--issue",
+        ISSUE,
+        "--judgement",
+        str(tmp_path / "invalid.json"),
+    ]
+    monkeypatch.setattr(recovery.review, "_trusted_judgement_path", lambda value: tmp_path / "invalid.json")
+    (tmp_path / "invalid.json").write_text("{not-json")
+    assert recovery.main(args) == 1
+    saved = recovery.load_state(state)["events"]
+    assert len(saved) == 1 and saved[0]["attempt"] == 1 and saved[0]["outcome"] == "failed"
+    assert recovery.main(args) == 2
+    saved = recovery.load_state(state)["events"]
+    assert len([e for e in saved if e.get("attempt") is not None]) == 1
+
+
+def test_failed_execution_preserves_reservation_when_outcome_update_fails(monkeypatch, tmp_path):
+    _fake_github(monkeypatch)
+    state = tmp_path / "failed-write.json"
+    args = [
+        "--pr",
+        str(PR),
+        "--head",
+        HEAD,
+        "--state",
+        str(state),
+        "--execute",
+        "--issue",
+        ISSUE,
+        "--judgement",
+        str(tmp_path / "valid.json"),
+    ]
+    (tmp_path / "valid.json").write_text("{}")
+    monkeypatch.setattr(recovery.review, "_trusted_judgement_path", lambda value: tmp_path / "valid.json")
+    monkeypatch.setattr(
+        recovery, "execute_recovery", lambda *a, **kw: (_ for _ in ()).throw(ValueError("forced failure"))
+    )
+    original_save = recovery.save_state
+
+    def fail_outcome(document, path):
+        if document["events"][-1].get("outcome") == "failed":
+            raise OSError("forced checkpoint update failure")
+        return original_save(document, path)
+
+    monkeypatch.setattr(recovery, "save_state", fail_outcome)
+    assert recovery.main(args) == 1
+    assert recovery.load_state(state)["events"][0]["outcome"] == "reserved"
+    assert recovery.main(args) == 2

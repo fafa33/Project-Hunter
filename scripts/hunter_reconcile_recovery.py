@@ -354,7 +354,8 @@ def save_state(document: dict[str, Any], path: Path = STATE_PATH) -> None:
     recorded = [item for item in document["events"] if isinstance(item, dict)]
     counters = [item for item in recorded if item.get("attempt") is not None]
     budget = max(MAX_TRACKED_EVENTS - len(counters), 0)
-    events = counters + [item for item in recorded if item.get("attempt") is None][-budget:]
+    diagnostics = [item for item in recorded if item.get("attempt") is None]
+    events = counters + (diagnostics[-budget:] if budget else [])
     payload = {"schema": STATE_SCHEMA, "events": events}
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + f".{os.getpid()}.tmp")
@@ -551,26 +552,35 @@ def main(argv: list[str] | None = None) -> int:
         if not arguments.issue or not arguments.judgement:
             print("--execute requires --issue and --judgement; recovery cannot fabricate a judgement", file=sys.stderr)
             return 2
-        judgement = json.loads(review._trusted_judgement_path(arguments.judgement).read_text(encoding="utf-8"))
-        if not isinstance(judgement, dict):
-            raise ValueError("review request judgement must be a JSON object")
-        attempt = execute_recovery(
-            plan, root=Path(__file__).resolve().parents[1], issue=arguments.issue, judgement=judgement
-        )
-        record_event(
-            document,
-            {
-                "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "pr_number": arguments.pr,
-                "head_sha": arguments.head,
-                "kind": failure.kind,
-                "run_id": failure.run_id,
-                "job_id": failure.job_id,
-                "attempt": plan.attempt,
-                "regenerated": attempt["regenerated"],
-            },
-            state_path,
-        )
+        # Reserve the attempt durably before reading judgement or executing any
+        # side effect. A failed execution is still a spent attempt; a repeated
+        # observation of this run cannot authorize the same action again.
+        event = {
+            "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "pr_number": arguments.pr,
+            "head_sha": arguments.head,
+            "kind": failure.kind,
+            "run_id": failure.run_id,
+            "job_id": failure.job_id,
+            "attempt": plan.attempt,
+            "outcome": "reserved",
+        }
+        record_event(document, event, state_path)
+        try:
+            judgement = json.loads(review._trusted_judgement_path(arguments.judgement).read_text(encoding="utf-8"))
+            if not isinstance(judgement, dict):
+                raise ValueError("review request judgement must be a JSON object")
+            attempt = execute_recovery(
+                plan, root=Path(__file__).resolve().parents[1], issue=arguments.issue, judgement=judgement
+            )
+        except Exception:
+            event["outcome"] = "failed"
+            # Keep the durable reservation even if the outcome update fails.
+            save_state(document, state_path)
+            raise
+        event["outcome"] = "completed"
+        event["regenerated"] = attempt["regenerated"]
+        save_state(document, state_path)
         _output(attempt)
         return 0
     except (
