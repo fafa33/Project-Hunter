@@ -340,3 +340,40 @@ def test_unreadable_reconcile_evidence_fails_closed(monkeypatch):
     _fake_github(monkeypatch, run={"id": 111, "conclusion": "failure"})
     with pytest.raises(recovery.ObservationUnavailable):
         recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: "")
+
+
+def test_job_log_redirect_is_followed_without_credentials(monkeypatch):
+    """The signed blob URL must never receive the API credential (Azure rejects it)."""
+
+    import urllib.error
+
+    seen: list[dict[str, str]] = []
+
+    class FakeResponse:
+        def __init__(self, body):
+            self._body = body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return self._body
+
+    class FakeOpener:
+        def open(self, request, timeout=0):
+            seen.append(dict(request.headers))
+            if len(seen) == 1:
+                raise urllib.error.HTTPError(
+                    request.full_url, 302, "Found", {"Location": "https://signed.blob.example.invalid/log"}, None
+                )
+            return FakeResponse(b"job log text")
+
+    monkeypatch.setattr(recovery.urllib.request, "build_opener", lambda *a, **k: FakeOpener())
+    reader = recovery.default_job_log("fafa33/Project-Hunter", "secret-token")
+    assert reader(222) == "job log text"
+    assert seen[0]["Authorization"] == "Bearer secret-token"
+    second = seen[1]
+    assert not any("Authorization" in key for key in second)

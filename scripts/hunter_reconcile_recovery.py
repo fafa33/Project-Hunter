@@ -49,6 +49,9 @@ import os
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -73,6 +76,8 @@ STATE_PATH = Path(
 TRANSIENT_MARKERS = ("infrastructure unavailable", "rate limit", "GitHubUnavailable")
 STALE_REQUEST_MARKER = "WAITING_FOR_EXACT_HEAD_REVIEW"
 REFRESH_FAILURE_MARKER = "Governance refresh failed"
+#: One reconcile job log is a bounded read; a larger body is unknown, not evidence.
+MAX_LOG_BYTES = 8 * 1024 * 1024
 
 KIND_STALE_REQUEST = "stale-request"
 KIND_TRANSIENT = "transient"
@@ -128,16 +133,42 @@ def request_json(repository: str, token: str, method: str, path: str) -> Any:
 
 
 def default_job_log(repository: str, token: str) -> Callable[[int], str]:
+    """One Actions job log as bounded text; the signed blob URL never receives the token."""
+
+    def get(url: str, *, auth: bool, opener: urllib.request.OpenerDirector) -> bytes:
+        headers = {"Accept": "application/vnd.github+json"}
+        if auth:
+            headers["Authorization"] = f"Bearer {token}"
+        request = urllib.request.Request(url, headers=headers, method="GET")  # noqa: S310 - fixed https API endpoint
+        with opener.open(request, timeout=60) as response:
+            return response.read()
+
     def read(job_id: int) -> str:
-        result = subprocess.run(  # noqa: S603 - fixed argv
-            ("gh", "api", f"repos/{repository}/actions/jobs/{job_id}/logs"),
-            capture_output=True,
-            text=True,
-            timeout=60,
-            env={**os.environ, "GH_TOKEN": token},
-            check=True,
-        )
-        return result.stdout
+        if type(job_id) is not int or job_id < 1:
+            raise ValueError("a job log is read by its exact positive job id")
+
+        # The logs endpoint answers 302 with a signed blob URL. urllib forwards
+        # the Authorization header to the redirect target, and Azure rejects
+        # foreign credentials, so the redirect is followed by hand, unauthenticated.
+        class _NoRedirect(urllib.request.HTTPRedirectHandler):
+            def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[no-untyped-def]
+                return None
+
+        opener = urllib.request.build_opener(_NoRedirect)
+        try:
+            body = get(
+                f"https://api.github.com/repos/{repository}/actions/jobs/{job_id}/logs", auth=True, opener=opener
+            )
+        except urllib.error.HTTPError as redirect:
+            if redirect.status not in (302, 307):
+                raise
+            location = redirect.headers.get("Location", "")
+            if urllib.parse.urlsplit(location).scheme != "https":
+                raise ObservationUnavailable("the job log redirect target is not https") from None
+            body = get(location, auth=False, opener=opener)
+        if len(body) > MAX_LOG_BYTES:
+            raise ObservationUnavailable("the authoritative job log exceeds the bounded read size")
+        return body.decode("utf-8", errors="replace")
 
     return read
 
@@ -448,7 +479,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         _output(attempt)
         return 0
-    except (ObservationUnavailable, transport.GitHubUnavailable, ValueError, OSError, json.JSONDecodeError) as exc:
+    except (
+        ObservationUnavailable,
+        transport.GitHubRequestError,
+        subprocess.CalledProcessError,
+        urllib.error.URLError,
+        ValueError,
+        OSError,
+        json.JSONDecodeError,
+    ) as exc:
         print(f"recovery unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
