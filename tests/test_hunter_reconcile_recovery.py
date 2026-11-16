@@ -1,0 +1,342 @@
+"""Bounded recovery for a failed post-push Governance Reconcile (Issue #585).
+
+Focused regression coverage: exact run/job detection bound to the exact PR
+head, stale-request recovery through the existing writer finalizer, transient
+waiting without an attempt, permanent blockage, duplicate-event idempotence,
+stale-HEAD refusal, budget exhaustion, and publisher-candidate immutability.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+from types import SimpleNamespace
+
+import hunter_pre_ready_review as review
+import hunter_reconcile_recovery as recovery
+import pytest
+
+PR = 584
+HEAD = "a" * 40
+OTHER_HEAD = "b" * 40
+ISSUE = "585"
+CRITERION = "Required proof"
+JUDGEMENT = {
+    "acceptance_criteria": [
+        {"id": "AC-1", "criterion": CRITERION, "evidence": "verified against the change", "verdict": "satisfied"}
+    ],
+    "defect_families": [{"family": "FAM-SRC", "evidence": "adversarial sweep complete", "outcome": "clear"}],
+    "findings": [],
+    "adversarial_dimensions": review.REQUIRED_ADVERSARIAL_DIMENSIONS,
+}
+REGISTRY = {
+    "version": 1,
+    "families": [
+        {
+            "id": "FAM-SRC",
+            "title": "source-scope",
+            "invariant": "test scope",
+            "applicability": {"changed_paths": ["src/"], "rationale": "test"},
+            "prevention": {"mechanism": "test"},
+        }
+    ],
+}
+WORKFLOW = {"workflows": [{"id": 7, "path": recovery.RECONCILE_WORKFLOW_FILE}]}
+RUN = {"id": 111, "conclusion": "success"}
+JOB = {"id": 222, "name": recovery.AUTHORITATIVE_JOB_NAME, "conclusion": "success"}
+STALE_LOG = (
+    "::warning::WAITING_FOR_EXACT_HEAD_REVIEW: exact-head review orchestration cannot start for "
+    f"PR #{PR} at {HEAD[:10]}: the exact-head pre-ready review request is stale. "
+    "Reconcile will start orchestration as soon as a usable one is committed.\n"
+)
+PERMANENT_LOG = f"::error::Governance refresh failed for PR #{PR}; continuing.\n"
+TRANSIENT_LOG = (
+    "Governance review infrastructure unavailable: GitHubUnavailable: transient\n"
+    f"::error::Governance refresh failed for PR #{PR}; continuing.\n"
+)
+
+
+def _fake_github(monkeypatch, *, run=RUN, log=STALE_LOG):
+    """A read-only fake of the exact reconcile evidence this recovery consumes."""
+
+    def fake_request(repository, token, method, path):
+        assert method == "GET"
+        if path == "actions/workflows?per_page=100":
+            return WORKFLOW
+        if path == "actions/workflows/7/runs?per_page=5":
+            return {"workflow_runs": [run]}
+        if path == "actions/runs/111/jobs?per_page=100":
+            return {"jobs": [JOB]}
+        if path == f"pulls/{PR}":
+            return {"state": "open", "head": {"sha": HEAD}}
+        raise AssertionError(f"unexpected path {path}")
+
+    monkeypatch.setattr(recovery, "request_json", fake_request)
+    monkeypatch.setattr(recovery, "default_job_log", lambda repository, token: lambda job_id: log)
+
+
+def _fake_issue_api(monkeypatch):
+    real_run = subprocess.run
+
+    def fake_run(command, **kwargs):
+        if command and command[0] == "gh":
+            return SimpleNamespace(
+                returncode=0, stdout=json.dumps({"number": 585, "body": f"## Acceptance Criteria\n- {CRITERION}"})
+            )
+        return real_run(command, **kwargs)
+
+    monkeypatch.setattr(review.subprocess, "run", fake_run)
+
+
+def _resolve_judgement(value):
+    path = review.Path(value).resolve(strict=True)
+    if not path.is_file():
+        raise ValueError("review judgement must be a regular file inside the authorized checkout")
+    return path
+
+
+def _git(tmp_path, *args, check=True):
+    result = subprocess.run(("git", *args), cwd=tmp_path, capture_output=True, text=True)
+    if check and result.returncode != 0:
+        raise RuntimeError(f"git {args} failed: {result.stderr}")
+    return result.stdout.strip()
+
+
+def _stale_candidate_repo(tmp_path, monkeypatch):
+    """A governed candidate whose remediation commit left its review request stale."""
+
+    _fake_issue_api(monkeypatch)
+    monkeypatch.setattr(
+        review,
+        "_trusted_judgement_path",
+        lambda value: _resolve_judgement(value),
+    )
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "config", "user.name", "Hunter Test")
+    _git(tmp_path, "config", "user.email", "hunter@example.invalid")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "DEFECT_REGISTRY.json").write_text(json.dumps(REGISTRY))
+    # The judgement source is a writer-local input; keep it out of the candidate.
+    info_exclude = tmp_path / ".git" / "info" / "exclude"
+    info_exclude.write_text("review-judgement.json\n")
+    _git(tmp_path, "add", "docs/DEFECT_REGISTRY.json")
+    _git(tmp_path, "-c", "commit.gpgsign=false", "commit", "-qm", "base")
+    _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "module.py").write_text("v1\n")
+    _git(tmp_path, "add", "src/module.py")
+    judgement_path = tmp_path / "review-judgement.json"
+    judgement_path.write_text(json.dumps(JUDGEMENT))
+    monkeypatch.setenv("HUNTER_REVIEW_JUDGEMENT", str(judgement_path))
+    monkeypatch.setenv("HUNTER_GOVERNING_ISSUE", ISSUE)
+    import hunter_writer_commit_finalizer as finalizer
+
+    assert finalizer.main(tmp_path) == 0
+    _git(tmp_path, "-c", "commit.gpgsign=false", "commit", "-qm", "governed candidate")
+    # Remediation committed without refreshing the request: the exact defect of Issue #585.
+    (tmp_path / "src" / "module.py").write_text("v2\n")
+    _git(tmp_path, "add", "src/module.py")
+    _git(tmp_path, "-c", "commit.gpgsign=false", "commit", "-qm", "remediation")
+    return judgement_path, _git(tmp_path, "rev-parse", "HEAD")
+
+
+def _stale_failure(head_sha: str = HEAD):
+    return recovery.ReconcileFailure(
+        recovery.KIND_STALE_REQUEST, run_id=111, job_id=222, head_sha=head_sha, detail=STALE_LOG.strip()
+    )
+
+
+def test_exact_failed_run_and_job_are_detected_and_head_bound(monkeypatch):
+    _fake_github(monkeypatch)
+    failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: STALE_LOG)
+    assert failure is not None
+    assert failure.kind == recovery.KIND_STALE_REQUEST
+    assert (failure.run_id, failure.job_id) == (111, 222)
+    assert failure.head_sha == HEAD
+
+
+def test_stale_request_failure_recovers_through_existing_finalizer(tmp_path, monkeypatch):
+    """Test 5: a recoverable reconcile failure produces a bounded, executed recovery."""
+
+    judgement_path, head = _stale_candidate_repo(tmp_path, monkeypatch)
+    assert review.read_review_document(tmp_path / review.REVIEW_RELATIVE_PATH)["claims"]["findings"] == []
+    _fake_github(monkeypatch)
+    failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: STALE_LOG)
+    assert failure is not None
+    state_path = tmp_path / "recovery-state.json"
+    document = recovery.load_state(state_path)
+    plan = recovery.plan_recovery(_stale_failure(head), document, pr_number=PR, head_sha=head)
+    assert isinstance(plan, recovery.RecoveryPlan)
+    assert plan.attempt == 1
+    judgement = json.loads(judgement_path.read_text(encoding="utf-8"))
+    attempt = recovery.execute_recovery(plan, root=tmp_path, issue=ISSUE, judgement=judgement)
+    assert attempt["regenerated"] is True
+    bound = {
+        item["path"]: item["blob_sha"]
+        for item in review.read_review_document(tmp_path / review.REVIEW_RELATIVE_PATH)["claims"]["review_target"]
+    }
+    assert bound["src/module.py"] == _git(tmp_path, "rev-parse", "HEAD:src/module.py")
+    recovery.record_event(
+        document,
+        {
+            "observed_at": "2026-11-16T00:00:00Z",
+            "pr_number": PR,
+            "head_sha": head,
+            "kind": failure.kind,
+            "run_id": failure.run_id,
+            "job_id": failure.job_id,
+            "attempt": plan.attempt,
+            "regenerated": True,
+        },
+        state_path,
+    )
+    events = recovery.load_state(state_path)["events"]
+    assert any(item.get("attempt") == 1 for item in events)
+
+
+def test_permanent_failure_remains_blocked(tmp_path, monkeypatch):
+    """Test 6: a permanent reconcile failure is recorded and never recovered."""
+
+    _fake_github(monkeypatch, run={"id": 111, "conclusion": "failure"}, log=PERMANENT_LOG)
+    failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: PERMANENT_LOG)
+    assert failure is not None and failure.kind == recovery.KIND_PERMANENT
+    plan = recovery.plan_recovery(failure, recovery.load_state(tmp_path / "s.json"), pr_number=PR, head_sha=HEAD)
+    assert isinstance(plan, recovery.RecoveryRefusal)
+    assert plan.code == "PERMANENT"
+
+
+def test_transient_failure_waits_without_spending_an_attempt(tmp_path, monkeypatch):
+    """A transient failure is left to the existing reconcile sweeps; no attempt is spent."""
+
+    _fake_github(monkeypatch, run={"id": 111, "conclusion": "failure"}, log=TRANSIENT_LOG)
+    failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: TRANSIENT_LOG)
+    assert failure is not None and failure.kind == recovery.KIND_TRANSIENT
+    plan = recovery.plan_recovery(failure, recovery.load_state(tmp_path / "s.json"), pr_number=PR, head_sha=HEAD)
+    assert isinstance(plan, recovery.RecoveryRefusal)
+    assert plan.code == "TRANSIENT"
+
+
+def test_duplicate_recovery_events_create_no_new_attempt(tmp_path):
+    """Test 7: the same failure event is idempotent; re-observing it cannot re-attempt."""
+
+    document = recovery.load_state(tmp_path / "s.json")
+    first = recovery.plan_recovery(_stale_failure(), document, pr_number=PR, head_sha=HEAD)
+    assert isinstance(first, recovery.RecoveryPlan)
+    recovery.record_event(
+        document,
+        {
+            "observed_at": "2026-11-16T00:00:00Z",
+            "pr_number": PR,
+            "head_sha": HEAD,
+            "kind": recovery.KIND_STALE_REQUEST,
+            "run_id": first.run_id,
+            "job_id": 222,
+            "attempt": first.attempt,
+        },
+        tmp_path / "s.json",
+    )
+    again = recovery.plan_recovery(
+        _stale_failure(), recovery.load_state(tmp_path / "s.json"), pr_number=PR, head_sha=HEAD
+    )
+    assert isinstance(again, recovery.RecoveryRefusal)
+    assert again.code == "ALREADY_RECOVERED"
+    # A NEW failing run for the same head is a new event and spends the next attempt.
+    newer = recovery.plan_recovery(
+        recovery.ReconcileFailure(
+            recovery.KIND_STALE_REQUEST, run_id=333, job_id=222, head_sha=HEAD, detail="new failing sweep"
+        ),
+        recovery.load_state(tmp_path / "s.json"),
+        pr_number=PR,
+        head_sha=HEAD,
+    )
+    assert isinstance(newer, recovery.RecoveryPlan)
+    assert newer.attempt == first.attempt + 1
+
+
+def test_stale_head_prevents_recovery(tmp_path):
+    """Test 8: recovery bound to a head that no longer exists is refused."""
+
+    failure = recovery.ReconcileFailure(
+        recovery.KIND_STALE_REQUEST, run_id=111, job_id=222, head_sha=OTHER_HEAD, detail="old failure"
+    )
+    plan = recovery.plan_recovery(failure, recovery.load_state(tmp_path / "s.json"), pr_number=PR, head_sha=HEAD)
+    assert isinstance(plan, recovery.RecoveryRefusal)
+    assert plan.code == "STALE_HEAD"
+
+
+def test_recovery_budget_exhaustion_blocks_further_attempts(tmp_path):
+    """Test 9: the bounded per-head budget is enforced against the durable checkpoint."""
+
+    document = recovery.load_state(tmp_path / "s.json")
+    for attempt in range(1, recovery.MAX_RECOVERY_ATTEMPTS + 1):
+        recovery.record_event(
+            document,
+            {
+                "observed_at": "2026-11-16T00:00:00Z",
+                "pr_number": PR,
+                "head_sha": HEAD,
+                "kind": recovery.KIND_STALE_REQUEST,
+                "run_id": 111 + attempt,
+                "job_id": 222,
+                "attempt": attempt,
+            },
+            tmp_path / "s.json",
+        )
+    plan = recovery.plan_recovery(
+        _stale_failure(), recovery.load_state(tmp_path / "s.json"), pr_number=PR, head_sha=HEAD
+    )
+    assert isinstance(plan, recovery.RecoveryRefusal)
+    assert plan.code == "RECOVERY_BUDGET_EXHAUSTED"
+
+
+def test_recovery_never_mutates_the_candidate_beyond_the_request(tmp_path, monkeypatch):
+    """Test 10: a recovery attempt changes only the review-request artifact."""
+
+    judgement_path, head = _stale_candidate_repo(tmp_path, monkeypatch)
+    _fake_github(monkeypatch)
+    document = recovery.load_state(tmp_path / "recovery-state.json")
+    plan = recovery.plan_recovery(_stale_failure(head), document, pr_number=PR, head_sha=head)
+    judgement = json.loads(judgement_path.read_text(encoding="utf-8"))
+    head_before = _git(tmp_path, "rev-parse", "HEAD")
+    recovery.execute_recovery(plan, root=tmp_path, issue=ISSUE, judgement=judgement)
+    assert _git(tmp_path, "rev-parse", "HEAD") == head_before
+    changed = _git(tmp_path, "status", "--porcelain").splitlines()
+    assert [line.strip() for line in changed] == ["M .hunter/pre-ready-hostile-review.json"]
+
+
+def test_recovered_request_still_carries_no_review_authority(tmp_path, monkeypatch):
+    """A recovery re-requests review for the new content; it fabricates no authority."""
+
+    judgement_path, head = _stale_candidate_repo(tmp_path, monkeypatch)
+    _fake_github(monkeypatch)
+    document = recovery.load_state(tmp_path / "recovery-state.json")
+    plan = recovery.plan_recovery(_stale_failure(head), document, pr_number=PR, head_sha=head)
+    judgement = json.loads(judgement_path.read_text(encoding="utf-8"))
+    recovery.execute_recovery(plan, root=tmp_path, issue=ISSUE, judgement=judgement)
+    regenerated = review.read_review_document(tmp_path / review.REVIEW_RELATIVE_PATH)
+    assert "authority" not in regenerated
+    assert regenerated["review_request"]["schema"] == "hunter.review-request.v1"
+    assert regenerated["review_request"]["claims_id"] == regenerated["review_id"]
+
+
+def test_main_refuses_a_head_the_live_pr_does_not_carry(monkeypatch, tmp_path):
+    """Recovery binds to the live GitHub PR head, not to the caller's claim."""
+
+    _fake_github(monkeypatch)
+    code = recovery.main(["--pr", str(PR), "--head", OTHER_HEAD, "--state", str(tmp_path / "state.json")])
+    assert code == 2
+
+
+def test_main_plans_without_executing(monkeypatch, tmp_path):
+    _fake_github(monkeypatch)
+    state = tmp_path / "state.json"
+    code = recovery.main(["--pr", str(PR), "--head", HEAD, "--state", str(state)])
+    assert code == 0
+    document = recovery.load_state(state)
+    assert not any(item.get("attempt") is not None for item in document["events"])
+
+
+def test_unreadable_reconcile_evidence_fails_closed(monkeypatch):
+    _fake_github(monkeypatch, run={"id": 111, "conclusion": "failure"})
+    with pytest.raises(recovery.ObservationUnavailable):
+        recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: "")

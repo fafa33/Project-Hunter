@@ -2,34 +2,16 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "remove reviewer-pool membership filters from knowledge ingestion (without altering independent review gates). capture all pr findings from github review comments and sonar/ci errors through the existing pipeline",
-        "evidence": "Implementation/source regressions pass, but complete live source/interval verification and deployed bounded replay remain outstanding; this is not full acceptance.",
+        "criterion": "a review-finding fix proceeds to a valid review opportunity and terminal readiness/advisory state without manual review-request rebuilding",
+        "evidence": "The authorized-writer pre-commit finalizer now automatically refreshes a governed candidate's committed review request from its own claims whenever the staged content no longer matches it (scripts/hunter_writer_commit_finalizer.py), and bounded recovery for a failed post-push Governance Reconcile re-mints the exact-head request through the same existing finalizer (scripts/hunter_reconcile_recovery.py). Focused regressions cover remediation refresh, governing-Issue binding, exact staged-content binding, and absence of fabricated review authority (tests/test_hunter_writer_commit_finalizer.py, tests/test_hunter_reconcile_recovery.py).",
         "id": "AC-1",
-        "verdict": "pending-deployment"
+        "verdict": "satisfied"
       },
       {
-        "criterion": "backfill missing evidence from prior merged prs, including at least five missing copilot findings in #579/#581/#582. existing open-pr-only scanning is insufficient for historical backfill",
-        "evidence": "Historical eight findings for #579/#581/#582 were verified in the governing Issue evidence checkpoint https://github.com/fafa33/Project-Hunter/issues/586#issuecomment-6839309927; no retrospective finding proof is claimed.",
+        "criterion": "failed recovery must terminate with a specific diagnosis, not stay pending indefinitely",
+        "evidence": "Recovery classification is terminal and specific: permanent reconcile failures stay blocked with their diagnosis, transient failures are recorded and left to the existing reconcile sweeps without spending an attempt, per-event durable idempotence prevents repeated attempts, stale-HEAD binding is refused, and the bounded per-head budget exhausts with an explicit refusal; focused regressions prove each outcome (tests/test_hunter_reconcile_recovery.py).",
         "id": "AC-2",
         "verdict": "satisfied"
-      },
-      {
-        "criterion": "record fix, resolution and test outcomes; link to original finding and feed prevention into canonical dpm/spm agent context for later prs",
-        "evidence": "Receipt family classification and DPM paths pass focused regressions. Real signed #737 receipts and hosted completed-finding SPM consumption require trusted deployment and remain outstanding; F1/F3 are not declared fixed.",
-        "id": "AC-3",
-        "verdict": "pending-deployment"
-      },
-      {
-        "criterion": "focused tests: multiple sources, merged prs, duplicate events, lifecycle transitions, and downstream prevention consumption",
-        "evidence": "Prior 68500e4: 635 focused tests and exact-head hosted 8461 passed/20 skipped. Initial continuation: 468 affected review/transport/policy tests passed. After exact-head CodeQL exposed the diagnostic fallback, a default-label regression was RED; all 117 directly affected tests passed after the path-free fallback fix. Ruff, Black and focused Mypy passed. Unchanged knowledge/orchestrator evidence is reused; no local full suite repeated.",
-        "id": "AC-4",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "prove live ledger counts and prevention materialization on real prs. do not claim success from a workflow's existence alone",
-        "evidence": "Prior live ledger/compiler evidence is recorded in Issue #586 checkpoint 6839309927. New production replay, receipt publication and hosted SPM consumption are not completed or inferred from workflow existence.",
-        "id": "AC-5",
-        "verdict": "pending-deployment"
       }
     ],
     "adversarial_dimensions": [
@@ -46,321 +28,159 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "08f565fd14e9ded796a63c9fc45dce6f8997aeff",
+    "base_sha": "2e629ec6890853d319e4d753f644694a778a952f",
     "defect_families": [
       {
-        "evidence": "No caller time grants eligibility; live trusted preflight and ingress state are required. Receipt freshness semantics are unchanged.",
-        "family": "DFF-001",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Canonical verifier binds committed content to live PR HEAD, then rechecks HEAD and base; head-race and base-race integration fixtures deny dispatch.",
-        "family": "DFF-002",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Repository, PR, governing Issue, head, and base must match trusted facts; wrong_repo, wrong_pr, missing_issue and fork fixtures deny eligibility.",
-        "family": "DFF-003",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "468 affected tests passed for standing-policy proposal and static-label continuation. New exact-head CodeQL exposed the remaining path-bearing fallback. A real retry regression failed for the default case before its correction; 117 directly affected tests then passed with both explicit and default labels path-free. Candidate policy and open STOP-WORK still deny.",
-        "family": "DFF-004",
-        "outcome": "repaired"
-      },
-      {
-        "evidence": "Review eligibility contains only mode/repository/PR; candidate_policy is ignored. No new durable secret or model-output field is introduced.",
-        "family": "DFF-005",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No clock/order generator changes. prepare_request is deterministic for unchanged content; repeated request preparation retains unresolved findings.",
-        "family": "DFF-006",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Changed target digest, head, base, repository and PR fixtures deny eligibility. Replay #737 additionally pins all eight findings and original hosted proof.",
+        "evidence": "Recovery idempotence and budget are keyed to the durable checkpoint's (pull request, exact head, run) identity; a repeated event cannot replay an attempt, and execute_recovery refuses a head the live pull request does not carry.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Changed content invalidates review_id/target binding; producer file digest and symlink fixtures deny substituted trusted definitions.",
+        "evidence": "The regenerated request is verified against local git evidence before it is written; review authority is never minted, copied or mutated by the refresh or recovery path, and the refreshed document carries no authority.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "No connector grant or provenance contract changes. Pre-deployment eligibility requires existing verify_code_write_ingress_provenance success.",
+        "evidence": "No new evidence store or connector surface: recovery records bounded events in one atomic local JSON checkpoint and reuses the existing writer review-finalization infrastructure.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "No author, committer, identity aliases or signing policy changes. New STOP-WORK checks use trusted policy authorized_by; writer identity remains the existing signed owner channel.",
+        "evidence": "Neither the finalizer nor recovery signs or pushes; publication remains the owner-bound signed writer channel, and no writer identity is accepted from candidate content.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "No force-push or history rewrite. Request artifact is regenerated for current content before the final signed ordinary commit.",
+        "evidence": "The staged-content snapshot commit object is unreferenced plumbing that is never pushed; the review binds the exact staged tree instead of a stranded intermediate commit.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate metadata cannot mint a receipt or authorize itself; this repair changes no connector receipt or receipt freshness contract.",
+        "evidence": "No receipt or authorization surface is touched: refresh and recovery mutate only .hunter/pre-ready-hostile-review.json, proven by focused regression.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Pending-deployment is accepted only in request mode and yields a non-ok review-only verdict; verify_claims rejects it as final acceptance.",
+        "evidence": "The refreshed artifact remains a review request carrying no review authority; Ready still requires the trusted controller's exact-head review and owner approval.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Missing trusted live eligibility yields awaiting-trusted-review-policy, never valid. Existing orchestrator tests cover pending prerequisites and blocked requests.",
+        "evidence": "Pending trusted prerequisites stay retryable: observation treats absence of exact-head failure evidence as no failure, and only the bound stale-request state is recoverable.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "68500e4 preflight 43352243077 and trusted validation 43352247211 are confirmed success. bf74751 static-label-only remediation did not clear CodeQL; analysis 2157994349 proved the fallback path. Current correction passed 117 affected tests and lint/type checks; no current hosted success, policy deployment or canonical reviewer invocation is fabricated.",
+        "evidence": "No prevention state is claimed by the candidate: the defect registry and its guards are unchanged, and recovery never publishes admission or readiness outcomes.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Pre-deployment eligibility requires exact-head trusted preflight success. No validation receipt reuse machinery is changed; prior-head green results are not reused.",
+        "evidence": "Recovery evidence is per exact head and event; a stale request recorded for a different head is never reused as proof for this one, and stale-HEAD binding is refused.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "No issuer bootstrap, volume mount, or composition change in the candidate diff.",
+        "evidence": "No runtime bootstrap or volume-aware issuer path is touched by this change.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "No issuer ownership, active-instance lease, or authorization replay mechanism is changed.",
+        "evidence": "No hosted execution ownership is touched: recovery performs read-only GitHub observation from the writer checkout and holds no execution authority.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "No shutdown, worker drain, or execution-terminal transition is changed.",
+        "evidence": "No execution shutdown or drain path is touched by this change.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Final verify_claims semantics remain strict; pending-deployment never supplies positive review authority. Native independent review remains outstanding.",
+        "evidence": "Merge readiness is unchanged: recovery never publishes readiness, statuses or PR state; it only re-requests review for current content through the existing finalizer.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Bounded #737 replay requires original hosted preflight 43276347921 before any writes; lifecycle entry tests cover missing evidence.",
+        "evidence": "No ledger claim or new execution entry point exists: recovery spends no hosted authorization and is not a privileged workflow.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Requests are regenerated against current content rather than carrying old reviewer authority; orchestrator and collector finalization regression suites pass.",
-        "family": "DFF-024",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "This candidate does not activate trusted policy for itself. Main lacks the policy; live review remains blocked until independently trusted deployment/authorization.",
-        "family": "DFF-025",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No reviewer availability, timeout, exhaustion or fallback authority is fabricated or changed. Eligibility is a prerequisite, not a reviewer result.",
-        "family": "DFF-026",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Governance integration fixtures exercise the real valid_current_review_request and verify_review_request boundary with controlled live-state reads.",
-        "family": "DFF-027",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Policy is read from trusted default-branch checkout; candidate fields cannot authorize. No candidate workflow receives privileged execution or publication credentials.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Publication retains repository pre-push and hosted exact-head preflight. No draft/admission bypass is introduced.",
+        "evidence": "The candidate still reaches GitHub only through the pre-push-gated signed writer channel; recovery performs no publication and no CI dispatch or rerun.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Existing script import paths remain unchanged; the new tests import both production modules and execute the canonical verifier.",
+        "evidence": "No tracked governance asset moved; the new module is loadable at scripts/hunter_reconcile_recovery.py and is imported by its regression tests.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused deterministic tests mock GitHub reads and use temporary producer files; no network or production state is asserted inside pytest.",
+        "evidence": "Focused regressions inject GitHub evidence through seams and never assert live external preconditions inside the deterministic test lane.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "No new package or executable dependency is introduced; hash/path/JSON handling uses existing standard-library dependencies.",
-        "family": "DFF-036",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Eligibility uses explicit ReviewVerdict states; only predeployment-review-eligible is accepted for review dispatch, and its ok property remains false.",
+        "evidence": "The recovery CLI emits machine-readable JSON verdicts (planned/refused/attempt) from a closed refusal vocabulary with specific diagnoses.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Missing policy, preflight, ingress, Issue, STOP-WORK closure or producer evidence denies eligibility rather than degrading to a best-effort success.",
-        "family": "DFF-038",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "New reads are repository-scoped issues/<number> and pulls/<number>; no global REST endpoint is routed through request_json.",
-        "family": "DFF-039",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Static diagnostic label is used by the existing trusted consumer; no privileged candidate execution is introduced. Proposed policy patch is inert and active policy unchanged. New exact-head hosted trusted upgrade/replay remain required; previous-head green results are not reused.",
-        "family": "DFF-040",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No provider ordering, timeout budget, acknowledgement deadline or collector lifetime change.",
+        "evidence": "No reviewer chain or timeout is touched: recovery never dispatches reviewers and never reruns CI.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "No DPM rendering budget changes. Receipt classifications reuse existing deterministic ingestion planning rather than adding prompt content per task.",
-        "family": "DFF-045",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No workflow trigger or Draft guard change. Existing synchronize/ready_for_review orchestration stays intact; reviewer tests pass.",
-        "family": "DFF-046",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No new process, credential environment, UID sharing or candidate execution path is added. Trusted facts are read-only inputs.",
-        "family": "DFF-047",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Local tests do not mark publication complete. Exact signed local/remote HEAD equality will be checked after the required push boundary.",
-        "family": "DFF-049",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Knowledge replay uses one single-line CLI command inside the existing main-only job; workflow regression tests pass.",
-        "family": "DFF-052",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No thread-resolution or changes-requested guard is removed. Scope-denied eligibility and unresolved blocking findings still deny review.",
-        "family": "DFF-053",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No authorization/compiler checkout resolution changes. Trusted policy and producer digest are resolved from pre_ready.ROOT.",
-        "family": "DFF-054",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Request preparation retains unresolved blocking findings and changes identity with content; no authority is copied. Existing blocked/waiting and external-head race tests pass.",
+        "evidence": "The defect family itself: automatic exact-head request refresh after remediation plus bounded, idempotent, head-bound recovery removes the manual review-request rebuild loop; regressions cover stale refresh, wrong governing Issue, exact content binding, absence of fabricated authority, transient/permanent classification, duplicate-event idempotence, stale HEAD, budget exhaustion and publisher-candidate immutability.",
         "family": "DFF-055",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Receipt classification reuses ingestion precedence; fingerprint-inherited and unauthoritative literal-tag regressions pass. Replay does not infer finding_proven or completed F1/F3 receipts.",
-        "family": "DFF-057",
-        "outcome": "clear"
+        "outcome": "repaired"
       }
     ],
     "findings": [],
-    "issue": "586",
+    "issue": "585",
     "review_target": [
       {
-        "blob_sha": "922bad97a34ef30f326b9bb03db86683605f7a88",
-        "path": "docs/ISSUE_586_PERMANENT_REVIEW_POLICY.md",
+        "blob_sha": "5cd17937c7b523a0a9bff39e283b52419bea30ec",
+        "path": "scripts/hunter_reconcile_recovery.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "e285c82439c12e040c987adf281eb3d8cad110d7",
-        "path": "docs/ISSUE_586_PERMANENT_REVIEW_POLICY.patch",
+        "blob_sha": "f333d070cfabcffc7e0c03e6624bf186de2125f3",
+        "path": "tests/test_hunter_reconcile_recovery.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "06e28d6dbc0daf80003bd25d286ffa4890baf95e",
-        "path": "tests/test_predeployment_review_eligibility.py",
-        "previous_path": "",
-        "status": "added"
-      },
-      {
-        "blob_sha": "a3e3fba2fb0e0e387d72cbc81d986d274a741c39",
-        "path": ".github/workflows/hunter-issue-agent-knowledge.yml",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "db0ce8540d66a4ff5bec6289710b4e0949c5fad8",
-        "path": "docs/ADR/0039-review-knowledge-remediation-loop.md",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "9b70cc71f01ec533feecdc81a6e8be850ee07837",
-        "path": "docs/DEFECT_REGISTRY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "0ba51b9e0754e049e7a67704f5333102edd86a3f",
-        "path": "scripts/hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "f260b3aad2f800c5ad8aa7751e3011d120f27090",
-        "path": "scripts/hunter_issue_agent_lifecycle.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "641e8e35d79918dffe3a34ec1aa43e5736aad2aa",
+        "blob_sha": "8652993d4919d4e76b7184db05645b5776e4dc8c",
         "path": "scripts/hunter_pre_ready_review.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "1e247598efb9911e8d212187fa9b40d653932a3a",
-        "path": "src/hunter/automation/issue_agent_knowledge.py",
+        "blob_sha": "2b66a0203f7206f0148040265c92c7189de2fc81",
+        "path": "scripts/hunter_writer_commit_finalizer.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "6dfc61669052882978b03eb00b7e7d450d205c76",
-        "path": "tests/test_hunter_knowledge_learning_workflow.py",
+        "blob_sha": "1b046c5bc39b875d1b559dcf4d7a4bd165e28298",
+        "path": "tests/test_hunter_writer_commit_finalizer.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "03bf330a3e1bab71e5184828db38ea1533886680",
-        "path": "tests/test_issue_agent_knowledge.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "ee1ef31af3578cfd96696d11c85fe19e39d58c89",
-        "path": "tests/test_issue_agent_lifecycle_entry.py",
+        "blob_sha": "b78b7ca2ac0d5c3c852b55c9d95740eb231d44e3",
+        "path": "tests/test_pre_ready_issue_validation.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "0c59a91993e896d314adafb490b016027eec143d82b865f506ff8124f887f03d"
+    "review_target_digest": "86c558e1af62b2829724921fc34eb40056b12e97fe9848fa2e8730d2e3bcaa52"
   },
-  "review_eligibility": {
-    "mode": "pre_deployment",
-    "pr_number": 738,
-    "repository": "fafa33/Project-Hunter"
-  },
-  "review_id": "e8d314937f7a05cd005eb8111c1977b979a8c6cd7d7be1b16421e2834d163283",
+  "review_id": "68e837d710b616ad59d83612f496975d6bc443601e0db9e093563a0cf95d3324",
   "review_request": {
-    "claims_id": "e8d314937f7a05cd005eb8111c1977b979a8c6cd7d7be1b16421e2834d163283",
+    "claims_id": "68e837d710b616ad59d83612f496975d6bc443601e0db9e093563a0cf95d3324",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
