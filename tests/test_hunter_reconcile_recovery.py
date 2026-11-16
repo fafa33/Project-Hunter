@@ -203,6 +203,55 @@ def test_transient_failure_waits_without_spending_an_attempt(tmp_path, monkeypat
     assert plan.code == "TRANSIENT"
 
 
+def test_transient_marker_in_another_prs_section_does_not_reclassify_ours(monkeypatch):
+    """A transient diagnosis far from this PR's failure marker belongs to another PR."""
+
+    filler = "\n".join(
+        f"unrelated reconcile output line {index}" for index in range(recovery.TRANSIENT_CONTEXT_LINES + 2)
+    )
+    log = (
+        "Governance review infrastructure unavailable: GitHubUnavailable: transient\n"
+        f"{filler}\n"
+        f"::error::Governance refresh failed for PR #{PR}; continuing.\n"
+    )
+    _fake_github(monkeypatch, run={"id": 111, "conclusion": "failure"}, log=log)
+    failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: log)
+    assert failure is not None and failure.kind == recovery.KIND_PERMANENT
+
+
+def test_older_runs_are_searched_when_the_newest_run_is_unrelated(monkeypatch):
+    """A newest run whose log never mentions this PR did not reconcile it; keep searching."""
+
+    def fake_request(repository, token, method, path):
+        if path == "actions/workflows?per_page=100":
+            return WORKFLOW
+        if path == f"actions/workflows/7/runs?per_page={recovery.MAX_SCANNED_RUNS}":
+            return {"workflow_runs": [{"id": 150, "conclusion": "failure"}, RUN]}
+        if path == "actions/runs/150/jobs?per_page=100":
+            return {"jobs": [{"id": 333, "name": recovery.AUTHORITATIVE_JOB_NAME, "conclusion": "failure"}]}
+        if path == "actions/runs/111/jobs?per_page=100":
+            return {"jobs": [JOB]}
+        raise AssertionError(f"unexpected path {path}")
+
+    logs = {
+        333: "::error::Governance refresh failed for PR #999; continuing.\n",
+        222: STALE_LOG,
+    }
+    monkeypatch.setattr(recovery, "request_json", fake_request)
+    failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: logs[job_id])
+    assert failure is not None
+    assert (failure.kind, failure.run_id, failure.job_id) == (recovery.KIND_STALE_REQUEST, 111, 222)
+
+
+def test_a_run_that_reconciled_the_pr_without_failure_ends_the_scan(monkeypatch):
+    """Positive evidence stops the scan: this PR was reconciled with no failure."""
+
+    log = f"PR #{PR}: governance refresh ok; exact-head request current at {HEAD[:10]}.\n"
+    _fake_github(monkeypatch, log=log)
+    failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: log)
+    assert failure is None
+
+
 def test_duplicate_recovery_events_create_no_new_attempt(tmp_path):
     """Test 7: the same failure event is idempotent; re-observing it cannot re-attempt."""
 
@@ -274,6 +323,51 @@ def test_recovery_budget_exhaustion_blocks_further_attempts(tmp_path):
     )
     assert isinstance(plan, recovery.RecoveryRefusal)
     assert plan.code == "RECOVERY_BUDGET_EXHAUSTED"
+
+
+def test_attempt_counters_survive_history_trimming(tmp_path):
+    """Trimming the tracked history never drops a counter or resets the bounded budget."""
+
+    state = tmp_path / "s.json"
+    document = recovery.load_state(state)
+    recovery.record_event(
+        document,
+        {
+            "observed_at": "2026-11-16T00:00:00Z",
+            "pr_number": PR,
+            "head_sha": HEAD,
+            "kind": recovery.KIND_STALE_REQUEST,
+            "run_id": 999,
+            "job_id": 222,
+            "attempt": 1,
+        },
+        state,
+    )
+    for index in range(recovery.MAX_TRACKED_EVENTS + 3):
+        recovery.record_event(
+            document,
+            {
+                "observed_at": "2026-11-16T00:00:00Z",
+                "pr_number": PR,
+                "head_sha": HEAD,
+                "kind": recovery.KIND_TRANSIENT,
+                "run_id": 500 + index,
+                "job_id": 222,
+                "refused": "TRANSIENT",
+            },
+            state,
+        )
+    events = recovery.load_state(state)["events"]
+    counters = [item for item in events if item.get("attempt") is not None]
+    assert [item["attempt"] for item in counters] == [1]
+    # The durable counter still feeds the bounded budget: the next run plans attempt 2.
+    plan = recovery.plan_recovery(_stale_failure(), recovery.load_state(state), pr_number=PR, head_sha=HEAD)
+    assert isinstance(plan, recovery.RecoveryPlan)
+    assert plan.attempt == 2
+    # Idempotence: re-saving the already-saved state changes nothing further.
+    before = recovery.load_state(state)
+    recovery.save_state(before, state)
+    assert recovery.load_state(state) == before
 
 
 def test_recovery_never_mutates_the_candidate_beyond_the_request(tmp_path, monkeypatch):

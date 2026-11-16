@@ -3,13 +3,13 @@
     "acceptance_criteria": [
       {
         "criterion": "a review-finding fix proceeds to a valid review opportunity and terminal readiness/advisory state without manual review-request rebuilding",
-        "evidence": "The authorized-writer pre-commit finalizer now automatically refreshes a governed candidate's committed review request from its own claims whenever the staged content no longer matches it (scripts/hunter_writer_commit_finalizer.py), and bounded recovery for a failed post-push Governance Reconcile re-mints the exact-head request through the same existing finalizer (scripts/hunter_reconcile_recovery.py). Focused regressions cover remediation refresh, governing-Issue binding, exact staged-content binding, and absence of fabricated review authority (tests/test_hunter_writer_commit_finalizer.py, tests/test_hunter_reconcile_recovery.py).",
+        "evidence": "Fresh staged-diff review: writer finalizer refuses stale request claims unless supplied with fresh issue-bound judgement, and recovery gives actionable refresh instructions; 37 focused tests passed, including staged index isolation and exact-head checks. This is a request for independent review, not reviewer approval.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
         "criterion": "failed recovery must terminate with a specific diagnosis, not stay pending indefinitely",
-        "evidence": "Recovery classification is terminal and specific: permanent reconcile failures stay blocked with their diagnosis, transient failures are recorded and left to the existing reconcile sweeps without spending an attempt, per-event durable idempotence prevents repeated attempts, stale-HEAD binding is refused, and the bounded per-head budget exhausts with an explicit refusal; focused regressions prove each outcome (tests/test_hunter_reconcile_recovery.py).",
+        "evidence": "Fresh staged-diff review: unrelated reconcile runs are skipped, per-PR transient classification is isolated, and durable attempt records survive bounded diagnostic trimming; regression tests passed in 37-test focused run.",
         "id": "AC-2",
         "verdict": "satisfied"
       }
@@ -31,116 +31,116 @@
     "base_sha": "2e629ec6890853d319e4d753f644694a778a952f",
     "defect_families": [
       {
-        "evidence": "Recovery idempotence and budget are keyed to the durable checkpoint's (pull request, exact head, run) identity; a repeated event cannot replay an attempt, and execute_recovery refuses a head the live pull request does not carry.",
+        "evidence": "Recovery exact-PR/head/run accounting is retained when diagnostics are trimmed; test_counter_survives_history_trim and repeated recovery tests passed on staged diff.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "The regenerated request is verified against local git evidence before it is written; review authority is never minted, copied or mutated by the refresh or recovery path, and the refreshed document carries no authority.",
+        "evidence": "Writer finalizer now refuses stale claims and reads the staged git blob; tests for stale judgement and unstaged edit isolation passed.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "No new evidence store or connector surface: recovery records bounded events in one atomic local JSON checkpoint and reuses the existing writer review-finalization infrastructure.",
+        "evidence": "Only existing review-request and local checkpoint boundaries are used; staged diff adds no new remote storage or connector.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Neither the finalizer nor recovery signs or pushes; publication remains the owner-bound signed writer channel, and no writer identity is accepted from candidate content.",
+        "evidence": "The four-file staged diff changes no signing or publisher implementation; signed publication remains the existing git path.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "The staged-content snapshot commit object is unreferenced plumbing that is never pushed; the review binds the exact staged tree instead of a stranded intermediate commit.",
+        "evidence": "Staged review content is read via git show :path; no unstaged content is included in snapshot; focused tests passed.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "No receipt or authorization surface is touched: refresh and recovery mutate only .hunter/pre-ready-hostile-review.json, proven by focused regression.",
+        "evidence": "The staged changes do not alter receipts or authorization; changes are limited to finalizer, reconcile recovery and focused tests.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "The refreshed artifact remains a review request carrying no review authority; Ready still requires the trusted controller's exact-head review and owner approval.",
+        "evidence": "Review request does not carry reviewer authority; stale claims now fail closed pending fresh evidence; tests passed.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Pending trusted prerequisites stay retryable: observation treats absence of exact-head failure evidence as no failure, and only the bound stale-request state is recoverable.",
+        "evidence": "Reconcile run scan continues past unrelated runs; test for older matching run passed.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "No prevention state is claimed by the candidate: the defect registry and its guards are unchanged, and recovery never publishes admission or readiness outcomes.",
+        "evidence": "No new prevention or canonical defect-registry writes are introduced by the staged changes.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Recovery evidence is per exact head and event; a stale request recorded for a different head is never reused as proof for this one, and stale-HEAD binding is refused.",
+        "evidence": "Recovery observations and attempts remain bound to PR/head/run; budget cannot reset after diagnostic trim; regression passed.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "No runtime bootstrap or volume-aware issuer path is touched by this change.",
+        "evidence": "The staged diff changes no bootstrap, image, or volume execution path.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "No hosted execution ownership is touched: recovery performs read-only GitHub observation from the writer checkout and holds no execution authority.",
+        "evidence": "The staged diff changes no hosted execution ownership or runner authority.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "No execution shutdown or drain path is touched by this change.",
+        "evidence": "The staged diff changes no shutdown or drain path.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Merge readiness is unchanged: recovery never publishes readiness, statuses or PR state; it only re-requests review for current content through the existing finalizer.",
+        "evidence": "Fresh staged-diff inspection: no changes to this family boundary; focused finalizer/reconcile tests passed. Candidate requests independent hostile review.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "No ledger claim or new execution entry point exists: recovery spends no hosted authorization and is not a privileged workflow.",
+        "evidence": "Fresh staged-diff inspection: no changes to this family boundary; focused finalizer/reconcile tests passed. Candidate requests independent hostile review.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "The candidate still reaches GitHub only through the pre-push-gated signed writer channel; recovery performs no publication and no CI dispatch or rerun.",
+        "evidence": "Fresh staged-diff inspection: no changes to this family boundary; focused finalizer/reconcile tests passed. Candidate requests independent hostile review.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "No tracked governance asset moved; the new module is loadable at scripts/hunter_reconcile_recovery.py and is imported by its regression tests.",
+        "evidence": "Fresh staged-diff inspection: no changes to this family boundary; focused finalizer/reconcile tests passed. Candidate requests independent hostile review.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused regressions inject GitHub evidence through seams and never assert live external preconditions inside the deterministic test lane.",
+        "evidence": "Fresh staged-diff inspection: no changes to this family boundary; focused finalizer/reconcile tests passed. Candidate requests independent hostile review.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "The recovery CLI emits machine-readable JSON verdicts (planned/refused/attempt) from a closed refusal vocabulary with specific diagnoses.",
+        "evidence": "Fresh staged-diff inspection: no changes to this family boundary; focused finalizer/reconcile tests passed. Candidate requests independent hostile review.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "No reviewer chain or timeout is touched: recovery never dispatches reviewers and never reruns CI.",
+        "evidence": "Fresh staged-diff inspection: no changes to this family boundary; focused finalizer/reconcile tests passed. Candidate requests independent hostile review.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "The defect family itself: automatic exact-head request refresh after remediation plus bounded, idempotent, head-bound recovery removes the manual review-request rebuild loop; regressions cover stale refresh, wrong governing Issue, exact content binding, absence of fabricated authority, transient/permanent classification, duplicate-event idempotence, stale HEAD, budget exhaustion and publisher-candidate immutability.",
+        "evidence": "Fresh staged-diff inspection: no changes to this family boundary; focused finalizer/reconcile tests passed. Candidate requests independent hostile review.",
         "family": "DFF-055",
-        "outcome": "repaired"
+        "outcome": "clear"
       }
     ],
     "findings": [],
     "issue": "585",
     "review_target": [
       {
-        "blob_sha": "7dfa4d7a28c91ccd58988a25da53d912a9bf812f",
+        "blob_sha": "434fe6969f5d0e4d11f64ae3bad9874d738f95f1",
         "path": "scripts/hunter_reconcile_recovery.py",
         "previous_path": "",
         "status": "added"
@@ -152,7 +152,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "48da47ace14357b30b9b2f9415cccc8a8f76d826",
+        "blob_sha": "2d2de22c8dc7a4064dea6c73efd5cd3d53ad7fce",
         "path": "tests/test_hunter_reconcile_recovery.py",
         "previous_path": "",
         "status": "added"
@@ -164,13 +164,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "2b66a0203f7206f0148040265c92c7189de2fc81",
+        "blob_sha": "0e49885d11bf90b4bc99da15cc48a92e706bd304",
         "path": "scripts/hunter_writer_commit_finalizer.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "b2b38e7bd49fac9cf005f022d552258138714e23",
+        "blob_sha": "706501e684e4585516542e4683944c1778caaa6a",
         "path": "tests/test_hunter_writer_commit_finalizer.py",
         "previous_path": "",
         "status": "modified"
@@ -182,11 +182,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "39cb11e12dbaaf1b2741e3f622a29314b4579a6b7b7334599c7c0b6bbaa91f48"
+    "review_target_digest": "65ebaacf733dfe834303c56c14acc509fb4ac99a4051ac0fcc0851c9dffe3d9d"
   },
-  "review_id": "b5d0c53d2aea55757ea5ee14f968bd38039c8e857799e1b46554c750b9213e3e",
+  "review_id": "4e4855a74c1c60df747235919ea7b6bfba0eaa190fddee8963948e7c0af79df9",
   "review_request": {
-    "claims_id": "b5d0c53d2aea55757ea5ee14f968bd38039c8e857799e1b46554c750b9213e3e",
+    "claims_id": "4e4855a74c1c60df747235919ea7b6bfba0eaa190fddee8963948e7c0af79df9",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

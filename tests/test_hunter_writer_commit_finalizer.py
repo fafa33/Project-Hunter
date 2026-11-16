@@ -1,9 +1,11 @@
-"""Writer pre-commit review finalization: staged-content binding and automatic refresh.
+"""Writer pre-commit review finalization: staged-content binding and fail-closed staleness.
 
 Issue #585 regression coverage: a remediation commit must never silently publish
-a stale exact-head review request, a refresh must stay bound to the real
-governing Issue and the exact staged content, and it must never fabricate or
-mutate anything beyond the request artifact itself.
+a stale exact-head review request, the committed request's own claims are never
+reused as a judgement for changed staged code, unstaged working-tree edits to
+the review artifact are never read or staged, and a governed commit without a
+freshly substantiated trusted judgement fails closed while ordinary commits
+stay non-blocking.
 """
 
 from __future__ import annotations
@@ -162,8 +164,13 @@ def test_staged_snapshot_repeat_does_not_change_index(tmp_path):
     assert git("show", f"{first}:a") == git("show", f"{second}:a") == "two"
 
 
-def test_stale_request_is_refreshed_after_remediation_without_new_judgement(tmp_path, monkeypatch):
-    """Test 1: a remediation commit must not silently publish a stale request."""
+def test_stale_request_fails_closed_without_a_fresh_judgement(tmp_path, monkeypatch, capsys):
+    """Test 1: a remediation commit must not silently publish a stale request.
+
+    The committed request's own claims are never reused as a judgement for
+    changed staged code: without a freshly substantiated trusted judgement the
+    commit fails closed and the staged request is left exactly as committed.
+    """
 
     _governed_repo(tmp_path, monkeypatch)
     before = _committed_document(tmp_path)
@@ -171,22 +178,57 @@ def test_stale_request_is_refreshed_after_remediation_without_new_judgement(tmp_
     monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
     (tmp_path / "src" / "module.py").write_text("v2\n")
     _git(tmp_path, "add", "src/module.py")
-    assert finalizer.main(tmp_path) == 0
+    assert finalizer.main(tmp_path) == 2
+    assert "HUNTER_REVIEW_JUDGEMENT" in capsys.readouterr().err
     after = _committed_document(tmp_path)
+    assert after["review_id"] == before["review_id"]
     bound = {item["path"]: item["blob_sha"] for item in after["claims"]["review_target"]}
-    staged_blob = _git(tmp_path, "rev-parse", f"{finalizer._staged_review_head(tmp_path)}:src/module.py")
-    assert bound["src/module.py"] == staged_blob
-    assert after["review_id"] != before["review_id"]
-    # Still a request: refreshed evidence is review-request state, never review authority.
+    assert bound["src/module.py"] == _git(tmp_path, "rev-parse", "HEAD:src/module.py")
+    # Nothing was re-minted or staged beyond the writer's own staged change.
+    assert _git(tmp_path, "diff", "--cached", "--name-only") == "src/module.py"
+
+
+def test_committed_request_claims_are_never_reused_for_changed_staged_code(tmp_path, monkeypatch):
+    """The auto-refresh path is gone: no judgement can be synthesized from old claims."""
+
+    _governed_repo(tmp_path, monkeypatch)
+    before = _committed_document(tmp_path)
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    (tmp_path / "src" / "module.py").write_text("v2\n")
+    _git(tmp_path, "add", "src/module.py")
+    assert finalizer.main(tmp_path) == 2
+    after = _committed_document(tmp_path)
+    # Still the committed request itself, never a regenerated one.
+    assert after["claims"] == before["claims"]
     assert after["review_request"]["schema"] == "hunter.review-request.v1"
 
 
-def test_refresh_binds_exact_staged_candidate_content(tmp_path, monkeypatch):
-    """Test 3: the refreshed request digest is the digest of the exact staged content."""
+def test_unstaged_review_edits_are_never_read_or_staged(tmp_path, monkeypatch):
+    """Test 2: the staleness check reads the index's git blob, not the working tree."""
 
     _governed_repo(tmp_path, monkeypatch)
     monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
     monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    (tmp_path / "src" / "module.py").write_text("v2\n")
+    _git(tmp_path, "add", "src/module.py")
+    path = tmp_path / review.REVIEW_RELATIVE_PATH
+    document = _committed_document(tmp_path)
+    document["unstaged_injection"] = "attacker-supplied claims"
+    path.write_text(json.dumps(document))
+    assert finalizer.main(tmp_path) == 2
+    # The unstaged edit was never consumed: the finalizer staged nothing of it.
+    assert _git(tmp_path, "diff", "--cached", "--name-only") == "src/module.py"
+    status = subprocess.check_output(("git", "status", "--porcelain"), cwd=tmp_path, text=True).splitlines()
+    assert [line for line in status if ".hunter/" in line] == [" M .hunter/pre-ready-hostile-review.json"]
+    staged = json.loads(_git(tmp_path, "show", f":{review.REVIEW_RELATIVE_PATH}"))
+    assert "unstaged_injection" not in staged
+
+
+def test_refresh_binds_exact_staged_candidate_content(tmp_path, monkeypatch):
+    """Test 3: a fresh judgement binds the request digest to the exact staged content."""
+
+    _governed_repo(tmp_path, monkeypatch)
     (tmp_path / "src" / "module.py").write_text("remediated\n")
     _git(tmp_path, "add", "src/module.py")
     staged_head = finalizer._staged_review_head(tmp_path)
@@ -198,11 +240,9 @@ def test_refresh_binds_exact_staged_candidate_content(tmp_path, monkeypatch):
 
 
 def test_refreshed_request_carries_no_review_authority(tmp_path, monkeypatch):
-    """Test 4: an automatic refresh never fabricates or carries review authority."""
+    """Test 4: a refresh from a fresh judgement never fabricates or carries review authority."""
 
     _governed_repo(tmp_path, monkeypatch)
-    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
-    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
     (tmp_path / "src" / "module.py").write_text("v2\n")
     _git(tmp_path, "add", "src/module.py")
     assert finalizer.main(tmp_path) == 0
@@ -210,7 +250,7 @@ def test_refreshed_request_carries_no_review_authority(tmp_path, monkeypatch):
     assert "authority" not in document
 
 
-def test_auto_refresh_is_idempotent_and_needs_no_live_issue_when_current(tmp_path, monkeypatch):
+def test_current_request_is_passes_without_live_issue_verification(tmp_path, monkeypatch):
     """A current request short-circuits before any live governing-Issue verification."""
 
     calls: list[tuple] = []
@@ -227,8 +267,6 @@ def test_refresh_only_mutates_the_review_request_artifact(tmp_path, monkeypatch)
     """Test 10: a refresh never mutates the publisher's validated candidate content."""
 
     _governed_repo(tmp_path, monkeypatch)
-    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
-    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
     (tmp_path / "src" / "module.py").write_text("v2\n")
     _git(tmp_path, "add", "src/module.py")
     head_before = _git(tmp_path, "rev-parse", "HEAD")
@@ -254,8 +292,8 @@ def test_wrong_governing_issue_is_refused_not_borrowed(tmp_path, monkeypatch):
     assert finalizer.main(tmp_path) == 2
 
 
-def test_unusable_committed_request_is_never_auto_refreshed(tmp_path, monkeypatch):
-    """A malformed committed request cannot become an automatic judgement source."""
+def test_unusable_staged_request_fails_closed(tmp_path, monkeypatch):
+    """A malformed staged request is governed evidence that does not verify; fail closed."""
 
     _governed_repo(tmp_path, monkeypatch)
     monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
@@ -267,4 +305,4 @@ def test_unusable_committed_request_is_never_auto_refreshed(tmp_path, monkeypatc
     _git(tmp_path, "add", ".hunter/pre-ready-hostile-review.json")
     (tmp_path / "src" / "module.py").write_text("v2\n")
     _git(tmp_path, "add", "src/module.py")
-    assert finalizer.main(tmp_path) == 0
+    assert finalizer.main(tmp_path) == 2

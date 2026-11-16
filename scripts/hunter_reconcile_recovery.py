@@ -36,9 +36,11 @@ Classification, binding and bounds
 
 Every observed event is recorded in a durable local JSON checkpoint keyed by
 (pull request, exact head, failure kind). A repeated event for the same key is
-idempotent and never creates a second attempt; the stale-HEAD check refuses
-recovery bound to content that no longer exists; and the per-head attempt
-budget is bounded like the hosted preflight-recovery budget.
+idempotent and never creates a second attempt; attempt counters survive the
+bounded history trim so the per-head budget can never reset itself; the
+stale-HEAD check refuses recovery bound to content that no longer exists; and
+the per-head attempt budget is bounded like the hosted preflight-recovery
+budget.
 """
 
 from __future__ import annotations
@@ -82,6 +84,13 @@ STATE_PATH = Path(os.environ.get("HUNTER_RECONCILE_RECOVERY_STATE", str(Path.hom
 #: Log markers that classify an authoritative governance-refresh failure as
 #: infrastructure unavailability rather than a candidate defect.
 TRANSIENT_MARKERS = ("infrastructure unavailable", "rate limit", "GitHubUnavailable")
+#: How far back from a refresh-failure marker the invoking pull request's own
+#: stderr can reach: the bridge prints its transient diagnosis and exits, and
+#: the workflow then echoes the failure marker for that same pull request, so
+#: the invocation's transient evidence sits in the lines immediately before
+#: that marker. A transient marker anywhere else in the shared job log belongs
+#: to another pull request's invocation and must never reclassify this failure.
+TRANSIENT_CONTEXT_LINES = 10
 STALE_REQUEST_MARKER = "WAITING_FOR_EXACT_HEAD_REVIEW"
 REFRESH_FAILURE_MARKER = "Governance refresh failed"
 #: One reconcile job log is a bounded read; a larger body is unknown, not evidence.
@@ -198,8 +207,10 @@ def observe_failure(
 
     The first scanned run that carries evidence for this pull request decides; a
     run whose authoritative job is missing or ambiguous is not evidence, and an
-    unreadable log fails closed. Absence of our pull request in the newest run
-    means that run did not reconcile it: there is no failure to recover.
+    unreadable log fails closed. A run whose authoritative log never mentions
+    this pull request did not reconcile it at all -- its silence is not evidence
+    of success -- so the scan continues into the older bounded runs; only a run
+    that reconciled this pull request without failure evidence ends the scan.
     """
 
     request = request or request_json
@@ -238,7 +249,14 @@ def observe_failure(
         if refresh_failed:
             if str(run.get("conclusion")) != "failure":
                 continue
-            transient = any(marker in text for marker in TRANSIENT_MARKERS)
+            # Transient evidence is only attributed to this invocation when it
+            # sits in the bounded lines immediately before this pull request's
+            # own failure marker; the job log reconciles many pull requests, so
+            # a transient marker anywhere else belongs to another pull request
+            # and must never reclassify this failure.
+            marker_index = text.splitlines().index(refresh_failed[0])
+            invocation = text.splitlines()[max(0, marker_index - TRANSIENT_CONTEXT_LINES) : marker_index + 1]
+            transient = any(marker in line for line in invocation for marker in TRANSIENT_MARKERS)
             return ReconcileFailure(
                 KIND_TRANSIENT if transient else KIND_PERMANENT,
                 int(run["id"]),
@@ -246,6 +264,10 @@ def observe_failure(
                 head_sha,
                 refresh_failed[0].strip(),
             )
+        if not lines:
+            # This run never reconciled this pull request; keep searching the
+            # older bounded runs instead of mistaking its silence for success.
+            continue
         # This run reconciled our pull request with no failure evidence for it.
         return None
     return None
@@ -293,10 +315,20 @@ def load_state(path: Path = STATE_PATH) -> dict[str, Any]:
 
 
 def save_state(document: dict[str, Any], path: Path = STATE_PATH) -> None:
-    """Atomic, bounded checkpoint: an uncertain write is never treated as recorded."""
+    """Atomic, bounded checkpoint: an uncertain write is never treated as recorded.
+
+    Trimming the tracked history may never drop an attempt counter: the budget
+    in ``plan_recovery`` is counted from this durable checkpoint, so a trimmed
+    counter would silently reset the bounded budget and unbound recovery. Only
+    events without an attempt counter are trimmed to the tracked-event bound,
+    the trim is stable, and re-saving the saved state changes nothing.
+    """
 
     path = validate_state_path(path)
-    events = [item for item in document["events"] if isinstance(item, dict)][-MAX_TRACKED_EVENTS:]
+    recorded = [item for item in document["events"] if isinstance(item, dict)]
+    counters = [item for item in recorded if item.get("attempt") is not None]
+    budget = max(MAX_TRACKED_EVENTS - len(counters), 0)
+    events = counters + [item for item in recorded if item.get("attempt") is None][-budget:]
     payload = {"schema": STATE_SCHEMA, "events": events}
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + f".{os.getpid()}.tmp")
@@ -409,8 +441,10 @@ def execute_recovery(
         "job_id": plan.job_id,
         "regenerated": changed,
         "next_step": (
-            "stage and commit the regenerated request (the pre-commit finalizer re-verifies it), then "
-            "push through `python3 scripts/hunter_push.py`"
+            "stage and commit the regenerated request with HUNTER_REVIEW_JUDGEMENT and HUNTER_GOVERNING_ISSUE "
+            "pointing at this same freshly substantiated judgement (the pre-commit finalizer re-verifies it "
+            "against the exact staged head and fails closed without it), then push through "
+            "`python3 scripts/hunter_push.py`"
             if changed
             else "the request already describes this exact head; wait for the next trusted reconcile sweep"
         ),
