@@ -3,13 +3,13 @@
     "acceptance_criteria": [
       {
         "criterion": "a review-finding fix proceeds to a valid review opportunity and terminal readiness/advisory state without manual review-request rebuilding",
-        "evidence": "Fresh review of staged second-round fixes: review requests inherited unchanged from base are ignored for unrelated candidate work; malformed staged requests are rejected; complete PR-number matching and explicit review-orchestration failure diagnosis preserve the governed review opportunity. Six new regression tests, 43 focused tests passed.",
+        "evidence": "Fresh staged-diff evidence: the existing trusted reconcile workflow emits the full live PR head in both failure markers; writer recovery attributes a failure only to that full exact SHA, and ignores legacy or previous-head failures. Three new focused regressions passed; 46 focused tests passed. Review authority remains independent.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
         "criterion": "failed recovery must terminate with a specific diagnosis, not stay pending indefinitely",
-        "evidence": "Fresh review of staged second-round fixes: explicit review-orchestration failures produce KIND_PERMANENT with the authoritative run/job diagnosis; PR-number token boundary prevents false evidence attribution to a different PR. Existing bounded attempts and idempotence remain unchanged. 43 focused tests passed.",
+        "evidence": "Fresh staged-diff evidence: old reconcile logs for the same PR but previous head no longer create a permanent blockage on the new candidate. Unbound legacy failures are treated as unavailable, not success or current-head failure. 46 focused tests passed.",
         "id": "AC-2",
         "verdict": "satisfied"
       }
@@ -31,108 +31,158 @@
     "base_sha": "2e629ec6890853d319e4d753f644694a778a952f",
     "defect_families": [
       {
-        "evidence": "New PR-number token boundary rejects PR #5840 evidence for PR #584; explicit orchestration failure returns authoritative blocked diagnosis; tests passed.",
+        "evidence": "Failure marker now includes full SHA of live PR head captured before the invocation; recovery checks exact head before attributing failure.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Malformed staged review artifact is rejected rather than mistaken for absent; unchanged base artifact does not impose an unrelated candidate review; focused tests passed.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Index-only review request and base blob comparisons preserve staged-content isolation; no unstaged data is promoted.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Review authority remains separate from candidate request; inherited requests cannot masquerade as current issue proof.",
+        "evidence": "No review approval fabricated: this document requests independent hostile review and is only a writer-authored candidate claim.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Explicit orchestration failures now block with diagnosis instead of silently reporting none; regression passed.",
+        "evidence": "Old or unbound orchestration and refresh failures are skipped rather than being attributed to new head; 3 new focused regressions passed.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Exact PR-number token matching prevents evidence from adjacent numeric PR identifiers being attributed to this PR; regression passed.",
+        "evidence": "Exact SHA and numeric PR binding prevents cross-head and cross-PR evidence contamination.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh inspection of staged four-file change: no change to this defect family authority boundary; 43 focused tests passed, independent review still required.",
+        "evidence": "Fresh inspection: staged diff only modifies existing reconcile workflow, recovery reader and focused tests; no changes to this family authority boundary; 46 tests passed.",
         "family": "DFF-055",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh review of full Issue 585 candidate diff including existing pre-ready review changes and trusted workflow: no new change to this family boundary in the staged round-three patch; 46 focused tests passed. Independent hostile review remains required.",
+        "family": "DFF-024",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh review of full Issue 585 candidate diff including existing pre-ready review changes and trusted workflow: no new change to this family boundary in the staged round-three patch; 46 focused tests passed. Independent hostile review remains required.",
+        "family": "DFF-025",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh review of full Issue 585 candidate diff including existing pre-ready review changes and trusted workflow: no new change to this family boundary in the staged round-three patch; 46 focused tests passed. Independent hostile review remains required.",
+        "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh review of full Issue 585 candidate diff including existing pre-ready review changes and trusted workflow: no new change to this family boundary in the staged round-three patch; 46 focused tests passed. Independent hostile review remains required.",
+        "family": "DFF-028",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh review of full Issue 585 candidate diff including existing pre-ready review changes and trusted workflow: no new change to this family boundary in the staged round-three patch; 46 focused tests passed. Independent hostile review remains required.",
+        "family": "DFF-036",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh review of full Issue 585 candidate diff including existing pre-ready review changes and trusted workflow: no new change to this family boundary in the staged round-three patch; 46 focused tests passed. Independent hostile review remains required.",
+        "family": "DFF-040",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh review of full Issue 585 candidate diff including existing pre-ready review changes and trusted workflow: no new change to this family boundary in the staged round-three patch; 46 focused tests passed. Independent hostile review remains required.",
+        "family": "DFF-042",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh review of full Issue 585 candidate diff including existing pre-ready review changes and trusted workflow: no new change to this family boundary in the staged round-three patch; 46 focused tests passed. Independent hostile review remains required.",
+        "family": "DFF-044",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh review of full Issue 585 candidate diff including existing pre-ready review changes and trusted workflow: no new change to this family boundary in the staged round-three patch; 46 focused tests passed. Independent hostile review remains required.",
+        "family": "DFF-046",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh review of full Issue 585 candidate diff including existing pre-ready review changes and trusted workflow: no new change to this family boundary in the staged round-three patch; 46 focused tests passed. Independent hostile review remains required.",
+        "family": "DFF-052",
         "outcome": "clear"
       }
     ],
@@ -140,7 +190,7 @@
     "issue": "585",
     "review_target": [
       {
-        "blob_sha": "af1cbcdb3d6874431815ee36680f356cb5eb34cb",
+        "blob_sha": "fecc961289540d31e74dfd990644f82881fa5102",
         "path": "scripts/hunter_reconcile_recovery.py",
         "previous_path": "",
         "status": "added"
@@ -152,10 +202,16 @@
         "status": "added"
       },
       {
-        "blob_sha": "571a72f185b58367e2dbda3647e70325927c4bc3",
+        "blob_sha": "d0217862893b26ca4d395e8b75d1e97e5162d1c1",
         "path": "tests/test_hunter_reconcile_recovery.py",
         "previous_path": "",
         "status": "added"
+      },
+      {
+        "blob_sha": "df0a68887c41913fb723503a10671ed2ac2798c2",
+        "path": ".github/workflows/hunter-governance-reconcile.yml",
+        "previous_path": "",
+        "status": "modified"
       },
       {
         "blob_sha": "8652993d4919d4e76b7184db05645b5776e4dc8c",
@@ -182,11 +238,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "2b84ae9b8e47c5bd5af7e03d5f7e00a7e87a305ef6b90e18aea6296945109b06"
+    "review_target_digest": "ff2297558be15f2fe7ca924c36b0cf6aeb0f6d8a9c24ceee8fd4ec778888e4e0"
   },
-  "review_id": "bf307d58d1db8c64e8e79d94c8266af212dcba28711aa4b485aba34b5fa840ed",
+  "review_id": "070bf06383b33300a4d79a3c1e91fba52a18dab8f0095c2533a1d8a553ea6090",
   "review_request": {
-    "claims_id": "bf307d58d1db8c64e8e79d94c8266af212dcba28711aa4b485aba34b5fa840ed",
+    "claims_id": "070bf06383b33300a4d79a3c1e91fba52a18dab8f0095c2533a1d8a553ea6090",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

@@ -245,8 +245,18 @@ def observe_failure(
             raise ObservationUnavailable(f"run {run['id']} job log is unreadable")
         lines = _pr_lines(text, pr_number)
         stale = [line for line in lines if STALE_REQUEST_MARKER in line and head_sha[:10] in line]
-        refresh_failed = [line for line in lines if REFRESH_FAILURE_MARKER in line]
-        orchestration_failed = [line for line in lines if ORCHESTRATION_FAILURE_MARKER in line]
+
+        # Only full-SHA, invocation-bound failures are evidence for this head.
+        # Legacy markers without the invocation SHA are unavailable, never
+        # evidence against the caller's current head.
+        def bound_failure(line: str, marker: str) -> bool:
+            return (
+                marker in line
+                and re.search(rf"PR #{pr_number}(?![0-9]) at {re.escape(head_sha)}(?![0-9a-f])", line) is not None
+            )
+
+        refresh_failed = [line for line in lines if bound_failure(line, REFRESH_FAILURE_MARKER)]
+        orchestration_failed = [line for line in lines if bound_failure(line, ORCHESTRATION_FAILURE_MARKER)]
         if orchestration_failed:
             return ReconcileFailure(
                 KIND_PERMANENT, int(run["id"]), int(job["id"]), head_sha, orchestration_failed[0].strip()
@@ -271,6 +281,11 @@ def observe_failure(
                 head_sha,
                 refresh_failed[0].strip(),
             )
+        if any(
+            marker in line for line in lines for marker in (REFRESH_FAILURE_MARKER, ORCHESTRATION_FAILURE_MARKER)
+        ) and not (refresh_failed or orchestration_failed):
+            # A different or unbound invocation head cannot settle this head.
+            continue
         if not lines:
             # This run never reconciled this pull request; keep searching the
             # older bounded runs instead of mistaking its silence for success.

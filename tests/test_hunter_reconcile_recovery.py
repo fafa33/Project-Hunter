@@ -29,10 +29,10 @@ STALE_LOG = (
     f"PR #{PR} at {HEAD[:10]}: the exact-head pre-ready review request is stale. "
     "Reconcile will start orchestration as soon as a usable one is committed.\n"
 )
-PERMANENT_LOG = f"::error::Governance refresh failed for PR #{PR}; continuing.\n"
+PERMANENT_LOG = f"::error::Governance refresh failed for PR #{PR} at {HEAD}; continuing.\n"
 TRANSIENT_LOG = (
     "Governance review infrastructure unavailable: GitHubUnavailable: transient\n"
-    f"::error::Governance refresh failed for PR #{PR}; continuing.\n"
+    f"::error::Governance refresh failed for PR #{PR} at {HEAD}; continuing.\n"
 )
 
 
@@ -212,7 +212,7 @@ def test_transient_marker_in_another_prs_section_does_not_reclassify_ours(monkey
     log = (
         "Governance review infrastructure unavailable: GitHubUnavailable: transient\n"
         f"{filler}\n"
-        f"::error::Governance refresh failed for PR #{PR}; continuing.\n"
+        f"::error::Governance refresh failed for PR #{PR} at {HEAD}; continuing.\n"
     )
     _fake_github(monkeypatch, run={"id": 111, "conclusion": "failure"}, log=log)
     failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: log)
@@ -536,8 +536,26 @@ def test_unrelated_newest_run_with_similar_pr_number_is_ignored(monkeypatch):
 
 def test_review_orchestration_failure_is_blocking(monkeypatch):
     _fake_github(monkeypatch)
-    log = f"::error::Review orchestration failed for PR #{PR}; continuing.\n"
+    log = f"::error::Review orchestration failed for PR #{PR} at {HEAD}; continuing.\n"
     failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: log)
     assert failure is not None
     assert failure.kind == recovery.KIND_PERMANENT
     assert "Review orchestration failed" in failure.detail
+
+
+def test_orchestration_failure_for_previous_head_is_not_current_head(monkeypatch):
+    _fake_github(monkeypatch)
+    log = f"::error::Review orchestration failed for PR #{PR} at {OTHER_HEAD}; continuing.\n"
+    assert recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: log) is None
+
+
+def test_unbound_legacy_orchestration_failure_is_not_attributed(monkeypatch):
+    _fake_github(monkeypatch)
+    log = f"::error::Review orchestration failed for PR #{PR}; continuing.\n"
+    assert recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: log) is None
+
+
+def test_refresh_failure_for_previous_head_is_not_current_head(monkeypatch):
+    _fake_github(monkeypatch)
+    log = f"::error::Governance refresh failed for PR #{PR} at {OTHER_HEAD}; continuing.\n"
+    assert recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: log) is None

@@ -156,13 +156,22 @@ jobs:
           failures=0
           while read -r pr_number; do
             [ -z "${pr_number}" ] && continue
+            # Bind each invocation's failure marker to the live candidate HEAD
+            # observed immediately before that invocation. Historical unbound
+            # markers must never be attributed to a later pushed candidate.
+            invocation_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" --jq '.head.sha')"
+            if [[ ! "${invocation_head}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Cannot bind reconcile invocation to PR #${pr_number} HEAD; continuing."
+              failures=1
+              continue
+            fi
             # Legacy invariant marker: if ! python scripts/hunter_governance_review_v2.py
             B=boot
             BRIDGE="scripts/hunter_governance_review/${B}strap_external_review_469.py"
             if ! python "${BRIDGE}" governance \
               --pr "${pr_number}" \
               --repository "${GITHUB_REPOSITORY}"; then
-              echo "::error::Governance refresh failed for PR #${pr_number}; continuing."
+              echo "::error::Governance refresh failed for PR #${pr_number} at ${invocation_head}; continuing."
               failures=1
             fi
             # Bootstrap detection: until hunter_review_orchestrator.py exists on the
@@ -183,7 +192,7 @@ jobs:
               if [ "${orchestration_rc}" -eq 3 ]; then
                 echo "::warning::WAITING_FOR_EXACT_HEAD_REVIEW for PR #${pr_number}; commit a valid exact-head request before review dispatch."
               elif [ "${orchestration_rc}" -ne 0 ]; then
-                echo "::error::Review orchestration failed for PR #${pr_number}; continuing."
+                echo "::error::Review orchestration failed for PR #${pr_number} at ${invocation_head}; continuing."
                 failures=1
               fi
             fi
