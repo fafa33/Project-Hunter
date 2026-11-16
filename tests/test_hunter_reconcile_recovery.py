@@ -521,3 +521,23 @@ def test_main_refuses_an_escaped_state_path_before_any_github_contact(monkeypatc
     monkeypatch.setattr(recovery, "request_json", no_network)
     code = recovery.main(["--pr", str(PR), "--head", HEAD, "--state", str(tmp_path / ".." / "escape.json")])
     assert code == 1
+
+
+def test_pr_number_boundary_excludes_longer_pr_numbers():
+    assert recovery._pr_lines("Governance refresh failed for PR #5840\n", 584) == []
+    assert recovery._pr_lines("Governance refresh failed for PR #584\n", 584)
+
+
+def test_unrelated_newest_run_with_similar_pr_number_is_ignored(monkeypatch):
+    _fake_github(monkeypatch)
+    log = "Governance refresh failed for PR #5840\n"
+    assert recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: log) is None
+
+
+def test_review_orchestration_failure_is_blocking(monkeypatch):
+    _fake_github(monkeypatch)
+    log = f"::error::Review orchestration failed for PR #{PR}; continuing.\n"
+    failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda job_id: log)
+    assert failure is not None
+    assert failure.kind == recovery.KIND_PERMANENT
+    assert "Review orchestration failed" in failure.detail

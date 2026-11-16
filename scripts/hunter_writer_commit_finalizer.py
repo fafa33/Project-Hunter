@@ -134,11 +134,25 @@ def _automatic_refresh(root: Path) -> int:
     if verdict.ok or verdict.state == "awaiting-trusted-review-policy":
         print("[Hunter Writer Finalizer] PASS: unchanged governed review request")
         return 0
-    if not isinstance(document, dict):
-        print(
-            "[Hunter Writer Finalizer] SKIP: no governed review request is staged; "
-            "optional review cannot be fabricated"
-        )
+    if document is None:
+        print("[Hunter Writer Finalizer] SKIP: no governed review request is staged")
+        return 0
+    # An unchanged artifact inherited from origin/main belongs to a previous
+    # candidate. It imposes no review obligation on this new candidate.
+    base_request = subprocess.run(
+        ("git", "show", f"{base}:{review.REVIEW_RELATIVE_PATH}"),
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    staged_request = subprocess.run(
+        ("git", "show", f":{review.REVIEW_RELATIVE_PATH}"),
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if base_request.returncode == 0 and staged_request.returncode == 0 and base_request.stdout == staged_request.stdout:
+        print("[Hunter Writer Finalizer] SKIP: inherited unchanged base review request")
         return 0
     print(
         f"[Hunter Writer Finalizer] FAIL: the staged governed review request no longer describes the staged "

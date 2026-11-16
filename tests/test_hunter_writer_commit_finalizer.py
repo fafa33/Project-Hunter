@@ -306,3 +306,35 @@ def test_unusable_staged_request_fails_closed(tmp_path, monkeypatch):
     (tmp_path / "src" / "module.py").write_text("v2\n")
     _git(tmp_path, "add", "src/module.py")
     assert finalizer.main(tmp_path) == 2
+
+
+def test_inherited_base_review_request_does_not_block_new_candidate(tmp_path, monkeypatch):
+    _governed_repo(tmp_path, monkeypatch)
+    _git(tmp_path, "update-ref", "refs/remotes/origin/main", "HEAD")
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    (tmp_path / "README.md").write_text("new issue draft\n")
+    _git(tmp_path, "add", "README.md")
+    assert finalizer.main(tmp_path) == 0
+
+
+def test_malformed_staged_request_is_rejected(tmp_path, monkeypatch):
+    _governed_repo(tmp_path, monkeypatch)
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    (tmp_path / review.REVIEW_RELATIVE_PATH).write_text("{ broken json")
+    _git(tmp_path, "add", review.REVIEW_RELATIVE_PATH)
+    (tmp_path / "src" / "module.py").write_text("v2\n")
+    _git(tmp_path, "add", "src/module.py")
+    assert finalizer.main(tmp_path) == 2
+
+
+def test_non_object_staged_request_is_rejected(tmp_path, monkeypatch):
+    _governed_repo(tmp_path, monkeypatch)
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    (tmp_path / review.REVIEW_RELATIVE_PATH).write_text("[]\n")
+    _git(tmp_path, "add", review.REVIEW_RELATIVE_PATH)
+    (tmp_path / "src" / "module.py").write_text("v2\n")
+    _git(tmp_path, "add", "src/module.py")
+    assert finalizer.main(tmp_path) == 2

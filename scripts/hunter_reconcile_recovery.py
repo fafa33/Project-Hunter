@@ -48,6 +48,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -93,6 +94,7 @@ TRANSIENT_MARKERS = ("infrastructure unavailable", "rate limit", "GitHubUnavaila
 TRANSIENT_CONTEXT_LINES = 10
 STALE_REQUEST_MARKER = "WAITING_FOR_EXACT_HEAD_REVIEW"
 REFRESH_FAILURE_MARKER = "Governance refresh failed"
+ORCHESTRATION_FAILURE_MARKER = "Review orchestration failed"
 #: One reconcile job log is a bounded read; a larger body is unknown, not evidence.
 MAX_LOG_BYTES = 8 * 1024 * 1024
 
@@ -191,7 +193,7 @@ def default_job_log(repository: str, token: str) -> Callable[[int], str]:
 
 
 def _pr_lines(text: str, pr_number: int) -> list[str]:
-    return [line for line in text.splitlines() if f"PR #{pr_number}" in line]
+    return [line for line in text.splitlines() if re.search(rf"PR #{pr_number}(?![0-9])", line)]
 
 
 def observe_failure(
@@ -244,6 +246,11 @@ def observe_failure(
         lines = _pr_lines(text, pr_number)
         stale = [line for line in lines if STALE_REQUEST_MARKER in line and head_sha[:10] in line]
         refresh_failed = [line for line in lines if REFRESH_FAILURE_MARKER in line]
+        orchestration_failed = [line for line in lines if ORCHESTRATION_FAILURE_MARKER in line]
+        if orchestration_failed:
+            return ReconcileFailure(
+                KIND_PERMANENT, int(run["id"]), int(job["id"]), head_sha, orchestration_failed[0].strip()
+            )
         if stale:
             return ReconcileFailure(KIND_STALE_REQUEST, int(run["id"]), int(job["id"]), head_sha, stale[0].strip())
         if refresh_failed:
