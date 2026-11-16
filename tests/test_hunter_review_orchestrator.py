@@ -2623,3 +2623,14 @@ def test_reconcile_distinguishes_exact_head_waiting_from_execution_failure():
     assert "WAITING_FOR_EXACT_HEAD_REVIEW for PR #" in workflow
     assert '"${orchestration_rc}" -ne 0' in workflow
     assert "failures=1" in workflow
+
+
+def test_orchestrator_unavailable_is_pending_not_completed(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise orchestrator.transport.GitHubUnavailable(
+            "temporary", attempts=1, last=orchestrator.transport.GitHubRequestError("temporary", category="transient")
+        )
+
+    monkeypatch.setattr(orchestrator, "ensure_current", unavailable)
+    monkeypatch.setattr(sys, "argv", ["orchestrator", "ensure", "--repository", "owner/repo", "--pr", "472"])
+    assert orchestrator.main() == 4

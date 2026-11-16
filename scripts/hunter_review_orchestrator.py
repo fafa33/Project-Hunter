@@ -1616,7 +1616,7 @@ def main() -> int:
         return 3
     except transport.GitHubUnavailable as exc:
         print(f"Review orchestration infrastructure unavailable; remaining pending: {exc}", file=sys.stderr)
-        return 0
+        return 4
     except Exception as exc:
         print(f"Review orchestration failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1

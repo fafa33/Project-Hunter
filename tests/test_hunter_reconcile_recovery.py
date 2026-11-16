@@ -658,3 +658,57 @@ def test_failed_execution_preserves_reservation_when_outcome_update_fails(monkey
     assert recovery.main(args) == 1
     assert recovery.load_state(state)["events"][0]["outcome"] == "reserved"
     assert recovery.main(args) == 2
+
+
+def test_checkpoint_lock_serializes_competing_processes(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    import sys
+    import time
+    from pathlib import Path
+
+    monkeypatch.setattr(recovery, "STATE_ROOTS", (tmp_path,))
+    path = tmp_path / "shared.json"
+    marker = tmp_path / "child-acquired"
+    script = (
+        "import sys; from pathlib import Path; "
+        "import hunter_reconcile_recovery as r; "
+        "r.STATE_ROOTS=(Path(sys.argv[1]).parent,); "
+        "lock=r.checkpoint_lock(Path(sys.argv[1])); "
+        'lock.__enter__(); Path(sys.argv[2]).write_text("acquired"); lock.__exit__(None,None,None)'
+    )
+    with recovery.checkpoint_lock(path):
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, str(path), str(marker)],
+            env={**os.environ, "PYTHONPATH": str(Path(recovery.__file__).parent)},
+        )
+        try:
+            time.sleep(0.2)
+            assert not marker.exists(), "second process entered the critical section early"
+        finally:
+            pass
+    assert process.wait(timeout=10) == 0
+    assert marker.read_text() == "acquired"
+
+
+def test_checkpoint_lock_serializes_read_modify_write_without_lost_counters(tmp_path, monkeypatch):
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    monkeypatch.setattr(recovery, "STATE_ROOTS", (tmp_path,))
+    path = tmp_path / "shared.json"
+    script = """import sys,time
+from pathlib import Path
+import hunter_reconcile_recovery as r
+p=Path(sys.argv[1]); r.STATE_ROOTS=(p.parent,)
+with r.checkpoint_lock(p):
+    d=r.load_state(p)
+    time.sleep(0.15)
+    r.record_event(d, {'pr_number':int(sys.argv[2]),'attempt':1,'run_id':int(sys.argv[2])},p)
+"""
+    env = {**os.environ, "PYTHONPATH": str(Path(recovery.__file__).parent)}
+    procs = [subprocess.Popen([sys.executable, "-c", script, str(path), str(n)], env=env) for n in (748, 749)]
+    assert all(proc.wait(timeout=15) == 0 for proc in procs)
+    assert {e["pr_number"] for e in recovery.load_state(path)["events"]} == {748, 749}

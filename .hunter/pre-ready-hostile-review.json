@@ -3,13 +3,13 @@
     "acceptance_criteria": [
       {
         "criterion": "a review-finding fix proceeds to a valid review opportunity and terminal readiness/advisory state without manual review-request rebuilding",
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority.",
         "id": "AC-1",
         "verdict": "satisfied"
       },
       {
         "criterion": "failed recovery must terminate with a specific diagnosis, not stay pending indefinitely",
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority.",
         "id": "AC-2",
         "verdict": "satisfied"
       }
@@ -31,157 +31,162 @@
     "base_sha": "2e629ec6890853d319e4d753f644694a778a952f",
     "defect_families": [
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-042",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
+        "family": "DFF-050",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-052",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh Issue 585 staged-diff review: recovery now durably reserves attempt before judgement validation or side effects; failed attempts remain spent, even if outcome update fails. Zero diagnostic budget retains no diagnostics but preserves counters. Three new regressions plus existing focused tests: 53 passed. No independent review authority claimed. Existing defect family inspected for full candidate diff; no new authority boundary.",
+        "evidence": "Fresh staged candidate review: serialized checkpoint lock covers load/plan/reserve and outcome update across processes; two-process regressions verify no lost counters. Orchestrator GitHubUnavailable has distinct pending exit 4, and workflow does not emit completion. Failed HEAD lookup is guarded and continues bounded sweep. 226 focused tests passed. This writer-authored request does not assert independent review authority. Defect-family applicability checked against full staged candidate; independent reviewer still required.",
         "family": "DFF-055",
         "outcome": "clear"
       }
@@ -190,7 +195,7 @@
     "issue": "585",
     "review_target": [
       {
-        "blob_sha": "9e2a536a712806b0dc8d0a180d5460bd8cca6d01",
+        "blob_sha": "b7302614c91e43feae7c92717d4cbe2fa32a0041",
         "path": "scripts/hunter_reconcile_recovery.py",
         "previous_path": "",
         "status": "added"
@@ -202,13 +207,13 @@
         "status": "added"
       },
       {
-        "blob_sha": "0fa1b56842148be8d066cb560067aaa824e08da9",
+        "blob_sha": "9f05e90e33f019390cdd0db4574d34fd70ec1ede",
         "path": "tests/test_hunter_reconcile_recovery.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "6fbcac73d8cd72806576e1c9910d1eb1dcf3056c",
+        "blob_sha": "58fa5aebdbe413fca4c290e5514ce73507ce63d2",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
@@ -220,8 +225,20 @@
         "status": "modified"
       },
       {
+        "blob_sha": "a14108d5d5064865e7341318095e1423286c44c2",
+        "path": "scripts/hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "94293256d67c9371dc6f3b20b1ad50a31bd64e04",
         "path": "scripts/hunter_writer_commit_finalizer.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "50253f6527b65ed0a99d6163aee633e159c08006",
+        "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -238,11 +255,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "bc3233255f96ad595498ec124cf79ed74ff5aff3491b9e3e811c845d6e12709b"
+    "review_target_digest": "4c2f719791b330289e8242ceb8e25778c3d9cb6c7b2615785761918e2375b9d2"
   },
-  "review_id": "4dca5da1c85bec5d46a18e4665118567393dd2c53942db818a1bcebc2df6fdb5",
+  "review_id": "24c230d1ec3ee194cef40e93ba8a0e3ca1ed088046e31dba46b8f2f98854232a",
   "review_request": {
-    "claims_id": "4dca5da1c85bec5d46a18e4665118567393dd2c53942db818a1bcebc2df6fdb5",
+    "claims_id": "24c230d1ec3ee194cef40e93ba8a0e3ca1ed088046e31dba46b8f2f98854232a",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

@@ -46,6 +46,7 @@ budget.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 import re
@@ -56,6 +57,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -369,6 +371,30 @@ def save_state(document: dict[str, Any], path: Path = STATE_PATH) -> None:
         temp.unlink(missing_ok=True)
 
 
+@contextmanager
+def checkpoint_lock(path: Path):
+    """Serialize checkpoint read/plan/reserve/update across recovery processes.
+
+    Lock the stable sibling inode, never the atomically replaced JSON inode.
+    Reject symlinks and require the existing sanctioned checkpoint directory.
+    """
+    path = validate_state_path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path = path.with_name(path.name + ".lock")
+    flags = os.O_CREAT | os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(lock_path, flags, 0o600)
+    try:
+        if not os.path.isfile(lock_path) or os.fstat(fd).st_nlink != 1:
+            raise ObservationUnavailable("recovery checkpoint lock is not a regular private file")
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def record_event(document: dict[str, Any], event: dict[str, Any], path: Path = STATE_PATH) -> None:
     document["events"].append(event)
     save_state(document, path)
@@ -514,75 +540,78 @@ def main(argv: list[str] | None = None) -> int:
             arguments.head,
             read_log=default_job_log(arguments.repository, token),
         )
-        document = load_state(state_path)
-        if failure is None:
-            _output({"observed": "none", "head_sha": arguments.head, "pr_number": arguments.pr})
-            return 0
-        plan = plan_recovery(failure, document, pr_number=arguments.pr, head_sha=arguments.head)
-        if isinstance(plan, RecoveryRefusal):
-            record_event(
-                document,
-                {
-                    "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "pr_number": arguments.pr,
-                    "head_sha": arguments.head,
-                    "kind": failure.kind,
-                    "run_id": failure.run_id,
-                    "job_id": failure.job_id,
-                    "refused": plan.code,
-                    "reason": plan.reason,
-                },
-                state_path,
-            )
-            _output({"refused": plan.code, "reason": plan.reason, "kind": failure.kind})
-            return 2
-        if not arguments.execute:
-            _output(
-                {
-                    "planned": True,
-                    "kind": failure.kind,
-                    "attempt": plan.attempt,
-                    "run_id": plan.run_id,
-                    "job_id": plan.job_id,
-                    "head_sha": plan.head_sha,
-                    "action": plan.action,
-                }
-            )
-            return 0
-        if not arguments.issue or not arguments.judgement:
-            print("--execute requires --issue and --judgement; recovery cannot fabricate a judgement", file=sys.stderr)
-            return 2
-        # Reserve the attempt durably before reading judgement or executing any
-        # side effect. A failed execution is still a spent attempt; a repeated
-        # observation of this run cannot authorize the same action again.
-        event = {
-            "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "pr_number": arguments.pr,
-            "head_sha": arguments.head,
-            "kind": failure.kind,
-            "run_id": failure.run_id,
-            "job_id": failure.job_id,
-            "attempt": plan.attempt,
-            "outcome": "reserved",
-        }
-        record_event(document, event, state_path)
-        try:
-            judgement = json.loads(review._trusted_judgement_path(arguments.judgement).read_text(encoding="utf-8"))
-            if not isinstance(judgement, dict):
-                raise ValueError("review request judgement must be a JSON object")
-            attempt = execute_recovery(
-                plan, root=Path(__file__).resolve().parents[1], issue=arguments.issue, judgement=judgement
-            )
-        except Exception:
-            event["outcome"] = "failed"
-            # Keep the durable reservation even if the outcome update fails.
+        with checkpoint_lock(state_path):
+            document = load_state(state_path)
+            if failure is None:
+                _output({"observed": "none", "head_sha": arguments.head, "pr_number": arguments.pr})
+                return 0
+            plan = plan_recovery(failure, document, pr_number=arguments.pr, head_sha=arguments.head)
+            if isinstance(plan, RecoveryRefusal):
+                record_event(
+                    document,
+                    {
+                        "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        "pr_number": arguments.pr,
+                        "head_sha": arguments.head,
+                        "kind": failure.kind,
+                        "run_id": failure.run_id,
+                        "job_id": failure.job_id,
+                        "refused": plan.code,
+                        "reason": plan.reason,
+                    },
+                    state_path,
+                )
+                _output({"refused": plan.code, "reason": plan.reason, "kind": failure.kind})
+                return 2
+            if not arguments.execute:
+                _output(
+                    {
+                        "planned": True,
+                        "kind": failure.kind,
+                        "attempt": plan.attempt,
+                        "run_id": plan.run_id,
+                        "job_id": plan.job_id,
+                        "head_sha": plan.head_sha,
+                        "action": plan.action,
+                    }
+                )
+                return 0
+            if not arguments.issue or not arguments.judgement:
+                print(
+                    "--execute requires --issue and --judgement; recovery cannot fabricate a judgement", file=sys.stderr
+                )
+                return 2
+            # Reserve the attempt durably before reading judgement or executing any
+            # side effect. A failed execution is still a spent attempt; a repeated
+            # observation of this run cannot authorize the same action again.
+            event = {
+                "observed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "pr_number": arguments.pr,
+                "head_sha": arguments.head,
+                "kind": failure.kind,
+                "run_id": failure.run_id,
+                "job_id": failure.job_id,
+                "attempt": plan.attempt,
+                "outcome": "reserved",
+            }
+            record_event(document, event, state_path)
+            try:
+                judgement = json.loads(review._trusted_judgement_path(arguments.judgement).read_text(encoding="utf-8"))
+                if not isinstance(judgement, dict):
+                    raise ValueError("review request judgement must be a JSON object")
+                attempt = execute_recovery(
+                    plan, root=Path(__file__).resolve().parents[1], issue=arguments.issue, judgement=judgement
+                )
+            except Exception:
+                event["outcome"] = "failed"
+                # Keep the durable reservation even if the outcome update fails.
+                save_state(document, state_path)
+                raise
+            event["outcome"] = "completed"
+            event["regenerated"] = attempt["regenerated"]
             save_state(document, state_path)
-            raise
-        event["outcome"] = "completed"
-        event["regenerated"] = attempt["regenerated"]
-        save_state(document, state_path)
-        _output(attempt)
-        return 0
+            _output(attempt)
+            return 0
     except (
         ObservationUnavailable,
         transport.GitHubRequestError,
