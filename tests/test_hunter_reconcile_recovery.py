@@ -3,7 +3,8 @@
 Focused regression coverage: exact run/job detection bound to the exact PR
 head, stale-request recovery through the existing writer finalizer, transient
 waiting without an attempt, permanent blockage, duplicate-event idempotence,
-stale-HEAD refusal, budget exhaustion, and publisher-candidate immutability.
+stale-HEAD refusal, budget exhaustion, publisher-candidate immutability, and
+containment of the externally supplied recovery checkpoint path.
 """
 
 from __future__ import annotations
@@ -15,32 +16,11 @@ from types import SimpleNamespace
 import hunter_pre_ready_review as review
 import hunter_reconcile_recovery as recovery
 import pytest
+from review_request_fixture import CRITERION, ISSUE, JUDGEMENT, REGISTRY
 
 PR = 584
 HEAD = "a" * 40
 OTHER_HEAD = "b" * 40
-ISSUE = "585"
-CRITERION = "Required proof"
-JUDGEMENT = {
-    "acceptance_criteria": [
-        {"id": "AC-1", "criterion": CRITERION, "evidence": "verified against the change", "verdict": "satisfied"}
-    ],
-    "defect_families": [{"family": "FAM-SRC", "evidence": "adversarial sweep complete", "outcome": "clear"}],
-    "findings": [],
-    "adversarial_dimensions": review.REQUIRED_ADVERSARIAL_DIMENSIONS,
-}
-REGISTRY = {
-    "version": 1,
-    "families": [
-        {
-            "id": "FAM-SRC",
-            "title": "source-scope",
-            "invariant": "test scope",
-            "applicability": {"changed_paths": ["src/"], "rationale": "test"},
-            "prevention": {"mechanism": "test"},
-        }
-    ],
-}
 WORKFLOW = {"workflows": [{"id": 7, "path": recovery.RECONCILE_WORKFLOW_FILE}]}
 RUN = {"id": 111, "conclusion": "success"}
 JOB = {"id": 222, "name": recovery.AUTHORITATIVE_JOB_NAME, "conclusion": "success"}
@@ -54,6 +34,13 @@ TRANSIENT_LOG = (
     "Governance review infrastructure unavailable: GitHubUnavailable: transient\n"
     f"::error::Governance refresh failed for PR #{PR}; continuing.\n"
 )
+
+
+@pytest.fixture(autouse=True)
+def _sandbox_state_roots(tmp_path, monkeypatch):
+    """Confine the sanctioned checkpoint roots to this test's sandbox."""
+
+    monkeypatch.setattr(recovery, "STATE_ROOTS", (tmp_path.resolve(strict=False),))
 
 
 def _fake_github(monkeypatch, *, run=RUN, log=STALE_LOG):
@@ -377,3 +364,66 @@ def test_job_log_redirect_is_followed_without_credentials(monkeypatch):
     assert seen[0]["Authorization"] == "Bearer secret-token"
     second = seen[1]
     assert not any("Authorization" in key for key in second)
+
+
+def test_state_path_inside_the_sanctioned_roots_is_normalized_and_accepted(tmp_path):
+    """A faulty argument that stays inside a sanctioned root is bound, not trusted."""
+
+    nested = tmp_path / "deep" / "sub" / "state.json"
+    tricky = tmp_path / "deep" / ".." / "state.json"
+    assert recovery.validate_state_path(str(nested)) == nested.resolve(strict=False)
+    # `..` that stays inside the root collapses; the bound path is the resolved one.
+    assert recovery.validate_state_path(str(tricky)) == (tmp_path / "state.json").resolve(strict=False)
+
+
+def test_state_path_traversal_outside_the_sanctioned_roots_is_refused(tmp_path):
+    """A `..` escape or absolute outside path is refused; recovery fails closed."""
+
+    escape = tmp_path / ".." / "elsewhere.json"
+    with pytest.raises(recovery.ObservationUnavailable, match="escapes the sanctioned"):
+        recovery.validate_state_path(str(escape))
+    with pytest.raises(recovery.ObservationUnavailable, match="escapes the sanctioned"):
+        recovery.validate_state_path("/etc/hunter-recovery-state.json")
+
+
+def test_state_path_must_be_a_json_checkpoint(tmp_path):
+    with pytest.raises(recovery.ObservationUnavailable, match="must be a .json file"):
+        recovery.validate_state_path(str(tmp_path / "state.yaml"))
+
+
+def test_load_state_never_reads_outside_the_sanctioned_roots(tmp_path, monkeypatch):
+    """The sink itself refuses: an unvalidated caller cannot read foreign files."""
+
+    decoy = tmp_path / "outside" / "state.json"
+    decoy.parent.mkdir()
+    decoy.write_text('{"schema": "anything", "events": []}')
+    monkeypatch.setattr(recovery, "STATE_ROOTS", (tmp_path / "sanctioned",))
+    with pytest.raises(recovery.ObservationUnavailable, match="escapes the sanctioned"):
+        recovery.load_state(decoy)
+    assert decoy.read_text() == '{"schema": "anything", "events": []}'
+
+
+def test_save_state_never_replaces_outside_the_sanctioned_roots(tmp_path, monkeypatch):
+    """The atomic replace is bound to the sanctioned roots even for a direct caller."""
+
+    victim = tmp_path / "outside" / "authorized_keys.json"
+    victim.parent.mkdir()
+    victim.write_text("original\n")
+    document = {"schema": recovery.STATE_SCHEMA, "events": []}
+    monkeypatch.setattr(recovery, "STATE_ROOTS", (tmp_path / "sanctioned",))
+    with pytest.raises(recovery.ObservationUnavailable, match="escapes the sanctioned"):
+        recovery.save_state(document, victim)
+    assert victim.read_text() == "original\n"
+    # No temporary checkpoint residue was left next to the refused target.
+    assert list(victim.parent.iterdir()) == [victim]
+
+
+def test_main_refuses_an_escaped_state_path_before_any_github_contact(monkeypatch, tmp_path):
+    """A faulty `--state` fails closed locally, before any network request."""
+
+    def no_network(*args, **kwargs):
+        raise AssertionError("no GitHub request may happen for a refused checkpoint path")
+
+    monkeypatch.setattr(recovery, "request_json", no_network)
+    code = recovery.main(["--pr", str(PR), "--head", HEAD, "--state", str(tmp_path / ".." / "escape.json")])
+    assert code == 1

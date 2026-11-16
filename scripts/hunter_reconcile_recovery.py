@@ -68,9 +68,17 @@ MAX_SCANNED_RUNS = 5
 MAX_RECOVERY_ATTEMPTS = 2
 MAX_TRACKED_EVENTS = 16
 STATE_SCHEMA = "hunter.reconcile-recovery-state.v1"
-STATE_PATH = Path(
-    os.environ.get("HUNTER_RECONCILE_RECOVERY_STATE", str(Path.home() / ".hunter-reconcile-recovery-state.json"))
+#: The sanctioned checkpoint directories. The recovery checkpoint path arrives
+#: from the CLI or the environment — exactly the input a faulty agent argument
+#: can get wrong — so before any file operation it is user-expanded, resolved,
+#: and required to stay inside one of these roots. A faulty argument can then
+#: never read or replace a file outside the recovery bookkeeping area.
+STATE_ROOTS = (
+    (Path(__file__).resolve().parents[1] / ".hunter").resolve(strict=False),
+    (Path.home() / ".hunter").resolve(strict=False),
 )
+STATE_FILENAME = "reconcile-recovery-state.json"
+STATE_PATH = Path(os.environ.get("HUNTER_RECONCILE_RECOVERY_STATE", str(Path.home() / ".hunter" / STATE_FILENAME)))
 #: Log markers that classify an authoritative governance-refresh failure as
 #: infrastructure unavailability rather than a candidate defect.
 TRANSIENT_MARKERS = ("infrastructure unavailable", "rate limit", "GitHubUnavailable")
@@ -243,7 +251,32 @@ def observe_failure(
     return None
 
 
+def validate_state_path(path: str | Path) -> Path:
+    """Bind an externally supplied checkpoint path to the sanctioned roots.
+
+    The checkpoint path is CLI- or environment-supplied, i.e. exactly the input
+    a faulty agent argument can get wrong. It is user-expanded and resolved,
+    must name a ``.json`` checkpoint, and must stay inside one of the sanctioned
+    checkpoint directories; anything else raises and recovery fails closed
+    instead of reading or replacing a file outside the bookkeeping area.
+    """
+
+    resolved = Path(path).expanduser().resolve(strict=False)
+    if resolved.suffix != ".json":
+        raise ObservationUnavailable(f"the recovery checkpoint must be a .json file, not {resolved}")
+    for root in STATE_ROOTS:
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            continue
+        return resolved
+    raise ObservationUnavailable(
+        f"the recovery checkpoint path escapes the sanctioned checkpoint directories: {resolved}"
+    )
+
+
 def load_state(path: Path = STATE_PATH) -> dict[str, Any]:
+    path = validate_state_path(path)
     try:
         document = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
@@ -262,6 +295,7 @@ def load_state(path: Path = STATE_PATH) -> dict[str, Any]:
 def save_state(document: dict[str, Any], path: Path = STATE_PATH) -> None:
     """Atomic, bounded checkpoint: an uncertain write is never treated as recorded."""
 
+    path = validate_state_path(path)
     events = [item for item in document["events"] if isinstance(item, dict)][-MAX_TRACKED_EVENTS:]
     payload = {"schema": STATE_SCHEMA, "events": events}
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -400,8 +434,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     arguments = parser.parse_args(argv)
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
-    state_path = Path(arguments.state) if arguments.state else STATE_PATH
     try:
+        state_path = validate_state_path(arguments.state or STATE_PATH)
         pr = request_json(arguments.repository, token, "GET", f"pulls/{arguments.pr}")
         live_head = str((pr.get("head") or {}).get("sha") or "") if isinstance(pr, dict) else ""
         if live_head.lower() != arguments.head.lower():

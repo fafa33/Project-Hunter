@@ -14,29 +14,7 @@ from types import SimpleNamespace
 
 import hunter_pre_ready_review as review
 import hunter_writer_commit_finalizer as finalizer
-
-ISSUE = "585"
-CRITERION = "Required proof"
-JUDGEMENT = {
-    "acceptance_criteria": [
-        {"id": "AC-1", "criterion": CRITERION, "evidence": "verified against the change", "verdict": "satisfied"}
-    ],
-    "defect_families": [{"family": "FAM-SRC", "evidence": "adversarial sweep complete", "outcome": "clear"}],
-    "findings": [],
-    "adversarial_dimensions": review.REQUIRED_ADVERSARIAL_DIMENSIONS,
-}
-REGISTRY = {
-    "version": 1,
-    "families": [
-        {
-            "id": "FAM-SRC",
-            "title": "source-scope",
-            "invariant": "test scope",
-            "applicability": {"changed_paths": ["src/"], "rationale": "test"},
-            "prevention": {"mechanism": "test"},
-        }
-    ],
-}
+from review_request_fixture import ISSUE, JUDGEMENT, REGISTRY
 
 
 def _git(tmp_path, *args, check=True):
