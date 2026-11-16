@@ -712,3 +712,47 @@ with r.checkpoint_lock(p):
     procs = [subprocess.Popen([sys.executable, "-c", script, str(path), str(n)], env=env) for n in (748, 749)]
     assert all(proc.wait(timeout=15) == 0 for proc in procs)
     assert {e["pr_number"] for e in recovery.load_state(path)["events"]} == {748, 749}
+
+
+def test_newer_pending_orchestration_does_not_hide_older_same_head_stale_failure(monkeypatch):
+    _fake_github(monkeypatch)
+    original = recovery.request_json
+
+    def request(repository, token, method, endpoint):
+        if endpoint.endswith(f"/runs?per_page={recovery.MAX_SCANNED_RUNS}"):
+            return {"workflow_runs": [{"id": 112, "conclusion": "success"}, {"id": 111, "conclusion": "success"}]}
+        if endpoint == "actions/runs/112/jobs?per_page=100":
+            return {"jobs": [{"id": 223, "name": recovery.AUTHORITATIVE_JOB_NAME}]}
+        return original(repository, token, method, endpoint)
+
+    def read_log(job_id):
+        if job_id == 223:
+            return f"::warning::Review orchestration infrastructure pending for PR #{PR} at {HEAD}; continuing.\n"
+        return STALE_LOG
+
+    failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, request=request, read_log=read_log)
+    assert failure is not None
+    assert failure.kind == recovery.KIND_STALE_REQUEST
+    assert failure.run_id == 111
+
+
+def test_newer_inconclusive_pr_mention_does_not_hide_older_permanent_failure(monkeypatch):
+    _fake_github(monkeypatch)
+    original = recovery.request_json
+
+    def request(repository, token, method, endpoint):
+        if endpoint.endswith(f"/runs?per_page={recovery.MAX_SCANNED_RUNS}"):
+            return {"workflow_runs": [{"id": 112, "conclusion": "success"}, {"id": 111, "conclusion": "failure"}]}
+        if endpoint == "actions/runs/112/jobs?per_page=100":
+            return {"jobs": [{"id": 223, "name": recovery.AUTHORITATIVE_JOB_NAME}]}
+        return original(repository, token, method, endpoint)
+
+    def read_log(job_id):
+        if job_id == 223:
+            return f"::notice::Review orchestration still waiting for PR #{PR} at {HEAD}; continuing.\n"
+        return f"::error::Review orchestration failed for PR #{PR} at {HEAD}; continuing.\n"
+
+    failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, request=request, read_log=read_log)
+    assert failure is not None
+    assert failure.kind == recovery.KIND_PERMANENT
+    assert failure.run_id == 111

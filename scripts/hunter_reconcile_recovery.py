@@ -296,8 +296,10 @@ def observe_failure(
             # This run never reconciled this pull request; keep searching the
             # older bounded runs instead of mistaking its silence for success.
             continue
-        # This run reconciled our pull request with no failure evidence for it.
-        return None
+        # A PR mention is not completion evidence. Pending orchestration and
+        # inconclusive warnings cannot clear an older same-head failure; only
+        # the exact-head completion marker above can do that.
+        continue
     return None
 
 
