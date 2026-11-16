@@ -2634,3 +2634,32 @@ def test_orchestrator_unavailable_is_pending_not_completed(monkeypatch):
     monkeypatch.setattr(orchestrator, "ensure_current", unavailable)
     monkeypatch.setattr(sys, "argv", ["orchestrator", "ensure", "--repository", "owner/repo", "--pr", "472"])
     assert orchestrator.main() == 4
+
+
+def test_collector_completion_publication_outage_preserves_success(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise orchestrator.transport.GitHubUnavailable(
+            "temporary",
+            attempts=1,
+            last=orchestrator.transport.GitHubRequestError("temporary", category="transient"),
+        )
+
+    monkeypatch.setattr(orchestrator, "publish_collector_completion", unavailable)
+    monkeypatch.setattr(orchestrator, "finalize_exhausted_pool", lambda *a, **kw: "SKIPPED")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "orchestrator",
+            "collector-complete",
+            "--repository",
+            "owner/repo",
+            "--pr",
+            "472",
+            "--head",
+            HEAD,
+            "--run-id",
+            "12345",
+        ],
+    )
+    assert orchestrator.main() == 0

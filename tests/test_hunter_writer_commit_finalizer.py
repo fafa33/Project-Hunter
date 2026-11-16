@@ -378,3 +378,31 @@ def test_stale_bounded_correction_request_still_fails_closed(tmp_path, monkeypat
     monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
     monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
     assert finalizer.main(tmp_path) == 2
+
+
+def test_unstaged_malformed_registry_cannot_bypass_governed_freshness(tmp_path, monkeypatch):
+    _governed_repo(tmp_path, monkeypatch)
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    (tmp_path / "docs" / "DEFECT_REGISTRY.json").write_text("{ malformed unstaged")
+    (tmp_path / "src" / "module.py").write_text("remediation v2\n")
+    _git(tmp_path, "add", "src/module.py")
+    assert finalizer.main(tmp_path) == 2
+    assert _git(tmp_path, "show", ":docs/DEFECT_REGISTRY.json").startswith("{")
+
+
+def test_unstaged_malformed_registry_does_not_block_unchanged_governed_request(tmp_path, monkeypatch):
+    _governed_repo(tmp_path, monkeypatch)
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    (tmp_path / "docs" / "DEFECT_REGISTRY.json").write_text("{ malformed unstaged")
+    assert finalizer.main(tmp_path) == 0
+
+
+def test_invalid_staged_registry_fails_closed_for_governed_request(tmp_path, monkeypatch):
+    _governed_repo(tmp_path, monkeypatch)
+    monkeypatch.delenv("HUNTER_REVIEW_JUDGEMENT", raising=False)
+    monkeypatch.delenv("HUNTER_GOVERNING_ISSUE", raising=False)
+    (tmp_path / "docs" / "DEFECT_REGISTRY.json").write_text("{ malformed staged")
+    _git(tmp_path, "add", "docs/DEFECT_REGISTRY.json")
+    assert finalizer.main(tmp_path) == 2

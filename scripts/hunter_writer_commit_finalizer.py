@@ -24,6 +24,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +86,22 @@ def _staged_review_document(root: Path) -> Any:
         return raw.decode("utf-8", errors="replace")
 
 
+def _staged_families(root: Path) -> tuple[tuple[dict[str, Any], ...], str]:
+    """Parse registry from the index, never from potentially malformed unstaged edits."""
+    result = subprocess.run(
+        ("git", "show", f":{review.REGISTRY_RELATIVE_PATH}"),
+        cwd=root,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return (), "staged defect registry is unavailable"
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "registry.json"
+        path.write_bytes(result.stdout)
+        return review.load_families(path)
+
+
 def _finalize(root: Path, *, issue: str, judgement: dict[str, Any]) -> int:
     try:
         base = subprocess.check_output(("git", "merge-base", "HEAD", "origin/main"), cwd=root, text=True).strip()
@@ -125,11 +142,17 @@ def _automatic_refresh(root: Path) -> int:
     except (OSError, ValueError, subprocess.CalledProcessError, review.GitEvidenceUnavailable) as exc:
         print(f"[Hunter Writer Finalizer] NOTE: automatic review freshness is unknown ({type(exc).__name__}: {exc})")
         return 0
-    families, families_error = review.load_families(root / review.REGISTRY_RELATIVE_PATH)
-    if families_error:
-        print(f"[Hunter Writer Finalizer] NOTE: automatic review freshness is unknown ({families_error})")
-        return 0
     document = _staged_review_document(root)
+    if document is None:
+        print("[Hunter Writer Finalizer] SKIP: no governed review request is staged")
+        return 0
+    try:
+        families, families_error = _staged_families(root)
+    except OSError as exc:
+        families, families_error = (), f"staged defect registry unreadable: {exc}"
+    if families_error:
+        print(f"[Hunter Writer Finalizer] FAIL: governed review freshness unknown ({families_error})", file=sys.stderr)
+        return 2
     # Check candidate content freshness, not owner scope authorization.
     # The trusted admission controller independently validates authorization.
     freshness_document = document

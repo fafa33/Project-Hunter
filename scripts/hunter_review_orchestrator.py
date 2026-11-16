@@ -1594,7 +1594,13 @@ def main() -> int:
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
     try:
         if args.command == "collector-complete":
-            publish_collector_completion(args.repository, token, args.pr, args.head, args.run_id)
+            try:
+                publish_collector_completion(args.repository, token, args.pr, args.head, args.run_id)
+            except transport.GitHubUnavailable as exc:
+                # The collector's completed run and uploaded artifacts remain evidence.
+                # A transient status-publication outage must not turn that run into a
+                # failed collector and trigger duplicate reviewer dispatches.
+                print(f"::warning::Collector completion publication pending: {exc}", file=sys.stderr)
             # Best effort and fail closed: the completion marker above is already durable, and an unusable receipt
             # leaves the cycle open for the reconcile backstop rather than failing a collector that did its job.
             try:
