@@ -270,8 +270,8 @@ def observe_failure(
         if stale:
             return ReconcileFailure(KIND_STALE_REQUEST, int(run["id"]), int(job["id"]), head_sha, stale[0].strip())
         if refresh_failed:
-            if str(run.get("conclusion")) != "failure":
-                continue
+            # The per-PR exact-head failure is authoritative even when the
+            # multi-PR sweep later times out, is cancelled, or completes.
             # Transient evidence is only attributed to this invocation when it
             # sits in the bounded lines immediately before this pull request's
             # own failure marker; the job log reconciles many pull requests, so

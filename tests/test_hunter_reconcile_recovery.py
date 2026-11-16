@@ -756,3 +756,21 @@ def test_newer_inconclusive_pr_mention_does_not_hide_older_permanent_failure(mon
     assert failure is not None
     assert failure.kind == recovery.KIND_PERMANENT
     assert failure.run_id == 111
+
+
+@pytest.mark.parametrize("conclusion", ["timed_out", "cancelled", "success", None])
+def test_exact_head_refresh_failure_survives_interrupted_sweep(monkeypatch, conclusion):
+    _fake_github(monkeypatch, run={"id": 111, "conclusion": conclusion}, log=PERMANENT_LOG)
+    failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda _: PERMANENT_LOG)
+    assert failure is not None
+    assert failure.kind == recovery.KIND_PERMANENT
+    assert failure.run_id == 111
+
+
+@pytest.mark.parametrize("conclusion", ["timed_out", "cancelled", "success"])
+def test_exact_head_transient_refresh_failure_survives_interrupted_sweep(monkeypatch, conclusion):
+    _fake_github(monkeypatch, run={"id": 111, "conclusion": conclusion}, log=TRANSIENT_LOG)
+    failure = recovery.observe_failure("fafa33/Project-Hunter", "t", PR, HEAD, read_log=lambda _: TRANSIENT_LOG)
+    assert failure is not None
+    assert failure.kind == recovery.KIND_TRANSIENT
+    assert failure.run_id == 111
