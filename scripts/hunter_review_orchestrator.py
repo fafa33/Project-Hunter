@@ -1512,7 +1512,11 @@ def exact_head_codex_clear_exists(repository: str, token: str, pr_number: int, h
         return False
 
 
-def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle | None:
+class ReconcileHeadChanged(RuntimeError):
+    """The controller observed a different PR head than its trusted invocation."""
+
+
+def ensure_current(repository: str, token: str, pr_number: int, expected_head: str | None = None) -> ReviewCycle | None:
     pr = request_json(repository, token, "GET", f"pulls/{pr_number}")
     if not isinstance(pr, dict) or str(pr.get("state") or "") != "open":
         return None
@@ -1529,6 +1533,10 @@ def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle |
     head_sha = str((pr.get("head") or {}).get("sha") or "")
     if not head_sha:
         raise RuntimeError("current pull-request head is unavailable")
+    if expected_head is not None and (not re.fullmatch(r"[0-9a-f]{40}", expected_head) or head_sha != expected_head):
+        raise ReconcileHeadChanged(
+            f"PR #{pr_number} head changed during reconcile; expected {expected_head}, got {head_sha}"
+        )
     readiness = review_request_state(repository, token, pr_number, head_sha)
     if not readiness.ready:
         # A prerequisite that is still pending or running retries on its own:
@@ -1581,6 +1589,7 @@ def parser() -> argparse.ArgumentParser:
     ensure = sub.add_parser("ensure")
     ensure.add_argument("--repository", required=True)
     ensure.add_argument("--pr", type=int, required=True)
+    ensure.add_argument("--expected-head")
     complete = sub.add_parser("collector-complete")
     complete.add_argument("--repository", required=True)
     complete.add_argument("--pr", type=int, required=True)
@@ -1611,8 +1620,11 @@ def main() -> int:
                 outcome = f"SKIPPED: finalization raised {type(exc).__name__}: {exc}"
             print(f"Collector finalization: {outcome}")
         else:
-            ensure_current(args.repository, token, args.pr)
+            ensure_current(args.repository, token, args.pr, args.expected_head)
         return 0
+    except ReconcileHeadChanged as exc:
+        print(f"::warning::Reconcile HEAD race: {exc}", file=sys.stderr)
+        return 5
     except ReviewRequestBlocked as exc:
         # Dedicated CLI outcome: the exact-head review prerequisite is blocked,
         # not an orchestrator execution error. The trusted reconcile emits a

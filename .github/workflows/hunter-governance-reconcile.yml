@@ -174,12 +174,17 @@ jobs:
             B=boot
             BRIDGE="scripts/hunter_governance_review/${B}strap_external_review_469.py"
             refresh_rc=0
-            if ! python "${BRIDGE}" governance \
+            python "${BRIDGE}" governance \
               --pr "${pr_number}" \
-              --repository "${GITHUB_REPOSITORY}"; then
+              --repository "${GITHUB_REPOSITORY}" \
+              --expected-head "${invocation_head}" || refresh_rc=$?
+            if [ "${refresh_rc}" -eq 5 ]; then
+              echo "::warning::Reconcile HEAD race for PR #${pr_number}; suppressing invocation outcome markers."
+              failures=1
+              continue
+            elif [ "${refresh_rc}" -ne 0 ]; then
               echo "::error::Governance refresh failed for PR #${pr_number} at ${invocation_head}; continuing."
               failures=1
-              refresh_rc=1
             fi
             # Bootstrap detection: until hunter_review_orchestrator.py exists on the
             # trusted default branch, there is no trusted orchestrator to run. Never
@@ -196,8 +201,13 @@ jobs:
               orchestration_rc=0
               python scripts/hunter_review_orchestrator.py ensure \
                 --pr "${pr_number}" \
-                --repository "${GITHUB_REPOSITORY}" || orchestration_rc=$?
-              if [ "${orchestration_rc}" -eq 3 ]; then
+                --repository "${GITHUB_REPOSITORY}" \
+                --expected-head "${invocation_head}" || orchestration_rc=$?
+              if [ "${orchestration_rc}" -eq 5 ]; then
+                echo "::warning::Reconcile HEAD race for PR #${pr_number}; suppressing invocation outcome markers."
+                failures=1
+                continue
+              elif [ "${orchestration_rc}" -eq 3 ]; then
                 echo "::warning::WAITING_FOR_EXACT_HEAD_REVIEW for PR #${pr_number}; commit a valid exact-head request before review dispatch."
               elif [ "${orchestration_rc}" -eq 4 ]; then
                 echo "::warning::Review orchestration infrastructure pending for PR #${pr_number} at ${invocation_head}; no completion marker."
