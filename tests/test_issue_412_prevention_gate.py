@@ -45,6 +45,17 @@ WRITER = "claude"
 
 
 @pytest.fixture(autouse=True)
+def isolate_pre_push_worktree_location(monkeypatch):
+    """Issue #412 uses synthetic temporary repos, not a real push worktree.
+
+    Persistent-worktree enforcement is independently covered in
+    test_hunter_pre_push.py; do not let OS-specific pytest temp roots
+    preempt the ingress behavior these fixtures are meant to exercise.
+    """
+    monkeypatch.setattr(hunter_pre_push, "_require_persistent_worktree", lambda _root: None)
+
+
+@pytest.fixture(autouse=True)
 def authenticated_review_observation(monkeypatch):
     """These claim-shape tests isolate the authenticated observation boundary.
 
