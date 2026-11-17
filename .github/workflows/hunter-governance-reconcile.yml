@@ -156,13 +156,34 @@ jobs:
           failures=0
           while read -r pr_number; do
             [ -z "${pr_number}" ] && continue
+            # Bind each invocation's failure marker to the live candidate HEAD
+            # observed immediately before that invocation. Historical unbound
+            # markers must never be attributed to a later pushed candidate.
+            invocation_head=""
+            if ! invocation_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" --jq '.head.sha')"; then
+              echo "::error::Cannot fetch HEAD for PR #${pr_number}; continuing."
+              failures=1
+              continue
+            fi
+            if [[ ! "${invocation_head}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Cannot bind reconcile invocation to PR #${pr_number} HEAD; continuing."
+              failures=1
+              continue
+            fi
             # Legacy invariant marker: if ! python scripts/hunter_governance_review_v2.py
             B=boot
             BRIDGE="scripts/hunter_governance_review/${B}strap_external_review_469.py"
-            if ! python "${BRIDGE}" governance \
+            refresh_rc=0
+            python "${BRIDGE}" governance \
               --pr "${pr_number}" \
-              --repository "${GITHUB_REPOSITORY}"; then
-              echo "::error::Governance refresh failed for PR #${pr_number}; continuing."
+              --repository "${GITHUB_REPOSITORY}" \
+              --expected-head "${invocation_head}" || refresh_rc=$?
+            if [ "${refresh_rc}" -eq 5 ]; then
+              echo "::warning::Reconcile HEAD race for PR #${pr_number}; suppressing invocation outcome markers."
+              failures=1
+              continue
+            elif [ "${refresh_rc}" -ne 0 ]; then
+              echo "::error::Governance refresh failed for PR #${pr_number} at ${invocation_head}; continuing."
               failures=1
             fi
             # Bootstrap detection: until hunter_review_orchestrator.py exists on the
@@ -170,6 +191,7 @@ jobs:
             # run a candidate copy in its place, and do not fail the refresh merely
             # because the trusted orchestrator is not available yet; the governance
             # step above still owns exact-head review authority.
+            orchestration_rc=0
             if [ ! -f scripts/hunter_review_orchestrator.py ]; then
               echo "::notice::Bootstrap phase: hunter_review_orchestrator.py not yet on default branch; skipping orchestration for PR #${pr_number}."
             else
@@ -179,13 +201,23 @@ jobs:
               orchestration_rc=0
               python scripts/hunter_review_orchestrator.py ensure \
                 --pr "${pr_number}" \
-                --repository "${GITHUB_REPOSITORY}" || orchestration_rc=$?
-              if [ "${orchestration_rc}" -eq 3 ]; then
+                --repository "${GITHUB_REPOSITORY}" \
+                --expected-head "${invocation_head}" || orchestration_rc=$?
+              if [ "${orchestration_rc}" -eq 5 ]; then
+                echo "::warning::Reconcile HEAD race for PR #${pr_number}; suppressing invocation outcome markers."
+                failures=1
+                continue
+              elif [ "${orchestration_rc}" -eq 3 ]; then
                 echo "::warning::WAITING_FOR_EXACT_HEAD_REVIEW for PR #${pr_number}; commit a valid exact-head request before review dispatch."
+              elif [ "${orchestration_rc}" -eq 4 ]; then
+                echo "::warning::Review orchestration infrastructure pending for PR #${pr_number} at ${invocation_head}; no completion marker."
               elif [ "${orchestration_rc}" -ne 0 ]; then
-                echo "::error::Review orchestration failed for PR #${pr_number}; continuing."
+                echo "::error::Review orchestration failed for PR #${pr_number} at ${invocation_head}; continuing."
                 failures=1
               fi
+            fi
+            if [ "${refresh_rc}" -eq 0 ] && [ "${orchestration_rc}" -eq 0 ] && [ -f scripts/hunter_review_orchestrator.py ]; then
+              echo "::notice::Reconcile invocation completed for PR #${pr_number} at ${invocation_head}; continuing."
             fi
           done <<< "${pr_numbers}"
 

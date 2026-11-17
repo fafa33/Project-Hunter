@@ -928,3 +928,20 @@ def test_copilot_clear_review_is_adoptable_via_governance_path(monkeypatch):
     assert ack["head_sha"] == HEAD
     assert ack["claims_id"] == claims_id
     assert ack["verdict"] == "clear"
+
+
+def test_reconcile_expected_head_rejects_raced_governance_before_status_write(monkeypatch):
+    published = []
+    monkeypatch.setattr(core, "read_mergeability", lambda *_args: _pr(True))
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+    with pytest.raises(core.ReconcileHeadChanged):
+        core.review("fafa33/Project-Hunter", "token", 501, expected_head="a" * 40)
+    assert published == []
+
+
+def test_reconcile_expected_head_accepts_matching_governance(monkeypatch):
+    published = []
+    monkeypatch.setattr(core, "read_mergeability", lambda *_args: _pr(False))
+    monkeypatch.setattr(core, "publish", lambda *args: published.append(args))
+    assert core.review("fafa33/Project-Hunter", "token", 501, expected_head=HEAD) == 0
+    assert published[0][2] == HEAD

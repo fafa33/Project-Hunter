@@ -298,7 +298,7 @@ def _install_bootstrap_patch(repository: str, token: str, pr_number: int, head_s
     return True
 
 
-def governance_mode(repository: str, token: str, pr_number: int) -> int:
+def governance_mode(repository: str, token: str, pr_number: int, expected_head: str | None = None) -> int:
     """Run canonical governance without synthesizing external-review authority.
 
     External LLM review is optional defense-in-depth. The trusted default-branch
@@ -306,7 +306,11 @@ def governance_mode(repository: str, token: str, pr_number: int) -> int:
     Canonical governance remains fail-closed for deterministic admission,
     conflicts, provenance, security/preflight proof, and recorded findings.
     """
-    return governance.review(repository, token, pr_number)
+    return (
+        governance.review(repository, token, pr_number, expected_head=expected_head)
+        if expected_head is not None
+        else governance.review(repository, token, pr_number)
+    )
 
 
 def candidate_mode(
@@ -335,6 +339,7 @@ def parser() -> argparse.ArgumentParser:
     governance_parser = sub.add_parser("governance")
     governance_parser.add_argument("--pr", type=int, required=True)
     governance_parser.add_argument("--repository", required=True)
+    governance_parser.add_argument("--expected-head")
 
     candidate_parser = sub.add_parser("candidate")
     candidate_parser.add_argument("--pr", type=int, required=True)
@@ -353,7 +358,11 @@ def main() -> int:
     # to `token` when unset so other callers keep working with one credential.
     mutation_token = os.environ.get("HUNTER_APP_MUTATION_TOKEN") or token
     if args.mode == "governance":
-        return governance_mode(args.repository, token, args.pr)
+        try:
+            return governance_mode(args.repository, token, args.pr, args.expected_head)
+        except governance.ReconcileHeadChanged as exc:
+            print(f"::warning::Reconcile HEAD race: {exc}", file=sys.stderr)
+            return 5
     if args.mode == "candidate":
         return candidate_mode(args.repository, token, args.pr, args.head_sha, mutation_token)
     repository = os.environ.get("GH_REPO") or os.environ.get("GITHUB_REPOSITORY") or ""

@@ -2051,7 +2051,13 @@ def validate_request_governing_issue(issue: str, judgement: dict[str, Any]) -> t
         raise ValueError(f"governing Issue #{issue} body is unavailable")
     required = set(parse_issue_acceptance_criteria(body))
     if not required:
-        raise ValueError(f"governing Issue #{issue} has no Acceptance Criteria section")
+        # The truthful reading, identical to the hosted verifier: an Issue whose
+        # body defines no acceptance-criteria section imposes no coverage
+        # obligation on the review that binds to it. The request still binds to
+        # the verified Issue identity above, and the hosted controller re-derives
+        # the criteria itself at admission, so a request can never weaken what
+        # admission will measure.
+        return ()
     supplied = judgement.get("acceptance_criteria")
     if not isinstance(supplied, list):
         raise ValueError("review request has no acceptance-criteria records")

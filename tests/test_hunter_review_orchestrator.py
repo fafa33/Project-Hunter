@@ -2623,3 +2623,70 @@ def test_reconcile_distinguishes_exact_head_waiting_from_execution_failure():
     assert "WAITING_FOR_EXACT_HEAD_REVIEW for PR #" in workflow
     assert '"${orchestration_rc}" -ne 0' in workflow
     assert "failures=1" in workflow
+
+
+def test_orchestrator_unavailable_is_pending_not_completed(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise orchestrator.transport.GitHubUnavailable(
+            "temporary", attempts=1, last=orchestrator.transport.GitHubRequestError("temporary", category="transient")
+        )
+
+    monkeypatch.setattr(orchestrator, "ensure_current", unavailable)
+    monkeypatch.setattr(sys, "argv", ["orchestrator", "ensure", "--repository", "owner/repo", "--pr", "472"])
+    assert orchestrator.main() == 4
+
+
+def test_collector_completion_publication_outage_preserves_success(monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise orchestrator.transport.GitHubUnavailable(
+            "temporary",
+            attempts=1,
+            last=orchestrator.transport.GitHubRequestError("temporary", category="transient"),
+        )
+
+    monkeypatch.setattr(orchestrator, "publish_collector_completion", unavailable)
+    monkeypatch.setattr(orchestrator, "finalize_exhausted_pool", lambda *a, **kw: "SKIPPED")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "orchestrator",
+            "collector-complete",
+            "--repository",
+            "owner/repo",
+            "--pr",
+            "472",
+            "--head",
+            HEAD,
+            "--run-id",
+            "12345",
+        ],
+    )
+    assert orchestrator.main() == 0
+
+
+def test_reconcile_expected_head_rejects_raced_orchestrator_before_side_effects(monkeypatch):
+    monkeypatch.setattr(
+        orchestrator,
+        "request_json",
+        lambda *_args, **_kwargs: {"state": "open", "draft": False, "head": {"sha": "b" * 40}},
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "review_request_state",
+        lambda *_args, **_kwargs: pytest.fail("raced HEAD must not reach review dispatch"),
+    )
+    with pytest.raises(orchestrator.ReconcileHeadChanged):
+        orchestrator.ensure_current("owner/repo", "token", 748, expected_head="a" * 40)
+
+
+def test_reconcile_workflow_passes_expected_head_to_both_trusted_controllers():
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / ".github/workflows/hunter-governance-reconcile.yml").read_text()
+    assert '--expected-head "${invocation_head}"' in source
+    assert source.count('--expected-head "${invocation_head}"') == 2
+    assert source.count('if [ "${') >= 1
+    assert source.count('"-eq 5"') == 0  # Bash compares the numeric result, not a string.
+    assert source.count(" -eq 5 ]") == 2
+    assert source.count("suppressing invocation outcome markers") == 2

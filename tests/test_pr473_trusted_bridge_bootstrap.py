@@ -481,3 +481,23 @@ def test_controller_absence_requires_typed_permanent_404(monkeypatch, exc, absen
     else:
         with pytest.raises(type(exc)):
             bridge._trusted_controller_on_default_branch(REPOSITORY, "token")
+
+
+def test_reconcile_bridge_forwards_expected_head_and_returns_distinct_race_code(monkeypatch):
+    bridge = _load_bridge()
+    expected = "a" * 40
+    observed = "b" * 40
+    called = []
+
+    def raced_review(repository, token, pr_number, expected_head=None):
+        called.append((repository, pr_number, expected_head))
+        raise bridge.governance.ReconcileHeadChanged(f"expected {expected}, got {observed}")
+
+    monkeypatch.setattr(bridge.governance, "review", raced_review)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["bridge", "governance", "--repository", "owner/repo", "--pr", "748", "--expected-head", expected],
+    )
+    assert bridge.main() == 5
+    assert called == [("owner/repo", 748, expected)]

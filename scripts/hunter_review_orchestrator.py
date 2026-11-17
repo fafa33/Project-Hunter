@@ -1512,7 +1512,11 @@ def exact_head_codex_clear_exists(repository: str, token: str, pr_number: int, h
         return False
 
 
-def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle | None:
+class ReconcileHeadChanged(RuntimeError):
+    """The controller observed a different PR head than its trusted invocation."""
+
+
+def ensure_current(repository: str, token: str, pr_number: int, expected_head: str | None = None) -> ReviewCycle | None:
     pr = request_json(repository, token, "GET", f"pulls/{pr_number}")
     if not isinstance(pr, dict) or str(pr.get("state") or "") != "open":
         return None
@@ -1529,6 +1533,10 @@ def ensure_current(repository: str, token: str, pr_number: int) -> ReviewCycle |
     head_sha = str((pr.get("head") or {}).get("sha") or "")
     if not head_sha:
         raise RuntimeError("current pull-request head is unavailable")
+    if expected_head is not None and (not re.fullmatch(r"[0-9a-f]{40}", expected_head) or head_sha != expected_head):
+        raise ReconcileHeadChanged(
+            f"PR #{pr_number} head changed during reconcile; expected {expected_head}, got {head_sha}"
+        )
     readiness = review_request_state(repository, token, pr_number, head_sha)
     if not readiness.ready:
         # A prerequisite that is still pending or running retries on its own:
@@ -1581,6 +1589,7 @@ def parser() -> argparse.ArgumentParser:
     ensure = sub.add_parser("ensure")
     ensure.add_argument("--repository", required=True)
     ensure.add_argument("--pr", type=int, required=True)
+    ensure.add_argument("--expected-head")
     complete = sub.add_parser("collector-complete")
     complete.add_argument("--repository", required=True)
     complete.add_argument("--pr", type=int, required=True)
@@ -1594,7 +1603,13 @@ def main() -> int:
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
     try:
         if args.command == "collector-complete":
-            publish_collector_completion(args.repository, token, args.pr, args.head, args.run_id)
+            try:
+                publish_collector_completion(args.repository, token, args.pr, args.head, args.run_id)
+            except transport.GitHubUnavailable as exc:
+                # The collector's completed run and uploaded artifacts remain evidence.
+                # A transient status-publication outage must not turn that run into a
+                # failed collector and trigger duplicate reviewer dispatches.
+                print(f"::warning::Collector completion publication pending: {exc}", file=sys.stderr)
             # Best effort and fail closed: the completion marker above is already durable, and an unusable receipt
             # leaves the cycle open for the reconcile backstop rather than failing a collector that did its job.
             try:
@@ -1605,8 +1620,11 @@ def main() -> int:
                 outcome = f"SKIPPED: finalization raised {type(exc).__name__}: {exc}"
             print(f"Collector finalization: {outcome}")
         else:
-            ensure_current(args.repository, token, args.pr)
+            ensure_current(args.repository, token, args.pr, args.expected_head)
         return 0
+    except ReconcileHeadChanged as exc:
+        print(f"::warning::Reconcile HEAD race: {exc}", file=sys.stderr)
+        return 5
     except ReviewRequestBlocked as exc:
         # Dedicated CLI outcome: the exact-head review prerequisite is blocked,
         # not an orchestrator execution error. The trusted reconcile emits a
@@ -1616,7 +1634,7 @@ def main() -> int:
         return 3
     except transport.GitHubUnavailable as exc:
         print(f"Review orchestration infrastructure unavailable; remaining pending: {exc}", file=sys.stderr)
-        return 0
+        return 4
     except Exception as exc:
         print(f"Review orchestration failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1

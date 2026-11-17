@@ -2871,7 +2871,11 @@ def candidate_admission(repository: str, token: str, head_sha: str, pr_number: i
     return "success", "Exact-head branch preflight passed before review progression."
 
 
-def review(repository: str, token: str, pr_number: int) -> int:
+class ReconcileHeadChanged(RuntimeError):
+    """Trusted reconcile invocation no longer matches the controller's PR head."""
+
+
+def review(repository: str, token: str, pr_number: int, expected_head: str | None = None) -> int:
     pr = read_mergeability(repository, token, pr_number)
     if pr.get("state") != "open":
         print(f"PR #{pr_number} is not open; no governance status published.")
@@ -2885,6 +2889,10 @@ def review(repository: str, token: str, pr_number: int) -> int:
     head_sha = str((pr.get("head") or {}).get("sha") or "").strip()
     if not head_sha:
         raise RuntimeError(f"PR #{pr_number} head SHA is unavailable")
+    if expected_head is not None and (not re.fullmatch(r"[0-9a-f]{40}", expected_head) or head_sha != expected_head):
+        raise ReconcileHeadChanged(
+            f"PR #{pr_number} head changed during reconcile; expected {expected_head}, got {head_sha}"
+        )
 
     disp_ok, disp_msg = check_reviewer_dispositions()
     if not disp_ok:
