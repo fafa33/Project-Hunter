@@ -441,3 +441,26 @@ def test_candidate_admission_controller_keeps_a_waiting_head_ready(
     assert result == 0
     assert drafted == []
     assert "candidate admission is pending" in output
+
+
+def test_m3_superseded_active_attempt_cannot_keep_candidate_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install(
+        monkeypatch,
+        statuses=[],
+        runs={
+            "workflow_runs": [
+                _run(id=RUN_ID, run_attempt=1, status="in_progress"),
+                _run(id=RUN_ID, run_attempt=2, status="completed", conclusion="failure"),
+            ]
+        },
+    )
+    state, reason = _resolve()
+    assert state == "missing"
+    assert "missing" in reason
+
+
+def test_m3_malformed_active_attempt_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install(monkeypatch, statuses=[], runs={"workflow_runs": [_run(run_attempt="invalid")]})
+    state, reason = _resolve()
+    assert state == "failure"
+    assert "run/attempt" in reason

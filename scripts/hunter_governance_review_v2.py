@@ -1892,13 +1892,21 @@ def read_active_trusted_upgrade_run(
     if not isinstance(runs, list):
         return "failure", "Candidate admission blocked: trusted workflow_runs payload is malformed."
 
-    for run in runs:
-        if not is_trusted_upgrade_run(run, head_sha):
-            continue
-        if not is_trusted_upgrade_run_bound_to(run, head_sha, pr_number):
-            continue
-        if str(run.get("status") or "") in TRUSTED_RUN_ACTIVE_STATES:
-            return "active", TRUSTED_PROOF_WAITING_DESCRIPTION
+    eligible = [
+        run
+        for run in runs
+        if is_trusted_upgrade_run(run, head_sha) and is_trusted_upgrade_run_bound_to(run, head_sha, pr_number)
+    ]
+    if not eligible:
+        return "absent", ""
+    try:
+        latest = max(eligible, key=lambda run: (int(run.get("id")), int(run.get("run_attempt", 1))))
+        if int(latest.get("id")) <= 0 or int(latest.get("run_attempt", 1)) <= 0:
+            raise ValueError("nonpositive trusted run identity")
+    except (TypeError, ValueError, OverflowError):
+        return "failure", "Candidate admission blocked: trusted run/attempt identity is malformed."
+    if str(latest.get("status") or "") in TRUSTED_RUN_ACTIVE_STATES:
+        return "active", TRUSTED_PROOF_WAITING_DESCRIPTION
     return "absent", ""
 
 
