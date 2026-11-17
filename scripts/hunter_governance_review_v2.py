@@ -68,6 +68,7 @@ TRUSTED_RUN_ACTIVE_STATES = frozenset({"queued", "in_progress", "waiting", "requ
 #: Issue #417. The dependency is named explicitly so an operator can tell
 #: "the proof has not finished yet" from "the proof failed" without reading logs.
 TRUSTED_PROOF_WAITING_DESCRIPTION = "Waiting for trusted exact-head preflight proof"
+TRUSTED_PROOF_PENDING_DEADLINE_SECONDS = 45 * 60
 ROOT = Path(__file__).resolve().parents[1] if "__file__" in globals() else Path(".")
 REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
 PREFLIGHT_OWNED_PATHS = frozenset(
@@ -1906,6 +1907,19 @@ def read_active_trusted_upgrade_run(
     except (TypeError, ValueError, OverflowError):
         return "failure", "Candidate admission blocked: trusted run/attempt identity is malformed."
     if str(latest.get("status") or "") in TRUSTED_RUN_ACTIVE_STATES:
+        # A stranded run must not hold admission in WAITING indefinitely.
+        # The trusted validation job has a 30-minute timeout; allow 15 more
+        # minutes for queue/runner propagation, then fail closed.
+        started_raw = str(latest.get("created_at") or "").strip()
+        try:
+            started = datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
+            if started.tzinfo is None:
+                raise ValueError("trusted run timestamp has no timezone")
+            age = (datetime.now(UTC) - started.astimezone(UTC)).total_seconds()
+        except (ValueError, OverflowError):
+            return "failure", "Candidate admission blocked: trusted pending proof timestamp is invalid."
+        if age < -60 or age > TRUSTED_PROOF_PENDING_DEADLINE_SECONDS:
+            return "failure", "Candidate admission blocked: trusted pending proof exceeded its deadline."
         return "active", TRUSTED_PROOF_WAITING_DESCRIPTION
     return "absent", ""
 

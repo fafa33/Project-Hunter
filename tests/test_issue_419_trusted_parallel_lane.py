@@ -30,6 +30,7 @@ import inspect
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from importlib import metadata
 from pathlib import Path
 from types import SimpleNamespace
@@ -754,6 +755,7 @@ def _active_run(**overrides: Any) -> dict[str, Any]:
         "path": governance.TRUSTED_UPGRADE_WORKFLOW_PATH,
         "event": "pull_request_target",
         "head_sha": HEAD,
+        "created_at": datetime.now(UTC).isoformat(),
         "status": "in_progress",
         "conclusion": None,
         "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],

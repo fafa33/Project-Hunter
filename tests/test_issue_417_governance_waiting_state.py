@@ -22,6 +22,7 @@ Waiting is never success, and never satisfies admission or merge readiness.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import hunter_governance_review_v2 as core
@@ -42,6 +43,7 @@ def _run(**overrides: Any) -> dict[str, Any]:
         "path": core.TRUSTED_UPGRADE_WORKFLOW_PATH,
         "event": "pull_request_target",
         "head_sha": HEAD,
+        "created_at": datetime.now(UTC).isoformat(),
         "status": "in_progress",
         "conclusion": None,
         "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
@@ -464,3 +466,18 @@ def test_m3_malformed_active_attempt_fails_closed(monkeypatch: pytest.MonkeyPatc
     state, reason = _resolve()
     assert state == "failure"
     assert "run/attempt" in reason
+
+
+def test_m3_stranded_trusted_run_cannot_wait_indefinitely(monkeypatch: pytest.MonkeyPatch) -> None:
+    old = (datetime.now(UTC) - timedelta(minutes=46)).isoformat()
+    _install(monkeypatch, statuses=[], runs={"workflow_runs": [_run(created_at=old)]})
+    state, reason = _resolve()
+    assert state == "failure"
+    assert "deadline" in reason
+
+
+def test_m3_missing_trusted_pending_timestamp_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install(monkeypatch, statuses=[], runs={"workflow_runs": [_run(created_at=None)]})
+    state, reason = _resolve()
+    assert state == "failure"
+    assert "timestamp" in reason
