@@ -487,11 +487,12 @@ def test_the_persistent_worktree_check_runs_before_any_other_push_gate(monkeypat
 def test_m2_mapped_regressions_bind_exact_head_and_governed_base(monkeypatch) -> None:
     observed = []
     monkeypatch.setattr(hunter_pre_push.provenance, "resolve_governed_base", lambda head: HEAD_B)
-    monkeypatch.setattr(
-        hunter_pre_push.subprocess,
-        "run",
-        lambda args, **kwargs: (observed.append((args, kwargs)) or SimpleNamespace(returncode=0)),
-    )
+
+    def capture_run(args, **kwargs):
+        observed.append((args, kwargs))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(hunter_pre_push.subprocess, "run", capture_run)
     assert hunter_pre_push._run_mapped_regressions(HEAD_A) == 0
     assert observed[0][0][-5:] == ("--base", HEAD_B, "--head", HEAD_A, "--run-focused")
 
