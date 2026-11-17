@@ -2011,28 +2011,40 @@ def read_trusted_upgrade_status(
         import hashlib
 
         match = re.fullmatch(
-            r"Trusted proof (success|failure|timeout); attempt=([1-9][0-9]*); job=([1-9][0-9]*); sha256=([0-9a-f]{64})",
+            r"Trusted proof (success|failure|timeout); attempt=([1-9][0-9]*); validation=([1-9][0-9]*); job=([1-9][0-9]*); sha256=([0-9a-f]{64})",
             description,
         )
         if match is None:
             return "failure", "Candidate admission blocked: malformed trusted proof receipt."
-        receipt_outcome, attempt_text, job_text, digest_prefix = match.groups()
+        receipt_outcome, attempt_text, validation_text, job_text, digest_prefix = match.groups()
         attempt = int(attempt_text)
         if attempt != int(run.get("run_attempt", 1)):
             return "failure", "Candidate admission blocked: trusted proof receipt uses a stale attempt."
+        validation_attempt = int(validation_text)
+        if validation_attempt > attempt:
+            return "failure", "Candidate admission blocked: trusted validation attempt is in the future."
         try:
-            jobs_payload = request_json(
-                repository, token, "GET", f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"
-            )
+            jobs_payload = request_json(repository, token, "GET", f"actions/runs/{run_id}/jobs?per_page=100&filter=all")
         except Exception as exc:
             return "failure", f"Candidate admission blocked: trusted proof job unavailable ({type(exc).__name__})."
-        if not isinstance(jobs_payload, dict) or not isinstance(jobs_payload.get("jobs"), list):
-            return "failure", "Candidate admission blocked: trusted proof jobs malformed."
-        jobs = [
+        if (
+            not isinstance(jobs_payload, dict)
+            or not isinstance(jobs_payload.get("jobs"), list)
+            or not isinstance(jobs_payload.get("total_count"), int)
+            or jobs_payload["total_count"] > 100
+        ):
+            return "failure", "Candidate admission blocked: trusted proof jobs malformed or incomplete."
+        all_validation_jobs = [
             job
             for job in jobs_payload["jobs"]
-            if isinstance(job, dict) and job.get("name") == "Trusted Candidate Preflight Validation"
+            if isinstance(job, dict)
+            and job.get("name") == "Trusted Candidate Preflight Validation"
+            and isinstance(job.get("run_attempt"), int)
+            and 0 < job["run_attempt"] <= attempt
         ]
+        if not all_validation_jobs or max(job["run_attempt"] for job in all_validation_jobs) != validation_attempt:
+            return "failure", "Candidate admission blocked: trusted proof validation attempt is stale."
+        jobs = [job for job in all_validation_jobs if job["run_attempt"] == validation_attempt]
         if len(jobs) != 1 or str(jobs[0].get("id")) != job_text or jobs[0].get("run_id") != run_id:
             return "failure", "Candidate admission blocked: trusted proof job identity mismatch."
         job = jobs[0]
@@ -2046,6 +2058,7 @@ def read_trusted_upgrade_status(
             "workflow": TRUSTED_UPGRADE_WORKFLOW_PATH,
             "run_id": run_id,
             "run_attempt": attempt,
+            "validation_attempt": validation_attempt,
             "job_id": int(job_text),
             "conclusion": receipt_outcome,
             "provenance": "github-actions-api",

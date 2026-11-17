@@ -378,6 +378,7 @@ def test_m3_trusted_receipt_binds_job_attempt_and_digest(monkeypatch) -> None:
         "workflow": governance.TRUSTED_UPGRADE_WORKFLOW_PATH,
         "run_id": TRUSTED_RUN_ID,
         "run_attempt": 2,
+        "validation_attempt": 1,
         "job_id": 9876,
         "conclusion": "success",
         "provenance": "github-actions-api",
@@ -385,11 +386,12 @@ def test_m3_trusted_receipt_binds_job_attempt_and_digest(monkeypatch) -> None:
     digest = hashlib.sha256(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     status = {
         **_trusted_status(376),
-        "description": f"Trusted proof success; attempt=2; job=9876; sha256={digest}",
+        "description": f"Trusted proof success; attempt=2; validation=1; job=9876; sha256={digest}",
     }
     job = {
         "id": 9876,
         "run_id": TRUSTED_RUN_ID,
+        "run_attempt": 1,
         "name": "Trusted Candidate Preflight Validation",
         "status": "completed",
         "conclusion": "success",
@@ -400,8 +402,8 @@ def test_m3_trusted_receipt_binds_job_attempt_and_digest(monkeypatch) -> None:
             return [status]
         if path == f"actions/runs/{TRUSTED_RUN_ID}":
             return run
-        if path == f"actions/runs/{TRUSTED_RUN_ID}/attempts/2/jobs?per_page=100":
-            return {"jobs": [job]}
+        if path == f"actions/runs/{TRUSTED_RUN_ID}/jobs?per_page=100&filter=all":
+            return {"total_count": 1, "jobs": [job]}
         raise AssertionError(path)
 
     monkeypatch.setattr(governance, "request_json", fake_request)
@@ -426,6 +428,6 @@ def test_m3_trusted_publisher_receipt_is_checkout_free_and_job_bound() -> None:
     assert publisher["permissions"]["statuses"] == "write"
     step = publisher["steps"][0]
     assert "actions/checkout" not in step.get("uses", "")
-    assert "attempts/{attempt}/jobs" in step["run"]
+    assert "/jobs?per_page=100&filter=all" in step["run"]
     assert "sha256=" in step["run"]
     assert "run_attempt" in step["run"]

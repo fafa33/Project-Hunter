@@ -164,7 +164,7 @@ jobs:
           if run_id <= 0 or attempt <= 0:
               raise RuntimeError("invalid trusted workflow run/attempt")
           jobs_url = (f"https://api.github.com/repos/{os.environ['GH_REPO']}"
-                      f"/actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")
+                      f"/actions/runs/{run_id}/jobs?per_page=100&filter=all")
           headers = {
               "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
               "Accept": "application/vnd.github+json",
@@ -172,8 +172,15 @@ jobs:
           }
           with urllib.request.urlopen(urllib.request.Request(jobs_url, headers=headers), timeout=30) as response:
               jobs_payload = json.load(response)
-          jobs = [job for job in jobs_payload.get("jobs", [])
-                  if job.get("name") == "Trusted Candidate Preflight Validation"]
+          if not isinstance(jobs_payload.get("jobs"), list) or int(jobs_payload.get("total_count", -1)) > 100:
+              raise RuntimeError("trusted validation job evidence incomplete")
+          jobs = [job for job in jobs_payload["jobs"]
+                  if job.get("name") == "Trusted Candidate Preflight Validation"
+                  and int(job.get("run_attempt") or 0) <= attempt]
+          if not jobs:
+              raise RuntimeError("trusted validation job missing")
+          validation_attempt = max(int(job["run_attempt"]) for job in jobs)
+          jobs = [job for job in jobs if int(job["run_attempt"]) == validation_attempt]
           if len(jobs) != 1 or int(jobs[0].get("run_id") or 0) != run_id:
               raise RuntimeError("trusted validation job identity is ambiguous")
           job = jobs[0]
@@ -191,12 +198,13 @@ jobs:
               "workflow": ".github/workflows/hunter-trusted-preflight-upgrade.yml",
               "run_id": run_id,
               "run_attempt": attempt,
+              "validation_attempt": validation_attempt,
               "job_id": int(job["id"]),
               "conclusion": outcome,
               "provenance": "github-actions-api",
           }
           digest = hashlib.sha256(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-          description = f"Trusted proof {outcome}; attempt={attempt}; job={job['id']}; sha256={digest}"
+          description = f"Trusted proof {outcome}; attempt={attempt}; validation={validation_attempt}; job={job['id']}; sha256={digest}"
           payload = json.dumps(
               {
                   "state": state,
