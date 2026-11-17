@@ -1192,3 +1192,41 @@ def test_malformed_combined_status_response_fails_closed(monkeypatch):
 
     with pytest.raises(ValueError, match="Malformed combined"):
         core.publish("a" * 40, core.Decision("success", "Ready"))
+
+
+@pytest.mark.parametrize("review_state", ["pending", "failure", "REVIEWER_UNAVAILABLE", "REVIEW_TIMED_OUT"])
+def test_m1_optional_review_state_cannot_override_verified_current_blockers(monkeypatch, review_state):
+    """Issue #588 M1: advisory review availability never overrides trusted current-state blockers."""
+    _install_green(monkeypatch)
+    monkeypatch.setattr(core, "review_authority_state", lambda *_args: (review_state, "provider unavailable"))
+    monkeypatch.setattr(core, "unresolved_review_threads", lambda _number: ("thread-1",))
+    _, blocked = core.decide(501)
+    assert blocked.state == "failure"
+    assert "Unresolved review threads" in blocked.description
+
+    monkeypatch.setattr(core, "unresolved_review_threads", lambda _number: ())
+    monkeypatch.setattr(
+        core, "knowledge_receipt_check_state", lambda *_args: ("pending", "awaiting exact-head receipt")
+    )
+    _, pending = core.decide(501)
+    assert pending.state == "pending"
+    assert "Knowledge Receipt" in pending.description
+
+
+@pytest.mark.parametrize("conclusion", ["cancelled", "timed_out", "failure", "action_required"])
+def test_m1_required_check_terminal_failure_never_accepted_as_success(monkeypatch, conclusion):
+    """Issue #588 M1: a terminal required-check failure cannot inherit an earlier green result."""
+    _install_green(monkeypatch)
+    runs = [_green_check(name, i) for i, name in enumerate(core.REQUIRED_CHECKS, 1)]
+    runs[0] = {**runs[0], "conclusion": conclusion}
+    monkeypatch.setattr(core, "all_check_runs", lambda _sha: runs)
+    _, decision = core.decide(501)
+    assert decision.state != "success"
+
+
+@pytest.mark.parametrize("state", ["pending", "failure"])
+def test_m1_candidate_admission_unknown_or_failed_is_never_ready(monkeypatch, state):
+    _install_green(monkeypatch)
+    monkeypatch.setattr(core, "candidate_admission_state", lambda *_args: (state, "exact-head evidence unavailable"))
+    _, decision = core.decide(501)
+    assert decision.state == state
