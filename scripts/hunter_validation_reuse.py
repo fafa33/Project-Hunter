@@ -65,6 +65,9 @@ MODE_MARKER = ".hunter-preflight-mode"
 #: This invariant prevents cross-workflow polling from becoming PR latency.
 PRODUCED_BY = "hunter-pre-pr-preflight"
 RUN_PENDING_STATUSES = frozenset({"queued", "in_progress", "requested", "waiting", "pending"})
+# Hosted workflow timeout is 30 minutes; an additional 15 minutes covers queue
+# propagation without treating a stranded run as pending indefinitely.
+PENDING_PROOF_DEADLINE_SECONDS = 45 * 60
 
 Fetch = Callable[[str, str, str], Any]
 
@@ -107,7 +110,17 @@ def trusted_branch_preflight_run(runs: Sequence[Any], head_sha: str) -> tuple[di
     if not matching:
         return None, f"no exact-head {PRE_PR_WORKFLOW_NAME} push run exists for {head_sha}"
 
-    latest = max(matching, key=lambda run: int(run.get("id") or 0))
+    # A rerun of one Actions run increments run_attempt without changing id.
+    # An older successful attempt must never authorize a newer failed attempt.
+    try:
+        latest = max(
+            matching,
+            key=lambda run: (int(run.get("id")), int(run.get("run_attempt", 1))),
+        )
+        if int(latest.get("id")) <= 0 or int(latest.get("run_attempt", 1)) <= 0:
+            raise ValueError("nonpositive run identity")
+    except (TypeError, ValueError, OverflowError):
+        return None, "exact-head proof run/attempt identity is malformed"
     status = str(latest.get("status") or "")
     if status != "completed":
         # Only a status that is genuinely still moving is waited on. An unreadable
@@ -197,6 +210,18 @@ def decide_from_runs(runs: list[Any], evidence: CandidateEvidence, *, now: datet
     if run is None:
         return ReuseDecision(False, problem)
     if problem:
+        # Pending is not an unlimited permission to keep readiness unresolved.
+        # A timed-out or unreadable run remains fail-closed and actionable.
+        raw = str(run.get("created_at") or run.get("updated_at") or "").strip()
+        try:
+            started = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if started.tzinfo is None:
+                raise ValueError("missing timezone")
+            elapsed = ((now or datetime.now(UTC)) - started.astimezone(UTC)).total_seconds()
+        except ValueError:
+            return ReuseDecision(False, "exact-head proof pending timestamp is unavailable")
+        if elapsed < -60 or elapsed > PENDING_PROOF_DEADLINE_SECONDS:
+            return ReuseDecision(False, "exact-head proof exceeded bounded pending deadline")
         return ReuseDecision(False, problem, pending=True)
     produced_at, problem = _run_produced_at(run)
     if produced_at is None:

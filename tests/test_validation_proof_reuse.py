@@ -508,6 +508,47 @@ def test_latest_run_for_the_head_decides_rather_than_any_green_one(
     assert not decision.reusable
 
 
+def test_m3_latest_attempt_cannot_be_replaced_by_prior_green_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_identity(monkeypatch)
+    decision = _resolve(
+        tmp_path,
+        [
+            _run(id=41, run_attempt=1),
+            _run(id=41, run_attempt=2, conclusion="failure"),
+        ],
+    )
+    assert not decision.reusable
+    assert "failure" in decision.reason
+
+
+@pytest.mark.parametrize("bad_attempt", [0, -1, "unreadable", None])
+def test_m3_malformed_attempt_identity_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_attempt: Any
+) -> None:
+    _stub_identity(monkeypatch)
+    decision = _resolve(tmp_path, [_run(run_attempt=bad_attempt)])
+    assert not decision.reusable
+    assert "identity" in decision.reason
+
+
+def test_m3_stranded_pending_run_has_terminal_diagnosis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_identity(monkeypatch)
+    old = (NOW - timedelta(minutes=46)).isoformat().replace("+00:00", "Z")
+    decision = _resolve(tmp_path, [_run(status="queued", conclusion=None, created_at=old)])
+    assert not decision.reusable
+    assert not decision.pending
+    assert "deadline" in decision.reason
+
+
+def test_m3_recent_pending_run_remains_nonblocking(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_identity(monkeypatch)
+    decision = _resolve(tmp_path, [_run(status="queued", conclusion=None)])
+    assert not decision.reusable
+    assert decision.pending
+
+
 def test_stale_trusted_run_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_identity(monkeypatch)
     old = (NOW - timedelta(seconds=receipts.DEFAULT_MAX_AGE_SECONDS + 60)).isoformat().replace("+00:00", "Z")
