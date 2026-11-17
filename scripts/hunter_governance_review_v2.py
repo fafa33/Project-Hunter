@@ -2003,6 +2003,56 @@ def read_trusted_upgrade_status(
         return "failure", f"Candidate admission blocked: trusted workflow conclusion={run_conclusion or 'unknown'}."
     if not is_trusted_upgrade_run_bound_to(run, head_sha, pr_number):
         return "failure", "Candidate admission blocked: trusted workflow run is not bound to this exact PR and head."
+    # During the trusted default-branch cutover older status records retain
+    # their legacy description. New receipts must match the live attempt/job
+    # rather than trusting their status text as proof authority.
+    description = str(latest.get("description") or "")
+    if description.startswith("Trusted proof "):
+        import hashlib
+
+        match = re.fullmatch(
+            r"Trusted proof (success|failure|timeout); attempt=([1-9][0-9]*); job=([1-9][0-9]*); sha256=([0-9a-f]{64})",
+            description,
+        )
+        if match is None:
+            return "failure", "Candidate admission blocked: malformed trusted proof receipt."
+        receipt_outcome, attempt_text, job_text, digest_prefix = match.groups()
+        attempt = int(attempt_text)
+        if attempt != int(run.get("run_attempt", 1)):
+            return "failure", "Candidate admission blocked: trusted proof receipt uses a stale attempt."
+        try:
+            jobs_payload = request_json(
+                repository, token, "GET", f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"
+            )
+        except Exception as exc:
+            return "failure", f"Candidate admission blocked: trusted proof job unavailable ({type(exc).__name__})."
+        if not isinstance(jobs_payload, dict) or not isinstance(jobs_payload.get("jobs"), list):
+            return "failure", "Candidate admission blocked: trusted proof jobs malformed."
+        jobs = [
+            job
+            for job in jobs_payload["jobs"]
+            if isinstance(job, dict) and job.get("name") == "Trusted Candidate Preflight Validation"
+        ]
+        if len(jobs) != 1 or str(jobs[0].get("id")) != job_text or jobs[0].get("run_id") != run_id:
+            return "failure", "Candidate admission blocked: trusted proof job identity mismatch."
+        job = jobs[0]
+        if job.get("status") != "completed" or job.get("conclusion") != "success" or receipt_outcome != "success":
+            return "failure", "Candidate admission blocked: trusted proof job outcome mismatch."
+        claims = {
+            "schema": "hunter.trusted-candidate-outcome/1",
+            "repository": repository,
+            "pr": pr_number,
+            "head_sha": head_sha,
+            "workflow": TRUSTED_UPGRADE_WORKFLOW_PATH,
+            "run_id": run_id,
+            "run_attempt": attempt,
+            "job_id": int(job_text),
+            "conclusion": receipt_outcome,
+            "provenance": "github-actions-api",
+        }
+        actual_digest = hashlib.sha256(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if actual_digest != digest_prefix:
+            return "failure", "Candidate admission blocked: trusted proof receipt digest mismatch."
     return "success", "Exact-head trusted candidate preflight validation passed."
 
 

@@ -364,3 +364,68 @@ def test_trusted_upgrade_separates_untrusted_execution_from_status_write() -> No
     assert "needs: validate-candidate" in workflow
     assert "statuses: write" in workflow
     assert "Hunter Trusted Preflight Upgrade / PR #" in workflow
+
+
+def test_m3_trusted_receipt_binds_job_attempt_and_digest(monkeypatch) -> None:
+    import hashlib
+
+    run = {**_trusted_run(376), "run_attempt": 2}
+    claims = {
+        "schema": "hunter.trusted-candidate-outcome/1",
+        "repository": "fafa33/Project-Hunter",
+        "pr": 376,
+        "head_sha": HEAD_A,
+        "workflow": governance.TRUSTED_UPGRADE_WORKFLOW_PATH,
+        "run_id": TRUSTED_RUN_ID,
+        "run_attempt": 2,
+        "job_id": 9876,
+        "conclusion": "success",
+        "provenance": "github-actions-api",
+    }
+    digest = hashlib.sha256(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    status = {
+        **_trusted_status(376),
+        "description": f"Trusted proof success; attempt=2; job=9876; sha256={digest}",
+    }
+    job = {
+        "id": 9876,
+        "run_id": TRUSTED_RUN_ID,
+        "name": "Trusted Candidate Preflight Validation",
+        "status": "completed",
+        "conclusion": "success",
+    }
+
+    def fake_request(_repo, _token, _method, path, _payload=None):
+        if path.startswith("commits/"):
+            return [status]
+        if path == f"actions/runs/{TRUSTED_RUN_ID}":
+            return run
+        if path == f"actions/runs/{TRUSTED_RUN_ID}/attempts/2/jobs?per_page=100":
+            return {"jobs": [job]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(governance, "request_json", fake_request)
+    assert governance.read_trusted_upgrade_status("fafa33/Project-Hunter", "token", HEAD_A, 376)[0] == "success"
+    status["description"] = status["description"].replace("attempt=2", "attempt=1")
+    assert governance.read_trusted_upgrade_status("fafa33/Project-Hunter", "token", HEAD_A, 376)[0] == "failure"
+    status["description"] = status["description"].replace("attempt=1", "attempt=2").replace(digest, "0" * 64)
+    assert governance.read_trusted_upgrade_status("fafa33/Project-Hunter", "token", HEAD_A, 376)[0] == "failure"
+    status["description"] = status["description"].replace("0" * 64, digest)
+    job["conclusion"] = "failure"
+    assert governance.read_trusted_upgrade_status("fafa33/Project-Hunter", "token", HEAD_A, 376)[0] == "failure"
+
+
+def test_m3_trusted_publisher_receipt_is_checkout_free_and_job_bound() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(
+        (Path(__file__).parents[1] / ".github/workflows/hunter-trusted-preflight-upgrade.yml").read_text()
+    )
+    publisher = workflow["jobs"]["publish-proof"]
+    assert publisher["permissions"]["actions"] == "read"
+    assert publisher["permissions"]["statuses"] == "write"
+    step = publisher["steps"][0]
+    assert "actions/checkout" not in step.get("uses", "")
+    assert "attempts/{attempt}/jobs" in step["run"]
+    assert "sha256=" in step["run"]
+    assert "run_attempt" in step["run"]
