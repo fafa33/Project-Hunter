@@ -386,7 +386,21 @@ def _resolve(tmp_path: Path, runs: list[Any], **overrides: Any) -> reuse.ReuseDe
         "repository": "fafa33/Project-Hunter",
         "token": "",
         "now": NOW,
-        "fetch": lambda repository, token, path: {"workflow_runs": runs},
+        "fetch": lambda repository, token, path: (
+            {
+                "jobs": [
+                    {
+                        "id": 101,
+                        "run_id": 10,
+                        "name": "Hunter Pre-PR Preflight",
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
+            }
+            if "/jobs?" in path
+            else {"workflow_runs": runs}
+        ),
     }
     options.update(overrides)
     return reuse.resolve(tmp_path, **options)
@@ -842,3 +856,42 @@ def test_aggregate_receipt_reuse_writes_json_report_file(tmp_path: Path, monkeyp
     assert data["overall_outcome"] == "passed"
     assert all(g["outcome"] == "reused" for g in data["gates"])
     assert "receipt_reference" in data
+
+
+def test_m3_canonical_job_proof_is_bound_to_run_attempt_and_job() -> None:
+    run = _run(id=10, run_attempt=2)
+
+    def fetch(_repo: str, _token: str, _path: str) -> dict[str, Any]:
+        return {
+            "jobs": [
+                {
+                    "id": 101,
+                    "run_id": 10,
+                    "name": "Hunter Pre-PR Preflight",
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+            ]
+        }
+
+    digest, blocker = reuse._canonical_job_proof("fafa33/Project-Hunter", "", run, HEAD, fetch)
+    assert blocker == ""
+    assert digest is not None and digest.startswith("sha256:")
+    changed, _ = reuse._canonical_job_proof("fafa33/Project-Hunter", "", {**run, "run_attempt": 3}, HEAD, fetch)
+    assert changed != digest
+
+
+@pytest.mark.parametrize(
+    "jobs",
+    [
+        [],
+        [{"id": 101, "run_id": 999, "name": "Hunter Pre-PR Preflight", "status": "completed", "conclusion": "success"}],
+        [{"id": 101, "run_id": 10, "name": "Hunter Pre-PR Preflight", "status": "completed", "conclusion": "failure"}],
+    ],
+)
+def test_m3_canonical_job_proof_rejects_missing_foreign_failed_job(jobs: list[dict[str, Any]]) -> None:
+    digest, reason = reuse._canonical_job_proof(
+        "fafa33/Project-Hunter", "", _run(), HEAD, lambda _repo, _token, _path: {"jobs": jobs}
+    )
+    assert digest is None
+    assert reason

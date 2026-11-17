@@ -36,6 +36,8 @@ correctness never depends on timing, and PR latency cannot be held by another ru
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -259,6 +261,50 @@ def decide_from_runs(runs: list[Any], evidence: CandidateEvidence, *, now: datet
     )
 
 
+def _canonical_job_proof(
+    repository: str, token: str, run: dict[str, Any], head_sha: str, fetch: Fetch | None
+) -> tuple[str | None, str]:
+    """Re-derive one immutable outcome from GitHub's trusted run and job records.
+
+    GitHub Actions is the producer; this is a read-only canonical receipt, not
+    a candidate-authored status or a second proof publisher.
+    """
+    try:
+        run_id = int(run["id"])
+        attempt = int(run.get("run_attempt", 1))
+        if run_id <= 0 or attempt <= 0:
+            raise ValueError("nonpositive run identity")
+        payload = (fetch or _fetch)(repository, token, f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")
+        if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
+            return None, "trusted proof job evidence is malformed"
+        jobs = [
+            job for job in payload["jobs"] if isinstance(job, dict) and job.get("name") == "Hunter Pre-PR Preflight"
+        ]
+        if len(jobs) != 1:
+            return None, "trusted proof must have exactly one authoritative preflight job"
+        job = jobs[0]
+        job_id = int(job["id"])
+        if job_id <= 0 or job.get("run_id") != run_id:
+            return None, "trusted proof job/run binding is invalid"
+        if job.get("status") != "completed" or job.get("conclusion") != "success":
+            return None, "trusted proof authoritative job did not succeed"
+        claims = {
+            "schema": "hunter.canonical-proof-outcome/1",
+            "repository": repository,
+            "head_sha": head_sha,
+            "workflow": PRE_PR_WORKFLOW_PATH,
+            "run_id": run_id,
+            "run_attempt": attempt,
+            "job_id": job_id,
+            "conclusion": "success",
+            "provenance": "github-actions-api",
+        }
+        digest = hashlib.sha256(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        return f"sha256:{digest}", ""
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        return None, f"trusted proof job identity is invalid ({type(exc).__name__})"
+
+
 def resolve(
     root: Path,
     *,
@@ -279,7 +325,19 @@ def resolve(
         return ReuseDecision(False, f"reuse evidence could not be established ({type(exc).__name__}: {exc})")
     if runs is None:
         return ReuseDecision(False, problem)
-    return decide_from_runs(runs, evidence, now=now)
+    decision = decide_from_runs(runs, evidence, now=now)
+    if not decision.reusable:
+        return decision
+    run, problem = trusted_branch_preflight_run(runs, head_sha)
+    if run is None or problem:
+        return ReuseDecision(False, problem or "trusted proof disappeared")
+    try:
+        digest, blocker = _canonical_job_proof(repository, token, run, head_sha, fetch)
+    except Exception as exc:  # noqa: BLE001 - missing hosted job evidence never authorizes reuse
+        return ReuseDecision(False, f"trusted proof job evidence unavailable ({type(exc).__name__})")
+    if digest is None:
+        return ReuseDecision(False, blocker)
+    return ReuseDecision(True, f"{decision.reason}; canonical proof outcome digest={digest}")
 
 
 def _emit(decision: ReuseDecision) -> None:
