@@ -68,6 +68,7 @@ TRUSTED_RUN_ACTIVE_STATES = frozenset({"queued", "in_progress", "waiting", "requ
 #: Issue #417. The dependency is named explicitly so an operator can tell
 #: "the proof has not finished yet" from "the proof failed" without reading logs.
 TRUSTED_PROOF_WAITING_DESCRIPTION = "Waiting for trusted exact-head preflight proof"
+TRUSTED_PROOF_PENDING_DEADLINE_SECONDS = 45 * 60
 ROOT = Path(__file__).resolve().parents[1] if "__file__" in globals() else Path(".")
 REVIEWER_DISPOSITIONS_PATH = ROOT / "docs" / "REVIEWER_FINDING_DISPOSITIONS.json"
 PREFLIGHT_OWNED_PATHS = frozenset(
@@ -1892,13 +1893,45 @@ def read_active_trusted_upgrade_run(
     if not isinstance(runs, list):
         return "failure", "Candidate admission blocked: trusted workflow_runs payload is malformed."
 
-    for run in runs:
-        if not is_trusted_upgrade_run(run, head_sha):
-            continue
-        if not is_trusted_upgrade_run_bound_to(run, head_sha, pr_number):
-            continue
-        if str(run.get("status") or "") in TRUSTED_RUN_ACTIVE_STATES:
-            return "active", TRUSTED_PROOF_WAITING_DESCRIPTION
+    eligible = [
+        run
+        for run in runs
+        if is_trusted_upgrade_run(run, head_sha) and is_trusted_upgrade_run_bound_to(run, head_sha, pr_number)
+    ]
+    if not eligible:
+        return "absent", ""
+    try:
+        latest = max(eligible, key=lambda run: (int(run.get("id")), int(run.get("run_attempt", 1))))
+        if int(latest.get("id")) <= 0 or int(latest.get("run_attempt", 1)) <= 0:
+            raise ValueError("nonpositive trusted run identity")
+    except (TypeError, ValueError, OverflowError):
+        return "failure", "Candidate admission blocked: trusted run/attempt identity is malformed."
+    if str(latest.get("status") or "") in TRUSTED_RUN_ACTIVE_STATES:
+        # A stranded run must not hold admission in WAITING indefinitely.
+        # The trusted validation job has a 30-minute timeout; allow 15 more
+        # minutes for queue/runner propagation, then fail closed.
+        # created_at belongs to the original workflow run, not a rerun.
+        # GitHub's run_started_at identifies the current attempt; for a
+        # queued rerun with no start timestamp, updated_at is the only
+        # attempt-local clock available. Never reuse original created_at.
+        attempt = int(latest.get("run_attempt", 1))
+        status = str(latest.get("status") or "")
+        started_raw = str(latest.get("run_started_at") or "").strip()
+        if not started_raw:
+            if attempt == 1:
+                started_raw = str(latest.get("created_at") or "").strip()
+            elif status in {"queued", "requested", "waiting", "pending"}:
+                started_raw = str(latest.get("updated_at") or "").strip()
+        try:
+            started = datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
+            if started.tzinfo is None:
+                raise ValueError("trusted run timestamp has no timezone")
+            age = (datetime.now(UTC) - started.astimezone(UTC)).total_seconds()
+        except (ValueError, OverflowError):
+            return "failure", "Candidate admission blocked: trusted pending proof timestamp is invalid."
+        if age < -60 or age > TRUSTED_PROOF_PENDING_DEADLINE_SECONDS:
+            return "failure", "Candidate admission blocked: trusted pending proof exceeded its deadline."
+        return "active", TRUSTED_PROOF_WAITING_DESCRIPTION
     return "absent", ""
 
 
@@ -1970,6 +2003,69 @@ def read_trusted_upgrade_status(
         return "failure", f"Candidate admission blocked: trusted workflow conclusion={run_conclusion or 'unknown'}."
     if not is_trusted_upgrade_run_bound_to(run, head_sha, pr_number):
         return "failure", "Candidate admission blocked: trusted workflow run is not bound to this exact PR and head."
+    # During the trusted default-branch cutover older status records retain
+    # their legacy description. New receipts must match the live attempt/job
+    # rather than trusting their status text as proof authority.
+    description = str(latest.get("description") or "")
+    if description.startswith("Trusted proof "):
+        import hashlib
+
+        match = re.fullmatch(
+            r"Trusted proof (success|failure|timeout); attempt=([1-9][0-9]*); validation=([1-9][0-9]*); job=([1-9][0-9]*); sha256=([0-9a-f]{64})",
+            description,
+        )
+        if match is None:
+            return "failure", "Candidate admission blocked: malformed trusted proof receipt."
+        receipt_outcome, attempt_text, validation_text, job_text, digest_prefix = match.groups()
+        attempt = int(attempt_text)
+        if attempt != int(run.get("run_attempt", 1)):
+            return "failure", "Candidate admission blocked: trusted proof receipt uses a stale attempt."
+        validation_attempt = int(validation_text)
+        if validation_attempt > attempt:
+            return "failure", "Candidate admission blocked: trusted validation attempt is in the future."
+        try:
+            jobs_payload = request_json(repository, token, "GET", f"actions/runs/{run_id}/jobs?per_page=100&filter=all")
+        except Exception as exc:
+            return "failure", f"Candidate admission blocked: trusted proof job unavailable ({type(exc).__name__})."
+        if (
+            not isinstance(jobs_payload, dict)
+            or not isinstance(jobs_payload.get("jobs"), list)
+            or not isinstance(jobs_payload.get("total_count"), int)
+            or jobs_payload["total_count"] > 100
+        ):
+            return "failure", "Candidate admission blocked: trusted proof jobs malformed or incomplete."
+        all_validation_jobs = [
+            job
+            for job in jobs_payload["jobs"]
+            if isinstance(job, dict)
+            and job.get("name") == "Trusted Candidate Preflight Validation"
+            and isinstance(job.get("run_attempt"), int)
+            and 0 < job["run_attempt"] <= attempt
+        ]
+        if not all_validation_jobs or max(job["run_attempt"] for job in all_validation_jobs) != validation_attempt:
+            return "failure", "Candidate admission blocked: trusted proof validation attempt is stale."
+        jobs = [job for job in all_validation_jobs if job["run_attempt"] == validation_attempt]
+        if len(jobs) != 1 or str(jobs[0].get("id")) != job_text or jobs[0].get("run_id") != run_id:
+            return "failure", "Candidate admission blocked: trusted proof job identity mismatch."
+        job = jobs[0]
+        if job.get("status") != "completed" or job.get("conclusion") != "success" or receipt_outcome != "success":
+            return "failure", "Candidate admission blocked: trusted proof job outcome mismatch."
+        claims = {
+            "schema": "hunter.trusted-candidate-outcome/1",
+            "repository": repository,
+            "pr": pr_number,
+            "head_sha": head_sha,
+            "workflow": TRUSTED_UPGRADE_WORKFLOW_PATH,
+            "run_id": run_id,
+            "run_attempt": attempt,
+            "validation_attempt": validation_attempt,
+            "job_id": int(job_text),
+            "conclusion": receipt_outcome,
+            "provenance": "github-actions-api",
+        }
+        actual_digest = hashlib.sha256(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        if actual_digest != digest_prefix:
+            return "failure", "Candidate admission blocked: trusted proof receipt digest mismatch."
     return "success", "Exact-head trusted candidate preflight validation passed."
 
 

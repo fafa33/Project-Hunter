@@ -36,6 +36,8 @@ correctness never depends on timing, and PR latency cannot be held by another ru
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -65,6 +67,9 @@ MODE_MARKER = ".hunter-preflight-mode"
 #: This invariant prevents cross-workflow polling from becoming PR latency.
 PRODUCED_BY = "hunter-pre-pr-preflight"
 RUN_PENDING_STATUSES = frozenset({"queued", "in_progress", "requested", "waiting", "pending"})
+# Hosted workflow timeout is 30 minutes; an additional 15 minutes covers queue
+# propagation without treating a stranded run as pending indefinitely.
+PENDING_PROOF_DEADLINE_SECONDS = 45 * 60
 
 Fetch = Callable[[str, str, str], Any]
 
@@ -107,7 +112,17 @@ def trusted_branch_preflight_run(runs: Sequence[Any], head_sha: str) -> tuple[di
     if not matching:
         return None, f"no exact-head {PRE_PR_WORKFLOW_NAME} push run exists for {head_sha}"
 
-    latest = max(matching, key=lambda run: int(run.get("id") or 0))
+    # A rerun of one Actions run increments run_attempt without changing id.
+    # An older successful attempt must never authorize a newer failed attempt.
+    try:
+        latest = max(
+            matching,
+            key=lambda run: (int(run.get("id")), int(run.get("run_attempt", 1))),
+        )
+        if int(latest.get("id")) <= 0 or int(latest.get("run_attempt", 1)) <= 0:
+            raise ValueError("nonpositive run identity")
+    except (TypeError, ValueError, OverflowError):
+        return None, "exact-head proof run/attempt identity is malformed"
     status = str(latest.get("status") or "")
     if status != "completed":
         # Only a status that is genuinely still moving is waited on. An unreadable
@@ -197,6 +212,27 @@ def decide_from_runs(runs: list[Any], evidence: CandidateEvidence, *, now: datet
     if run is None:
         return ReuseDecision(False, problem)
     if problem:
+        # Pending is not an unlimited permission to keep readiness unresolved.
+        # A timed-out or unreadable run remains fail-closed and actionable.
+        # A rerun keeps the original created_at. Measure the current
+        # attempt instead, or a fresh rerun is falsely declared timed out.
+        attempt = int(run.get("run_attempt", 1))
+        status = str(run.get("status") or "")
+        raw = str(run.get("run_started_at") or "").strip()
+        if not raw:
+            if attempt == 1:
+                raw = str(run.get("created_at") or run.get("updated_at") or "").strip()
+            elif status in {"queued", "requested", "waiting", "pending"}:
+                raw = str(run.get("updated_at") or "").strip()
+        try:
+            started = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if started.tzinfo is None:
+                raise ValueError("missing timezone")
+            elapsed = ((now or datetime.now(UTC)) - started.astimezone(UTC)).total_seconds()
+        except ValueError:
+            return ReuseDecision(False, "exact-head proof pending timestamp is unavailable")
+        if elapsed < -60 or elapsed > PENDING_PROOF_DEADLINE_SECONDS:
+            return ReuseDecision(False, "exact-head proof exceeded bounded pending deadline")
         return ReuseDecision(False, problem, pending=True)
     produced_at, problem = _run_produced_at(run)
     if produced_at is None:
@@ -225,6 +261,50 @@ def decide_from_runs(runs: list[Any], evidence: CandidateEvidence, *, now: datet
     )
 
 
+def _canonical_job_proof(
+    repository: str, token: str, run: dict[str, Any], head_sha: str, fetch: Fetch | None
+) -> tuple[str | None, str]:
+    """Re-derive one immutable outcome from GitHub's trusted run and job records.
+
+    GitHub Actions is the producer; this is a read-only canonical receipt, not
+    a candidate-authored status or a second proof publisher.
+    """
+    try:
+        run_id = int(run["id"])
+        attempt = int(run.get("run_attempt", 1))
+        if run_id <= 0 or attempt <= 0:
+            raise ValueError("nonpositive run identity")
+        payload = (fetch or _fetch)(repository, token, f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")
+        if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
+            return None, "trusted proof job evidence is malformed"
+        jobs = [
+            job for job in payload["jobs"] if isinstance(job, dict) and job.get("name") == "Hunter Pre-PR Preflight"
+        ]
+        if len(jobs) != 1:
+            return None, "trusted proof must have exactly one authoritative preflight job"
+        job = jobs[0]
+        job_id = int(job["id"])
+        if job_id <= 0 or job.get("run_id") != run_id:
+            return None, "trusted proof job/run binding is invalid"
+        if job.get("status") != "completed" or job.get("conclusion") != "success":
+            return None, "trusted proof authoritative job did not succeed"
+        claims = {
+            "schema": "hunter.canonical-proof-outcome/1",
+            "repository": repository,
+            "head_sha": head_sha,
+            "workflow": PRE_PR_WORKFLOW_PATH,
+            "run_id": run_id,
+            "run_attempt": attempt,
+            "job_id": job_id,
+            "conclusion": "success",
+            "provenance": "github-actions-api",
+        }
+        digest = hashlib.sha256(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        return f"sha256:{digest}", ""
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        return None, f"trusted proof job identity is invalid ({type(exc).__name__})"
+
+
 def resolve(
     root: Path,
     *,
@@ -245,7 +325,19 @@ def resolve(
         return ReuseDecision(False, f"reuse evidence could not be established ({type(exc).__name__}: {exc})")
     if runs is None:
         return ReuseDecision(False, problem)
-    return decide_from_runs(runs, evidence, now=now)
+    decision = decide_from_runs(runs, evidence, now=now)
+    if not decision.reusable:
+        return decision
+    run, problem = trusted_branch_preflight_run(runs, head_sha)
+    if run is None or problem:
+        return ReuseDecision(False, problem or "trusted proof disappeared")
+    try:
+        digest, blocker = _canonical_job_proof(repository, token, run, head_sha, fetch)
+    except Exception as exc:  # noqa: BLE001 - missing hosted job evidence never authorizes reuse
+        return ReuseDecision(False, f"trusted proof job evidence unavailable ({type(exc).__name__})")
+    if digest is None:
+        return ReuseDecision(False, blocker)
+    return ReuseDecision(True, f"{decision.reason}; canonical proof outcome digest={digest}")
 
 
 def _emit(decision: ReuseDecision) -> None:

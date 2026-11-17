@@ -22,6 +22,7 @@ Waiting is never success, and never satisfies admission or merge readiness.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import hunter_governance_review_v2 as core
@@ -42,6 +43,7 @@ def _run(**overrides: Any) -> dict[str, Any]:
         "path": core.TRUSTED_UPGRADE_WORKFLOW_PATH,
         "event": "pull_request_target",
         "head_sha": HEAD,
+        "created_at": datetime.now(UTC).isoformat(),
         "status": "in_progress",
         "conclusion": None,
         "pull_requests": [{"number": PR, "head": {"sha": HEAD}}],
@@ -441,3 +443,71 @@ def test_candidate_admission_controller_keeps_a_waiting_head_ready(
     assert result == 0
     assert drafted == []
     assert "candidate admission is pending" in output
+
+
+def test_m3_superseded_active_attempt_cannot_keep_candidate_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install(
+        monkeypatch,
+        statuses=[],
+        runs={
+            "workflow_runs": [
+                _run(id=RUN_ID, run_attempt=1, status="in_progress"),
+                _run(id=RUN_ID, run_attempt=2, status="completed", conclusion="failure"),
+            ]
+        },
+    )
+    state, reason = _resolve()
+    assert state == "missing"
+    assert "missing" in reason
+
+
+def test_m3_malformed_active_attempt_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install(monkeypatch, statuses=[], runs={"workflow_runs": [_run(run_attempt="invalid")]})
+    state, reason = _resolve()
+    assert state == "failure"
+    assert "run/attempt" in reason
+
+
+def test_m3_stranded_trusted_run_cannot_wait_indefinitely(monkeypatch: pytest.MonkeyPatch) -> None:
+    old = (datetime.now(UTC) - timedelta(minutes=46)).isoformat()
+    _install(monkeypatch, statuses=[], runs={"workflow_runs": [_run(created_at=old)]})
+    state, reason = _resolve()
+    assert state == "failure"
+    assert "deadline" in reason
+
+
+def test_m3_missing_trusted_pending_timestamp_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _install(monkeypatch, statuses=[], runs={"workflow_runs": [_run(created_at=None)]})
+    state, reason = _resolve()
+    assert state == "failure"
+    assert "timestamp" in reason
+
+
+def test_codex_finding_rerun_uses_attempt_start_not_original_creation(monkeypatch: pytest.MonkeyPatch) -> None:
+    old = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
+    fresh = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    _install(
+        monkeypatch,
+        statuses=[],
+        runs={
+            "workflow_runs": [
+                _run(run_attempt=2, created_at=old, run_started_at=fresh, status="in_progress"),
+            ]
+        },
+    )
+    assert _resolve() == ("pending", core.TRUSTED_PROOF_WAITING_DESCRIPTION)
+
+
+def test_codex_finding_queued_rerun_uses_attempt_update(monkeypatch: pytest.MonkeyPatch) -> None:
+    old = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
+    fresh = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    _install(
+        monkeypatch,
+        statuses=[],
+        runs={
+            "workflow_runs": [
+                _run(run_attempt=2, created_at=old, updated_at=fresh, run_started_at=None, status="queued"),
+            ]
+        },
+    )
+    assert _resolve() == ("pending", core.TRUSTED_PROOF_WAITING_DESCRIPTION)

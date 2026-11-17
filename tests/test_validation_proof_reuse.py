@@ -386,7 +386,21 @@ def _resolve(tmp_path: Path, runs: list[Any], **overrides: Any) -> reuse.ReuseDe
         "repository": "fafa33/Project-Hunter",
         "token": "",
         "now": NOW,
-        "fetch": lambda repository, token, path: {"workflow_runs": runs},
+        "fetch": lambda repository, token, path: (
+            {
+                "jobs": [
+                    {
+                        "id": 101,
+                        "run_id": 10,
+                        "name": "Hunter Pre-PR Preflight",
+                        "status": "completed",
+                        "conclusion": "success",
+                    }
+                ]
+            }
+            if "/jobs?" in path
+            else {"workflow_runs": runs}
+        ),
     }
     options.update(overrides)
     return reuse.resolve(tmp_path, **options)
@@ -506,6 +520,60 @@ def test_latest_run_for_the_head_decides_rather_than_any_green_one(
     decision = _resolve(tmp_path, [_run(id=10), _run(id=11, conclusion="failure")])
 
     assert not decision.reusable
+
+
+def test_m3_latest_attempt_cannot_be_replaced_by_prior_green_attempt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_identity(monkeypatch)
+    decision = _resolve(
+        tmp_path,
+        [
+            _run(id=41, run_attempt=1),
+            _run(id=41, run_attempt=2, conclusion="failure"),
+        ],
+    )
+    assert not decision.reusable
+    assert "failure" in decision.reason
+
+
+@pytest.mark.parametrize("bad_attempt", [0, -1, "unreadable", None])
+def test_m3_malformed_attempt_identity_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_attempt: Any
+) -> None:
+    _stub_identity(monkeypatch)
+    decision = _resolve(tmp_path, [_run(run_attempt=bad_attempt)])
+    assert not decision.reusable
+    assert "identity" in decision.reason
+
+
+def test_codex_finding_fresh_rerun_is_pending_despite_old_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_identity(monkeypatch)
+    old = (NOW - timedelta(hours=3)).isoformat().replace("+00:00", "Z")
+    fresh = (NOW - timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+    decision = _resolve(
+        tmp_path, [_run(run_attempt=2, status="in_progress", conclusion=None, created_at=old, run_started_at=fresh)]
+    )
+    assert not decision.reusable
+    assert decision.pending
+
+
+def test_m3_stranded_pending_run_has_terminal_diagnosis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_identity(monkeypatch)
+    old = (NOW - timedelta(minutes=46)).isoformat().replace("+00:00", "Z")
+    decision = _resolve(tmp_path, [_run(status="queued", conclusion=None, created_at=old)])
+    assert not decision.reusable
+    assert not decision.pending
+    assert "deadline" in decision.reason
+
+
+def test_m3_recent_pending_run_remains_nonblocking(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _stub_identity(monkeypatch)
+    decision = _resolve(tmp_path, [_run(status="queued", conclusion=None)])
+    assert not decision.reusable
+    assert decision.pending
 
 
 def test_stale_trusted_run_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -788,3 +856,42 @@ def test_aggregate_receipt_reuse_writes_json_report_file(tmp_path: Path, monkeyp
     assert data["overall_outcome"] == "passed"
     assert all(g["outcome"] == "reused" for g in data["gates"])
     assert "receipt_reference" in data
+
+
+def test_m3_canonical_job_proof_is_bound_to_run_attempt_and_job() -> None:
+    run = _run(id=10, run_attempt=2)
+
+    def fetch(_repo: str, _token: str, _path: str) -> dict[str, Any]:
+        return {
+            "jobs": [
+                {
+                    "id": 101,
+                    "run_id": 10,
+                    "name": "Hunter Pre-PR Preflight",
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+            ]
+        }
+
+    digest, blocker = reuse._canonical_job_proof("fafa33/Project-Hunter", "", run, HEAD, fetch)
+    assert blocker == ""
+    assert digest is not None and digest.startswith("sha256:")
+    changed, _ = reuse._canonical_job_proof("fafa33/Project-Hunter", "", {**run, "run_attempt": 3}, HEAD, fetch)
+    assert changed != digest
+
+
+@pytest.mark.parametrize(
+    "jobs",
+    [
+        [],
+        [{"id": 101, "run_id": 999, "name": "Hunter Pre-PR Preflight", "status": "completed", "conclusion": "success"}],
+        [{"id": 101, "run_id": 10, "name": "Hunter Pre-PR Preflight", "status": "completed", "conclusion": "failure"}],
+    ],
+)
+def test_m3_canonical_job_proof_rejects_missing_foreign_failed_job(jobs: list[dict[str, Any]]) -> None:
+    digest, reason = reuse._canonical_job_proof(
+        "fafa33/Project-Hunter", "", _run(), HEAD, lambda _repo, _token, _path: {"jobs": jobs}
+    )
+    assert digest is None
+    assert reason
