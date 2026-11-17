@@ -2937,6 +2937,12 @@ def test_pre_push_admits_a_bound_multi_commit_range(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(hunter_pre_push, "require_current_review_request_if_present", lambda _head, _updates: None)
     monkeypatch.setattr(hunter_pre_push.provenance, "check_range", lambda *_a, **_k: None)
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
+    # Issue #588: these pre-push integration fixtures isolate review/ingress
+    # behavior; the workflow and impact gates have dedicated regression tests.
+    monkeypatch.setattr(hunter_pre_push, "_run_workflow_trigger_contracts", lambda _head: 0)
+    monkeypatch.setattr(hunter_pre_push, "_run_mapped_regressions", lambda _head: 0)
+    monkeypatch.setattr(hunter_pre_push, "_require_persistent_worktree", lambda _root: None)
+    monkeypatch.setattr(hunter_pre_push, "_run_push_safety_lane", lambda: 0)
 
     class _Completed:
         returncode = 0
@@ -3966,6 +3972,12 @@ def test_malformed_review_evidence_does_not_block_an_ordinary_draft_push(monkeyp
     monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
+    # Issue #588: these pre-push integration fixtures isolate review/ingress
+    # behavior; the workflow and impact gates have dedicated regression tests.
+    monkeypatch.setattr(hunter_pre_push, "_run_workflow_trigger_contracts", lambda _head: 0)
+    monkeypatch.setattr(hunter_pre_push, "_run_mapped_regressions", lambda _head: 0)
+    monkeypatch.setattr(hunter_pre_push, "_require_persistent_worktree", lambda _root: None)
+    monkeypatch.setattr(hunter_pre_push, "_run_push_safety_lane", lambda: 0)
     monkeypatch.setattr(hunter_pre_push.preflight, "run_quality_gates", lambda _gates: 0)
     monkeypatch.setattr(hunter_pre_push.review, "read_review_document", lambda: {"claims": []})
 
