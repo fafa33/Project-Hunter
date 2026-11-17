@@ -2973,3 +2973,90 @@ def test_a_codex_comment_is_not_a_canonical_workaround(monkeypatch) -> None:
     comment_agent = {**base_agent, "id": "codex", "trigger_method": "github-pr-comment:@codex review"}
     trigger = {"id": 42, "created_at": "2026-10-04T12:00:00Z", "collector_run_id": 123}
     assert backend.acknowledged(comment_agent, trigger) is False
+
+
+def test_codex_summary_is_not_adoptable_review_authority(monkeypatch):
+    """A provider-authored clean completion unblocks collection, not GitHub approval."""
+    import hunter_governance_review_v2 as governance
+
+    envelope = (
+        "<!-- codex-pull-request-review-summary -->\n"
+        "<!-- codex-review-state:v1 "
+        + json.dumps(
+            {
+                "code_review": {
+                    "commit_sha": HEAD,
+                    "status": "completed",
+                    "has_any_findings": False,
+                    "has_unresolved_findings": False,
+                },
+                "security_review": {"status": None},
+            }
+        )
+        + " -->\n<details><summary>Codex Review Summary</summary></details>"
+    )
+    assert governance.native_codex_summary_clear(envelope, HEAD)
+    for changed in [
+        envelope.replace(HEAD, "b" * 40),
+        envelope.replace('"completed"', '"in_progress"'),
+        envelope.replace('"has_any_findings": false', '"has_any_findings": true'),
+        envelope.replace('"has_unresolved_findings": false', '"has_unresolved_findings": true'),
+        envelope.replace("codex-review-state:v1", "codex-review-state:v2"),
+    ]:
+        assert not governance.native_codex_summary_clear(changed, HEAD)
+    agent = dict(CODEX_REQUEST_AGENT)
+    trigger = {"id": 42, "created_at": "2026-11-17T01:41:00Z", "collector_run_id": 123}
+    for login in ("chatgpt-codex-connector[bot]", "github-actions[bot]"):
+        backend = _backend(
+            monkeypatch,
+            [RULESET_SUMMARY],
+            comments=[{"id": 200, "user": {"login": login}, "created_at": "2026-11-17T01:40:36Z", "body": envelope}],
+        )
+        assert backend.acknowledged(agent, trigger) is False
+        assert backend.response_state(agent, trigger) != "clear"
+
+
+def test_newer_blocking_codex_review_supersedes_clean_summary(monkeypatch):
+    """A summary cannot mask a later exact-head changes-requested review."""
+    import hunter_governance_review_v2 as governance
+
+    envelope = (
+        "<!-- codex-pull-request-review-summary -->\n"
+        "<!-- codex-review-state:v1 "
+        + json.dumps(
+            {
+                "code_review": {
+                    "commit_sha": HEAD,
+                    "status": "completed",
+                    "has_any_findings": False,
+                    "has_unresolved_findings": False,
+                }
+            }
+        )
+        + " -->\n<details><summary>Codex Review Summary</summary></details>"
+    )
+    assert governance.native_codex_summary_clear(envelope, HEAD)
+    backend = _backend(
+        monkeypatch,
+        [RULESET_SUMMARY],
+        comments=[
+            {
+                "id": 200,
+                "user": {"login": "chatgpt-codex-connector[bot]"},
+                "created_at": "2026-11-17T01:40:36Z",
+                "body": envelope,
+            }
+        ],
+        reviews=[
+            {
+                "id": 201,
+                "user": {"login": "chatgpt-codex-connector[bot]"},
+                "submitted_at": "2026-11-17T01:43:00Z",
+                "commit_id": HEAD,
+                "state": "CHANGES_REQUESTED",
+                "body": "Blocking finding on exact HEAD",
+            }
+        ],
+    )
+    trigger = {"id": 42, "created_at": "2026-11-17T01:41:00Z", "collector_run_id": 123}
+    assert backend.response_state(dict(CODEX_REQUEST_AGENT), trigger) == "blocking"
