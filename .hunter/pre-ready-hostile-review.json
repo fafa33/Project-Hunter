@@ -159,16 +159,6 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against reviewer-chain-timeout-not-derived-from-canonical-budget: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
-        "family": "DFF-043",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Targeted diff review against accepted-review-request-read-as-provider-execution: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
-        "family": "DFF-050",
-        "outcome": "clear"
-      },
-      {
         "evidence": "Targeted diff review against trusted-preflight-success-masks-unresolved-review-threads: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
         "family": "DFF-053",
         "outcome": "clear"
@@ -195,29 +185,23 @@
         "status": "modified"
       },
       {
-        "blob_sha": "d5959c9f9e762ad86233e61ab292b4fb3a3364e9",
-        "path": "scripts/hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
         "blob_sha": "c671fea9ef83578e2b1bec04eb43764aaea8941f",
         "path": "tests/test_hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "f224542837a5dd0bb511d0b630ab26710623e18d",
+        "blob_sha": "fa4e75ea6edd2cca9f7cc73bfec7e1314469f999",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "a222896c21f27fd24008e2f6e9fa02c285efdf15aa5ea82cdba8dd5801d1538e"
+    "review_target_digest": "9672d143c698bc85ab2a27348014052f4e43f9fc58d02de0bf61e8458c2d5c49"
   },
-  "review_id": "7a8d0bfcdacf4e0595b2c40bb5f3d79ad60a56520a61074d5b68c545291c5e00",
+  "review_id": "4fb7f3cf36f47f9143a3e1c5c9adba482b1cda0ca114e3c0c65cd0fd85c0959f",
   "review_request": {
-    "claims_id": "7a8d0bfcdacf4e0595b2c40bb5f3d79ad60a56520a61074d5b68c545291c5e00",
+    "claims_id": "4fb7f3cf36f47f9143a3e1c5c9adba482b1cda0ca114e3c0c65cd0fd85c0959f",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
