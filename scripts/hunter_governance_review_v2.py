@@ -469,6 +469,36 @@ def native_codex_clear_review(body: str, head_sha: str) -> bool:
     return bool(match and head_sha.strip().lower().startswith(match.group(1).lower()))
 
 
+def native_codex_summary_clear(body: str, head_sha: str) -> bool:
+    """Validate Codex's authenticated issue-comment completion envelope.
+
+    This is provider completion evidence, NOT a GitHub review object or an
+    approval. The caller must authenticate the comment author separately.
+    """
+    if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+        return False
+    prefix = "<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 "
+    if not body.startswith(prefix):
+        return False
+    end = body.find(" -->", len(prefix))
+    if end < 0 or end > len(prefix) + 4096:
+        return False
+    try:
+        state = json.loads(body[len(prefix) : end])
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(state, dict) or not isinstance(state.get("code_review"), dict):
+        return False
+    review = state["code_review"]
+    return (
+        review.get("status") == "completed"
+        and review.get("commit_sha") == head_sha
+        and review.get("has_any_findings") is False
+        and review.get("has_unresolved_findings") is False
+        and body[end + 4 :].lstrip().startswith("<details>")
+    )
+
+
 def review_acknowledgement(body: str) -> dict[str, Any] | None:
     """An entire, explicitly issued JSON result, never a quoted inline example."""
     raw = body.strip()

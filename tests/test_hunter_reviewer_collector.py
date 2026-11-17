@@ -2973,3 +2973,44 @@ def test_a_codex_comment_is_not_a_canonical_workaround(monkeypatch) -> None:
     comment_agent = {**base_agent, "id": "codex", "trigger_method": "github-pr-comment:@codex review"}
     trigger = {"id": 42, "created_at": "2026-10-04T12:00:00Z", "collector_run_id": 123}
     assert backend.acknowledged(comment_agent, trigger) is False
+
+
+def test_codex_completed_summary_is_exact_head_provider_evidence(monkeypatch):
+    """A provider-authored clean completion unblocks collection, not GitHub approval."""
+    import hunter_governance_review_v2 as governance
+
+    envelope = (
+        "<!-- codex-pull-request-review-summary -->\n"
+        "<!-- codex-review-state:v1 "
+        + json.dumps(
+            {
+                "code_review": {
+                    "commit_sha": HEAD,
+                    "status": "completed",
+                    "has_any_findings": False,
+                    "has_unresolved_findings": False,
+                },
+                "security_review": {"status": None},
+            }
+        )
+        + " -->\n<details><summary>Codex Review Summary</summary></details>"
+    )
+    assert governance.native_codex_summary_clear(envelope, HEAD)
+    for changed in [
+        envelope.replace(HEAD, "b" * 40),
+        envelope.replace('"completed"', '"in_progress"'),
+        envelope.replace('"has_any_findings": false', '"has_any_findings": true'),
+        envelope.replace('"has_unresolved_findings": false', '"has_unresolved_findings": true'),
+        envelope.replace("codex-review-state:v1", "codex-review-state:v2"),
+    ]:
+        assert not governance.native_codex_summary_clear(changed, HEAD)
+    agent = dict(CODEX_REQUEST_AGENT)
+    trigger = {"id": 42, "created_at": "2026-11-17T01:41:00Z", "collector_run_id": 123}
+    for login, expected in [("chatgpt-codex-connector[bot]", True), ("github-actions[bot]", False)]:
+        backend = _backend(
+            monkeypatch,
+            [RULESET_SUMMARY],
+            comments=[{"id": 200, "user": {"login": login}, "created_at": "2026-11-17T01:40:36Z", "body": envelope}],
+        )
+        assert backend.acknowledged(agent, trigger) is expected
+        assert (backend.response_state(agent, trigger) == "clear") is expected

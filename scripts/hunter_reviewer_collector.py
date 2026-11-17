@@ -1494,6 +1494,19 @@ class GitHubBackend:
         bound = governance.bind_native_codex_reviews_to_claims(reviews, self.expected_head, self.claims_id)
         return governance.latest_codex_review_is_exact_head_clear(bound, self.expected_head, self.claims_id)
 
+    def _codex_summary_completed(self) -> bool:
+        """Recognize only provider-authored, exact-head clean completion.
+
+        This does not manufacture a GitHub review or replace governance's
+        separate findings/thread authority.
+        """
+        for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
+            if (item.get("user") or {}).get("login", "").lower() != governance.reviewer_login({"id": "codex"}):
+                continue
+            if governance.native_codex_summary_clear(str(item.get("body") or ""), self.expected_head):
+                return True
+        return False
+
     def response_state(self, agent: dict[str, Any], trigger: dict[str, Any]) -> str:
         if trigger.get("state") == "unavailable":
             return "unavailable"
@@ -1506,7 +1519,7 @@ class GitHubBackend:
             return str(result["verdict"])
         login = governance.reviewer_login(agent)
         created = str(trigger["created_at"])
-        if agent.get("id") == "codex" and self._exact_head_native_clear():
+        if agent.get("id") == "codex" and (self._exact_head_native_clear() or self._codex_summary_completed()):
             return "clear"
         matching_reviews = [
             item
@@ -1584,6 +1597,8 @@ class GitHubBackend:
             run = self._adopt_workflow_run(trigger)
             return run is not None and str(run.get("status") or "") in STARTED_RUN_STATES
         if trigger_scheme(agent) == "github-review-request":
+            if agent.get("id") == "codex" and self._codex_summary_completed():
+                return True
             if str(trigger.get("state") or "") == "unavailable":
                 return False
             login = governance.reviewer_login(agent)

@@ -6,6 +6,12 @@
         "evidence": "Partial M1-only inventory and ten new adversarial parameterized cases; no behavior change, 105 tests pass. Remaining M1 adversarial cases and M2-M7 are not claimed complete.",
         "id": "M1",
         "verdict": "satisfied"
+      },
+      {
+        "criterion": "Codex native authenticated completed exact-head issue-comment envelope is accepted as provider completion by the existing collector without impersonating a formal GitHub Review, weakening findings or owner merge gates",
+        "evidence": "Authenticated author and strict completed/no-findings/exact-head envelope parsing; negative tamper cases; collector response and acknowledgement tests; 258 focused tests passed.",
+        "id": "736-collector-parity",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -28,31 +34,6 @@
     "base_sha": "72c711aee2ccc7bb0fdf706de391563cac5aa469",
     "defect_families": [
       {
-        "evidence": "Inspected ready-without-complete-hostile-review against M1 docs/tests only: A candidate is admitted for review only when exact-head-bound repository-owned state proves the complete base->HEAD range was hostile-reviewed against the governing Issue acceptance criteria and every applicable recurring-defect family, with no unresolved blocking finding. No production authority or gating logic changed; 105 focused tests passed.",
-        "family": "DFF-013",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Inspected candidate-must-pass-canonical-preflight-before-pr-publication against M1 docs/tests only: A candidate may be pushed only through the repository pre-push safety boundary; the full canonical pytest proof runs exactly once in the hosted exact-HEAD Pre-PR stage, and a Draft PR may be opened only after that hosted proof succeeds. Focused tests are diagnostic evidence and never substitute for the hosted canonical proof. No production authority or gating logic changed; 105 focused tests passed.",
-        "family": "DFF-029",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Inspected tracked-governance-asset-not-loadable-at-its-path against M1 docs/tests only: Every tracked governance asset resolves to a path its declared consumer can actually load, and no tracked path carries characters that the consumer's own path grammar rejects. A tracked asset its consumer cannot load contributes no enforcement, and its absence must be a machine-detected condition rather than a silent one. No production authority or gating logic changed; 105 focused tests passed.",
-        "family": "DFF-033",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Inspected external-precondition-asserted-inside-deterministic-test-lane against M1 docs/tests only: The deterministic validation lane asserts only on repository-owned state. A precondition owned outside the repository -- an Issue body, a remote API response, a live network endpoint -- is validated on the runtime path that actually consumes it and reported as its own attributable signal, never as a deterministic-lane assertion whose failure is indistinguishable from a defect in the change under test. No production authority or gating logic changed; 105 focused tests passed.",
-        "family": "DFF-035",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Inspected stale-exact-head-review-request-reconcile-terminal-error-loop against M1 docs/tests only: A pre-ready hostile-review request binds the reviewed candidate content and exact PR HEAD. Mutation invalidates prior review evidence and blocks Ready/merge. The trusted GitHub-native reconcile must represent missing/stale review as a durable, actionable blocked/waiting state, distinguish it from execution/security failures, and recover after a new authenticated exact-head request without rerun loops, forged approvals or unbounded polling. No production authority or gating logic changed; 105 focused tests passed.",
-        "family": "DFF-055",
-        "outcome": "clear"
-      },
-      {
         "evidence": "Review-request contract remains content-bound and non-authoritative; only documentation and regression tests change. No merge authority bypass. Focused test suite 105 passed.",
         "family": "DFF-007",
         "outcome": "clear"
@@ -68,8 +49,133 @@
         "outcome": "clear"
       },
       {
+        "evidence": "Targeted diff review against writer-identity-not-authorization-bound: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-010",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against stranded-intermediate-commit-evidence: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-011",
+        "outcome": "clear"
+      },
+      {
         "evidence": "Review-request contract remains content-bound and non-authoritative; only documentation and regression tests change. No merge authority bypass. Focused test suite 105 passed.",
         "family": "DFF-012",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Inspected ready-without-complete-hostile-review against M1 docs/tests only: A candidate is admitted for review only when exact-head-bound repository-owned state proves the complete base->HEAD range was hostile-reviewed against the governing Issue acceptance criteria and every applicable recurring-defect family, with no unresolved blocking finding. Collector-only provider evidence acceptance added; 258 focused tests passed; governance/merge authority unchanged.",
+        "family": "DFF-013",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against pending-prerequisite-reported-as-failure: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-014",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against overclaimed-prevention-state: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-015",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against validation-proof-reused-without-immutable-identity: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-016",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against runtime-bootstrap-not-volume-aware-before-issuer-composition: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-019",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against live-instance-execution-ownership-isolation: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-020",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against accepted-execution-shutdown-drain-safety: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-021",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against merge-readiness-without-current-head-review-authority: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-022",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against preflight-not-enforced-before-ledger-claim-on-every-execution-entry-point: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-023",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against exhausted-exact-head-review-cycle-has-no-review-after-remediation-transition: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-024",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against governance-authority-cutover-dependency-cycle: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-025",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against external-reviewer-availability-cannot-deadlock-merge-authority: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-026",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Inspected candidate-must-pass-canonical-preflight-before-pr-publication against M1 docs/tests only: A candidate may be pushed only through the repository pre-push safety boundary; the full canonical pytest proof runs exactly once in the hosted exact-HEAD Pre-PR stage, and a Draft PR may be opened only after that hosted proof succeeds. Focused tests are diagnostic evidence and never substitute for the hosted canonical proof. Collector-only provider evidence acceptance added; 258 focused tests passed; governance/merge authority unchanged.",
+        "family": "DFF-029",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Inspected tracked-governance-asset-not-loadable-at-its-path against M1 docs/tests only: Every tracked governance asset resolves to a path its declared consumer can actually load, and no tracked path carries characters that the consumer's own path grammar rejects. A tracked asset its consumer cannot load contributes no enforcement, and its absence must be a machine-detected condition rather than a silent one. Collector-only provider evidence acceptance added; 258 focused tests passed; governance/merge authority unchanged.",
+        "family": "DFF-033",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Inspected external-precondition-asserted-inside-deterministic-test-lane against M1 docs/tests only: The deterministic validation lane asserts only on repository-owned state. A precondition owned outside the repository -- an Issue body, a remote API response, a live network endpoint -- is validated on the runtime path that actually consumes it and reported as its own attributable signal, never as a deterministic-lane assertion whose failure is indistinguishable from a defect in the change under test. Collector-only provider evidence acceptance added; 258 focused tests passed; governance/merge authority unchanged.",
+        "family": "DFF-035",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against governance-verdict-not-machine-readable: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-037",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against required-governance-capability-degraded-best-effort-silently: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-038",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against global-rest-endpoint-addressed-through-repository-scoped-seam: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-039",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against trusted-controller-logic-candidate-cannot-self-validate-across-a-load-bearing-trust-boundary: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-040",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against reviewer-chain-timeout-not-derived-from-canonical-budget: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-043",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against accepted-review-request-read-as-provider-execution: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-050",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Targeted diff review against trusted-preflight-success-masks-unresolved-review-threads: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "family": "DFF-053",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Inspected stale-exact-head-review-request-reconcile-terminal-error-loop against M1 docs/tests only: A pre-ready hostile-review request binds the reviewed candidate content and exact PR HEAD. Mutation invalidates prior review evidence and blocks Ready/merge. The trusted GitHub-native reconcile must represent missing/stale review as a durable, actionable blocked/waiting state, distinguish it from execution/security failures, and recover after a new authenticated exact-head request without rerun loops, forged approvals or unbounded polling. Collector-only provider evidence acceptance added; 258 focused tests passed; governance/merge authority unchanged.",
+        "family": "DFF-055",
         "outcome": "clear"
       }
     ],
@@ -83,17 +189,35 @@
         "status": "modified"
       },
       {
+        "blob_sha": "d05810c700b9e5559f1cde1d5ee075f41a17b49e",
+        "path": "scripts/hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d5959c9f9e762ad86233e61ab292b4fb3a3364e9",
+        "path": "scripts/hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "c671fea9ef83578e2b1bec04eb43764aaea8941f",
         "path": "tests/test_hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "f224542837a5dd0bb511d0b630ab26710623e18d",
+        "path": "tests/test_hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "49c5b8858bfc694805c7e72af9275a049e658efcdd2f66c3eeaeca3c1a5f3a88"
+    "review_target_digest": "a222896c21f27fd24008e2f6e9fa02c285efdf15aa5ea82cdba8dd5801d1538e"
   },
-  "review_id": "46b4c19097d726794ad4719d6ebd7caf5a1d721f09435191b869a3b5adb63270",
+  "review_id": "7a8d0bfcdacf4e0595b2c40bb5f3d79ad60a56520a61074d5b68c545291c5e00",
   "review_request": {
-    "claims_id": "46b4c19097d726794ad4719d6ebd7caf5a1d721f09435191b869a3b5adb63270",
+    "claims_id": "7a8d0bfcdacf4e0595b2c40bb5f3d79ad60a56520a61074d5b68c545291c5e00",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
