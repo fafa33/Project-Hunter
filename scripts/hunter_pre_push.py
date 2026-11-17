@@ -169,6 +169,23 @@ def _run_push_safety_lane() -> int:
     return exit_code
 
 
+def _test_subprocess_environment() -> dict[str, str]:
+    """Keep git-push hook repository bindings out of nested test repositories."""
+    environment = os.environ.copy()
+    for key in (
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+        "GIT_PREFIX",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_QUARANTINE_PATH",
+    ):
+        environment.pop(key, None)
+    return environment
+
+
 def _run_workflow_trigger_contracts(head_sha: str) -> int:
     """Validate workflow-trigger invariants only when workflow definitions change."""
     base = provenance.resolve_governed_base(head_sha)
@@ -195,6 +212,7 @@ def _run_workflow_trigger_contracts(head_sha: str) -> int:
             "workflow or trigger",
         ),
         check=False,
+        env=_test_subprocess_environment(),
     ).returncode
 
 
@@ -208,6 +226,7 @@ def _run_mapped_regressions(head_sha: str) -> int:
     completed = subprocess.run(
         (sys.executable, "scripts/hunter_ci_impact.py", "--base", base, "--head", head_sha, "--run-focused"),
         check=False,
+        env=_test_subprocess_environment(),
     )
     return completed.returncode
 

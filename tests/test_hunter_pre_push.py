@@ -533,3 +533,15 @@ def test_m2_workflow_contracts_fail_closed_on_changed_workflow(monkeypatch) -> N
     monkeypatch.setattr(hunter_pre_push.subprocess, "run", fake_run)
     assert hunter_pre_push._run_workflow_trigger_contracts(HEAD_A) == 9
     assert len(calls) == 2
+
+
+def test_m2_nested_test_git_environment_does_not_inherit_push_repository(monkeypatch) -> None:
+    monkeypatch.setenv("GIT_DIR", "/foreign-repository/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/foreign-repository")
+    monkeypatch.setenv("GIT_INDEX_FILE", "/foreign-repository/index")
+    monkeypatch.setenv("HUNTER_TEST_MARKER", "preserved")
+    environment = hunter_pre_push._test_subprocess_environment()
+    assert "GIT_DIR" not in environment
+    assert "GIT_WORK_TREE" not in environment
+    assert "GIT_INDEX_FILE" not in environment
+    assert environment["HUNTER_TEST_MARKER"] == "preserved"
