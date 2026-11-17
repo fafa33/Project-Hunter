@@ -481,3 +481,33 @@ def test_m3_missing_trusted_pending_timestamp_fails_closed(monkeypatch: pytest.M
     state, reason = _resolve()
     assert state == "failure"
     assert "timestamp" in reason
+
+
+def test_codex_finding_rerun_uses_attempt_start_not_original_creation(monkeypatch: pytest.MonkeyPatch) -> None:
+    old = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
+    fresh = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    _install(
+        monkeypatch,
+        statuses=[],
+        runs={
+            "workflow_runs": [
+                _run(run_attempt=2, created_at=old, run_started_at=fresh, status="in_progress"),
+            ]
+        },
+    )
+    assert _resolve() == ("pending", core.TRUSTED_PROOF_WAITING_DESCRIPTION)
+
+
+def test_codex_finding_queued_rerun_uses_attempt_update(monkeypatch: pytest.MonkeyPatch) -> None:
+    old = (datetime.now(UTC) - timedelta(hours=3)).isoformat()
+    fresh = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+    _install(
+        monkeypatch,
+        statuses=[],
+        runs={
+            "workflow_runs": [
+                _run(run_attempt=2, created_at=old, updated_at=fresh, run_started_at=None, status="queued"),
+            ]
+        },
+    )
+    assert _resolve() == ("pending", core.TRUSTED_PROOF_WAITING_DESCRIPTION)

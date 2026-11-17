@@ -1910,7 +1910,18 @@ def read_active_trusted_upgrade_run(
         # A stranded run must not hold admission in WAITING indefinitely.
         # The trusted validation job has a 30-minute timeout; allow 15 more
         # minutes for queue/runner propagation, then fail closed.
-        started_raw = str(latest.get("created_at") or "").strip()
+        # created_at belongs to the original workflow run, not a rerun.
+        # GitHub's run_started_at identifies the current attempt; for a
+        # queued rerun with no start timestamp, updated_at is the only
+        # attempt-local clock available. Never reuse original created_at.
+        attempt = int(latest.get("run_attempt", 1))
+        status = str(latest.get("status") or "")
+        started_raw = str(latest.get("run_started_at") or "").strip()
+        if not started_raw:
+            if attempt == 1:
+                started_raw = str(latest.get("created_at") or "").strip()
+            elif status in {"queued", "requested", "waiting", "pending"}:
+                started_raw = str(latest.get("updated_at") or "").strip()
         try:
             started = datetime.fromisoformat(started_raw.replace("Z", "+00:00"))
             if started.tzinfo is None:

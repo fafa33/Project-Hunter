@@ -533,6 +533,19 @@ def test_m3_malformed_attempt_identity_fails_closed(
     assert "identity" in decision.reason
 
 
+def test_codex_finding_fresh_rerun_is_pending_despite_old_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _stub_identity(monkeypatch)
+    old = (NOW - timedelta(hours=3)).isoformat().replace("+00:00", "Z")
+    fresh = (NOW - timedelta(minutes=1)).isoformat().replace("+00:00", "Z")
+    decision = _resolve(
+        tmp_path, [_run(run_attempt=2, status="in_progress", conclusion=None, created_at=old, run_started_at=fresh)]
+    )
+    assert not decision.reusable
+    assert decision.pending
+
+
 def test_m3_stranded_pending_run_has_terminal_diagnosis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_identity(monkeypatch)
     old = (NOW - timedelta(minutes=46)).isoformat().replace("+00:00", "Z")

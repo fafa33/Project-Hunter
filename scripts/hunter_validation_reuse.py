@@ -212,7 +212,16 @@ def decide_from_runs(runs: list[Any], evidence: CandidateEvidence, *, now: datet
     if problem:
         # Pending is not an unlimited permission to keep readiness unresolved.
         # A timed-out or unreadable run remains fail-closed and actionable.
-        raw = str(run.get("created_at") or run.get("updated_at") or "").strip()
+        # A rerun keeps the original created_at. Measure the current
+        # attempt instead, or a fresh rerun is falsely declared timed out.
+        attempt = int(run.get("run_attempt", 1))
+        status = str(run.get("status") or "")
+        raw = str(run.get("run_started_at") or "").strip()
+        if not raw:
+            if attempt == 1:
+                raw = str(run.get("created_at") or run.get("updated_at") or "").strip()
+            elif status in {"queued", "requested", "waiting", "pending"}:
+                raw = str(run.get("updated_at") or "").strip()
         try:
             started = datetime.fromisoformat(raw.replace("Z", "+00:00"))
             if started.tzinfo is None:
