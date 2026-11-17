@@ -36,6 +36,8 @@ def _stub_issue_412_boundaries(monkeypatch) -> None:
     )
     monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
+    monkeypatch.setattr(hunter_pre_push, "_run_mapped_regressions", lambda _head: 0)
+    monkeypatch.setattr(hunter_pre_push, "_run_workflow_trigger_contracts", lambda _head: 0)
     monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head, _updates: None)
     monkeypatch.setattr(hunter_pre_push, "require_current_review_request_if_present", lambda _head, _updates: None)
 
@@ -480,3 +482,66 @@ def test_the_persistent_worktree_check_runs_before_any_other_push_gate(monkeypat
     with pytest.raises(RuntimeError, match="purge-managed temporary directory"):
         hunter_pre_push.enforce_pre_push(["refs/heads/x " + "a" * 40 + " refs/heads/x " + "0" * 40 + "\n"])
     assert order == []
+
+
+def test_m2_mapped_regressions_bind_exact_head_and_governed_base(monkeypatch) -> None:
+    observed = []
+    monkeypatch.setattr(hunter_pre_push.provenance, "resolve_governed_base", lambda head: HEAD_B)
+
+    def capture_run(args, **kwargs):
+        observed.append((args, kwargs))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(hunter_pre_push.subprocess, "run", capture_run)
+    assert hunter_pre_push._run_mapped_regressions(HEAD_A) == 0
+    assert observed[0][0][-5:] == ("--base", HEAD_B, "--head", HEAD_A, "--run-focused")
+
+
+def test_m2_mapped_regression_failure_is_not_silenced(monkeypatch) -> None:
+    monkeypatch.setattr(hunter_pre_push.provenance, "resolve_governed_base", lambda head: HEAD_B)
+    monkeypatch.setattr(
+        hunter_pre_push.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=7),
+    )
+    assert hunter_pre_push._run_mapped_regressions(HEAD_A) == 7
+
+
+def test_m2_workflow_contracts_skip_unchanged_workflows(monkeypatch) -> None:
+    monkeypatch.setattr(hunter_pre_push.provenance, "resolve_governed_base", lambda head: HEAD_B)
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(returncode=0, stdout="scripts/hunter_pre_push.py\n")
+
+    monkeypatch.setattr(hunter_pre_push.subprocess, "run", fake_run)
+    assert hunter_pre_push._run_workflow_trigger_contracts(HEAD_A) == 0
+    assert len(calls) == 1
+
+
+def test_m2_workflow_contracts_fail_closed_on_changed_workflow(monkeypatch) -> None:
+    monkeypatch.setattr(hunter_pre_push.provenance, "resolve_governed_base", lambda head: HEAD_B)
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        return SimpleNamespace(
+            returncode=9 if len(calls) == 2 else 0, stdout=".github/workflows/hunter-issue-agent-trigger.yml\n"
+        )
+
+    monkeypatch.setattr(hunter_pre_push.subprocess, "run", fake_run)
+    assert hunter_pre_push._run_workflow_trigger_contracts(HEAD_A) == 9
+    assert len(calls) == 2
+
+
+def test_m2_nested_test_git_environment_does_not_inherit_push_repository(monkeypatch) -> None:
+    monkeypatch.setenv("GIT_DIR", "/foreign-repository/.git")
+    monkeypatch.setenv("GIT_WORK_TREE", "/foreign-repository")
+    monkeypatch.setenv("GIT_INDEX_FILE", "/foreign-repository/index")
+    monkeypatch.setenv("HUNTER_TEST_MARKER", "preserved")
+    environment = hunter_pre_push._test_subprocess_environment()
+    assert "GIT_DIR" not in environment
+    assert "GIT_WORK_TREE" not in environment
+    assert "GIT_INDEX_FILE" not in environment
+    assert environment["HUNTER_TEST_MARKER"] == "preserved"
