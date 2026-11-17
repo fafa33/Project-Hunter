@@ -169,6 +169,49 @@ def _run_push_safety_lane() -> int:
     return exit_code
 
 
+def _run_workflow_trigger_contracts(head_sha: str) -> int:
+    """Validate workflow-trigger invariants only when workflow definitions change."""
+    base = provenance.resolve_governed_base(head_sha)
+    changed = subprocess.run(
+        ("git", "diff", "--name-only", "--diff-filter=ACDMRTUXB", base, head_sha, "--"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if changed.returncode:
+        raise RuntimeError("workflow trigger contract diff is unavailable")
+    if not any(path.startswith(".github/workflows/") for path in changed.stdout.splitlines()):
+        return 0
+    return subprocess.run(
+        (
+            sys.executable,
+            "-m",
+            "pytest",
+            "-q",
+            "tests/test_issue_agent_trigger_workflow_guard.py",
+            "tests/test_issue_agent_workflows.py",
+            "tests/test_hunter_review_orchestrator.py",
+            "-k",
+            "workflow or trigger",
+        ),
+        check=False,
+    ).returncode
+
+
+def _run_mapped_regressions(head_sha: str) -> int:
+    """Run only deterministically mapped changed-file regressions before publication.
+
+    An unmapped/cross-cutting change remains the hosted full-proof owner's
+    responsibility; it must never be interpreted as a local proof exemption.
+    """
+    base = provenance.resolve_governed_base(head_sha)
+    completed = subprocess.run(
+        (sys.executable, "scripts/hunter_ci_impact.py", "--base", base, "--head", head_sha, "--run-focused"),
+        check=False,
+    )
+    return completed.returncode
+
+
 def _lane_label(mode: str) -> str:
     if mode == TESTS_FIRST_RED_MODE:
         return "canonical tests-first-red preflight"
@@ -526,6 +569,16 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
             file=sys.stderr,
         )
         return returncode or 1
+
+    if mode == NORMAL_MODE:
+        workflow_result = _run_workflow_trigger_contracts(before_head)
+        if workflow_result != 0:
+            print("[Hunter Pre-Push] BLOCKED: workflow trigger contract tests failed", file=sys.stderr)
+            return workflow_result
+        mapped_result = _run_mapped_regressions(before_head)
+        if mapped_result != 0:
+            print("[Hunter Pre-Push] BLOCKED: mapped regression tests failed", file=sys.stderr)
+            return mapped_result
 
     after_head = _run_git("rev-parse", "HEAD")
     if after_head != before_head:
