@@ -63,6 +63,7 @@ def test_active_pr_budget_fails_closed(monkeypatch):
 def test_dispatch_targets_trusted_main_and_identity_only(monkeypatch):
     captured = []
     monkeypatch.setattr(poll.subprocess, "run", lambda argv, **kwargs: captured.append(argv))
+    monkeypatch.setattr(poll, "gh_binary", lambda: "gh")
     poll.dispatch(745)
     assert captured == [
         (
@@ -133,3 +134,17 @@ def test_checkpoint_write_failure_prevents_dispatch(monkeypatch, tmp_path):
     monkeypatch.setattr(poll, "dispatch", lambda number: pytest.fail("unsafe dispatch"))
     with pytest.raises(OSError, match="disk full"):
         poll.loop()
+
+
+def test_launchd_path_fallback_finds_homebrew_gh(monkeypatch):
+    monkeypatch.setattr(poll.shutil, "which", lambda _: None)
+    monkeypatch.setattr(poll.Path, "is_file", lambda p: str(p) == "/usr/local/opt/gh/bin/gh")
+    monkeypatch.setattr(poll.os, "access", lambda p, mode: True)
+    assert poll.gh_binary() == "/usr/local/opt/gh/bin/gh"
+
+
+def test_missing_cli_fails_with_actionable_diagnosis(monkeypatch):
+    monkeypatch.setattr(poll.shutil, "which", lambda _: None)
+    monkeypatch.setattr(poll.Path, "is_file", lambda p: False)
+    with pytest.raises(RuntimeError, match="configure launchd PATH"):
+        poll.gh_binary()

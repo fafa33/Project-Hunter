@@ -2,15 +2,9 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "M4 partial: reject PR HEAD drift between current-head check verification and final owner merge decision; full M4 acceptance remains open",
-        "evidence": "Signed commit 134a9c1 adds a second authenticated live PR HEAD read after decide_completion, rejects mismatch with HEAD_DIVERGENCE; 106 focused tests passed including matching/mismatching final HEAD; hosted checks success on PR #753.",
-        "id": "M4-head-drift",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "An authenticated exact-head Codex completion summary stops redundant reviewer waiting but never becomes a review approval or clear verdict",
-        "evidence": "test_codex_exact_head_summary_ends_wait_without_forging_review_authority: authentic matching summary returns unavailable; wrong author or stale HEAD remains waiting; 260 focused collector/governance tests passed.",
-        "id": "codex-summary-boundary",
+        "criterion": "M5 review wakeup remains operational when macOS launchd PATH omits Homebrew gh, without granting merge authority or introducing a review webhook",
+        "evidence": "Existing LaunchAgent logged repeated FileNotFoundError gh; PATH repaired and service restarted; new CLI resolver handles standard and Homebrew paths; 19 targeted tests passed including missing CLI and fallback, and trusted identity-only dispatch contract.",
+        "id": "M5-launchd-gh",
         "verdict": "satisfied"
       }
     ],
@@ -19,7 +13,9 @@
       "caller-controlled-time-state",
       "cutoff-history",
       "fail-closed",
+      "launchd-restricted-path",
       "malformed-unknown-authority",
+      "missing-executable",
       "monotonicity",
       "persistence-restrictions",
       "provider-summary-not-approval",
@@ -28,159 +24,95 @@
       "stale-head-and-check-evidence",
       "tamper-resistance",
       "transaction-snapshot-consistency",
+      "trusted-dispatch-only",
       "unresolved-findings-and-reviewer-unavailability"
     ],
     "base_ref": "main",
-    "base_sha": "c96996e8e32d1a2c3c5fb3fa9f94c31403384905",
+    "base_sha": "19857a83eca1d6a9fee875e48ce1b430ce07899f",
     "defect_families": [
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
-        "family": "DFF-022",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
-        "family": "DFF-024",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
-        "family": "DFF-025",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
-        "family": "DFF-026",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
         "family": "DFF-035",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
-        "family": "DFF-037",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
-        "family": "DFF-040",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
-        "family": "DFF-043",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
-        "family": "DFF-046",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
-        "family": "DFF-050",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
-        "family": "DFF-051",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
-        "family": "DFF-053",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
-        "family": "DFF-055",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
-        "family": "DFF-057",
         "outcome": "clear"
       }
     ],
@@ -188,35 +120,23 @@
     "issue": "588",
     "review_target": [
       {
-        "blob_sha": "d9df4b0cc90961c02b8b8cd7ab00a1dad57c9812",
-        "path": "scripts/hunter_merge_readiness_v2.py",
+        "blob_sha": "f3c0420544b925df40cc476ffba9eff8acc3fcae",
+        "path": "scripts/hunter_review_wakeup_poll.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "a60cdaa7bfed70553bf3f9320c28c2e5fc30217d",
-        "path": "scripts/hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "66c2c2cd791e92533cb20615e54d056710c3a0e4",
-        "path": "tests/test_hunter_merge_readiness_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a49fee613def80172a28c87130507d729143cc39",
-        "path": "tests/test_hunter_reviewer_collector.py",
+        "blob_sha": "cdfbcd237e972dfda410015a9cbe511573e4a84b",
+        "path": "tests/test_hunter_review_wakeup_poll.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "22e31242109f517f0146cd49e823b8dd459600a07d3006e5451fba86b908523f"
+    "review_target_digest": "67a91ae9ddc0ad78c0ba6db6428f43d11617a6ae9eb6b9d72a79ba7339667019"
   },
-  "review_id": "c9201a88f72c7e74b905ad8994a716b194af6f4e73ddf4167a966922c3283999",
+  "review_id": "76d9d48b2ae0c2af65b3585e0d437430a58d963db5f1c8cc25d4b8fd3dd7736f",
   "review_request": {
-    "claims_id": "c9201a88f72c7e74b905ad8994a716b194af6f4e73ddf4167a966922c3283999",
+    "claims_id": "76d9d48b2ae0c2af65b3585e0d437430a58d963db5f1c8cc25d4b8fd3dd7736f",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
