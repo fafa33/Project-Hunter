@@ -6,6 +6,12 @@
         "evidence": "Signed commit 134a9c1 adds a second authenticated live PR HEAD read after decide_completion, rejects mismatch with HEAD_DIVERGENCE; 106 focused tests passed including matching/mismatching final HEAD; hosted checks success on PR #753.",
         "id": "M4-head-drift",
         "verdict": "satisfied"
+      },
+      {
+        "criterion": "An authenticated exact-head Codex completion summary stops redundant reviewer waiting but never becomes a review approval or clear verdict",
+        "evidence": "test_codex_exact_head_summary_ends_wait_without_forging_review_authority: authentic matching summary returns unavailable; wrong author or stale HEAD remains waiting; 260 focused collector/governance tests passed.",
+        "id": "codex-summary-boundary",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -16,6 +22,7 @@
       "malformed-unknown-authority",
       "monotonicity",
       "persistence-restrictions",
+      "provider-summary-not-approval",
       "replay",
       "restart-crash-retry",
       "stale-head-and-check-evidence",
@@ -27,132 +34,152 @@
     "base_sha": "c96996e8e32d1a2c3c5fb3fa9f94c31403384905",
     "defect_families": [
       {
-        "evidence": "M4 exact-head drift diff reviewed against authorization-replay: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against tamper-and-history-forgery: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against connector-provenance-evidence-lifecycle: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against writer-identity-not-authorization-bound: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against stranded-intermediate-commit-evidence: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against stale-receipt-published: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against ready-without-complete-hostile-review: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against pending-prerequisite-reported-as-failure: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against overclaimed-prevention-state: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against validation-proof-reused-without-immutable-identity: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against runtime-bootstrap-not-volume-aware-before-issuer-composition: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against live-instance-execution-ownership-isolation: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against accepted-execution-shutdown-drain-safety: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against merge-readiness-without-current-head-review-authority: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against preflight-not-enforced-before-ledger-claim-on-every-execution-entry-point: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against governance-authority-cutover-dependency-cycle: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "family": "DFF-024",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against external-reviewer-availability-cannot-deadlock-merge-authority: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against candidate-must-pass-canonical-preflight-before-pr-publication: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against tracked-governance-asset-not-loadable-at-its-path: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against external-precondition-asserted-inside-deterministic-test-lane: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against governance-verdict-not-machine-readable: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against lifecycle-event-wiring-asymmetry: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "family": "DFF-040",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "family": "DFF-043",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against remote-green-masks-unpushed-intended-head: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "family": "DFF-050",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-051",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against trusted-preflight-success-masks-unresolved-review-threads: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-053",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against stale-exact-head-review-request-reconcile-terminal-error-loop: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-055",
         "outcome": "clear"
       },
       {
-        "evidence": "M4 exact-head drift diff reviewed against confirmed-and-corrected-finding-reaches-merge-without-a-knowledge-receipt: only authenticated PR HEAD re-read and fail-closed rejection added at owner merge guard; no receipt minting, review authority changes, authorization bypass, or additional workflow. 106 focused tests and hosted required checks passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-057",
         "outcome": "clear"
       }
@@ -167,17 +194,29 @@
         "status": "modified"
       },
       {
+        "blob_sha": "a60cdaa7bfed70553bf3f9320c28c2e5fc30217d",
+        "path": "scripts/hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "66c2c2cd791e92533cb20615e54d056710c3a0e4",
         "path": "tests/test_hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "a49fee613def80172a28c87130507d729143cc39",
+        "path": "tests/test_hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "6413f2b141299dfc82dcb2416022c0536eafb6c9d0302969cd0555ef630fafea"
+    "review_target_digest": "22e31242109f517f0146cd49e823b8dd459600a07d3006e5451fba86b908523f"
   },
-  "review_id": "79cf2e3a28fb844f857831a8b0b2b4bd888c9755bd455c2bacbdf0cb05fb55d1",
+  "review_id": "c9201a88f72c7e74b905ad8994a716b194af6f4e73ddf4167a966922c3283999",
   "review_request": {
-    "claims_id": "79cf2e3a28fb844f857831a8b0b2b4bd888c9755bd455c2bacbdf0cb05fb55d1",
+    "claims_id": "c9201a88f72c7e74b905ad8994a716b194af6f4e73ddf4167a966922c3283999",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
