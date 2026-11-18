@@ -48,11 +48,11 @@ jobs:
   collect:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
-    # Collection enforces the canonical 47-minute total internally (including
-    # trigger, HTTP bodies and retries). Reserve bounded runner/artifact cleanup
-    # outside that deadline; a job cancellation must not erase partial evidence.
-    # Per-step limits sum to this job limit; provider budgets remain unchanged.
-    timeout-minutes: 52
+    # M6 bounded execution: the active Codex-only pool derives a 32-minute hard
+    # reviewer-chain budget from CODE_WRITE_POLICY. Reserve two minutes of
+    # collection headroom plus four bounded one-minute setup/publication/artifact
+    # steps. A runner cancellation must not erase partial evidence.
+    timeout-minutes: 38
     steps:
       - uses: actions/checkout@v7
         timeout-minutes: 1
@@ -60,7 +60,7 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
       - name: Collect actual configured reviewer invocations
-        timeout-minutes: 48
+        timeout-minutes: 34
         env:
           GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ inputs.pr_number }}
