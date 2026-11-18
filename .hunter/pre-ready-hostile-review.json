@@ -18,6 +18,12 @@
         "evidence": "Existing Candidate Admission workflow now has a bounded trusted schedule fallback every ten minutes; scheduled runs enumerate current candidate PRs and omit stale event head binding, forcing fresh exact-head evaluation. 412 focused tests + Defect Prevention Guard + Ruff pass.",
         "id": "PR759-Codex-P3",
         "verdict": "satisfied"
+      },
+      {
+        "criterion": "Scheduled Candidate Admission reconciliation must continue across all open candidates when an earlier PR fails admission, while still returning aggregate failure after the sweep.",
+        "evidence": "Workflow loop now captures each candidate nonzero result, continues the sweep, and exits nonzero afterward if any failed. 413 focused tests + Defect Prevention Guard + Ruff pass.",
+        "id": "PR759-Codex-P4",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -41,7 +47,9 @@
       "pre-ready-security-evidence-boundary",
       "replay",
       "restart-crash-retry",
+      "scheduled-aggregate-failure",
       "scheduled-current-state-recheck",
+      "scheduled-multi-pr-failure-isolation",
       "stale-head-and-check-evidence",
       "tamper-resistance",
       "transaction-snapshot-consistency",
@@ -51,132 +59,132 @@
     "base_sha": "3efbb03f91cff753097559dea47afd15572317ea",
     "defect_families": [
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-052",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
         "family": "DFF-057",
         "outcome": "clear"
       }
@@ -185,7 +193,7 @@
     "issue": "736",
     "review_target": [
       {
-        "blob_sha": "0d89f9dae99d324cd0141393820bfb0e6df728a4",
+        "blob_sha": "6196144a95ce6c7e69a0340a1746f74a66829aec",
         "path": ".github/workflows/hunter-candidate-admission.yml",
         "previous_path": "",
         "status": "modified"
@@ -197,7 +205,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "51ce9da7ce26dfb0459ceea3ea7cd7176ffd2c4f",
+        "blob_sha": "b7580cc10d0f19ea57c96675595b61be8fa1cf48",
         "path": "tests/test_hunter_candidate_admission.py",
         "previous_path": "",
         "status": "modified"
@@ -209,11 +217,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "f14e8049a8aec0cb0e813b3d31f77d8af88e11f26eb98ebe53896d191d753e41"
+    "review_target_digest": "f7cf9154109824f7a21460ab50d9c7d2f52641e9095fe581c0bad20f185e11f4"
   },
-  "review_id": "faedde7763509289a3259470d2d180a49f1aa6107cec5a2a42884f5e2b3cc7cd",
+  "review_id": "1f48ec30cabcbf7e8ef58308e5fe4322628dd9c964d3c588ed423730681f969b",
   "review_request": {
-    "claims_id": "faedde7763509289a3259470d2d180a49f1aa6107cec5a2a42884f5e2b3cc7cd",
+    "claims_id": "1f48ec30cabcbf7e8ef58308e5fe4322628dd9c964d3c588ed423730681f969b",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

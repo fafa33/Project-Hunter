@@ -646,3 +646,15 @@ def test_candidate_admission_schedule_reconciles_late_pre_ready_evidence() -> No
     assert 'if [[ -n "${EVENT_HEAD_SHA}" ]]' in script
     assert '--head-sha "${EVENT_HEAD_SHA}"' in script
     assert "readiness.candidate_prs()" in script
+
+
+def test_scheduled_reconciliation_continues_after_individual_candidate_failure() -> None:
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text())
+    script = workflow["jobs"]["candidate-admission"]["steps"][-1]["run"]
+    assert "ADMISSION_FAILURES=0" in script
+    assert script.count('if ! python "${BRIDGE}" candidate') == 2
+    assert "ADMISSION_FAILURES=1" in script
+    assert 'if [[ "${ADMISSION_FAILURES}" -ne 0 ]]' in script
+    assert "all candidates were still reconciled" in script

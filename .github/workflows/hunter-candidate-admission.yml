@@ -86,16 +86,25 @@ jobs:
           # Legacy invariant marker retained for migration-contract tests: hunter_candidate_admission.py
           B=boot
           BRIDGE="${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/${B}strap_external_review_469.py"
+          ADMISSION_FAILURES=0
           while IFS= read -r PR_NUMBER; do
             [[ -n "${PR_NUMBER}" ]] || continue
             if [[ -n "${EVENT_HEAD_SHA}" ]]; then
-              python "${BRIDGE}" candidate \
+              if ! python "${BRIDGE}" candidate \
                 --pr "${PR_NUMBER}" \
                 --repository "${GH_REPO}" \
-                --head-sha "${EVENT_HEAD_SHA}"
+                --head-sha "${EVENT_HEAD_SHA}"; then
+                ADMISSION_FAILURES=1
+              fi
             else
-              python "${BRIDGE}" candidate \
+              if ! python "${BRIDGE}" candidate \
                 --pr "${PR_NUMBER}" \
-                --repository "${GH_REPO}"
+                --repository "${GH_REPO}"; then
+                ADMISSION_FAILURES=1
+              fi
             fi
           done <<< "${PR_NUMBERS}"
+          if [[ "${ADMISSION_FAILURES}" -ne 0 ]]; then
+            echo "::error::One or more candidate admissions failed; all candidates were still reconciled."
+            exit 1
+          fi
