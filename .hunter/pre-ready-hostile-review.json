@@ -2,9 +2,9 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "M5 review wakeup remains operational when macOS launchd PATH omits Homebrew gh, without granting merge authority or introducing a review webhook",
-        "evidence": "Existing LaunchAgent logged repeated FileNotFoundError gh; PATH repaired and service restarted; new CLI resolver handles standard and Homebrew paths; 19 targeted tests passed including missing CLI and fallback, and trusted identity-only dispatch contract.",
-        "id": "M5-launchd-gh",
+        "criterion": "M5 detects standalone PR issue-comment Codex completion and changes in reviews/threads without granting review authority; pagination must fail closed",
+        "evidence": "Two new regressions failed before fix; GraphQL now queries PR issue comments and checks pagination. 127 focused tests passed, Ruff passed.",
+        "id": "M5-issue-comment-wakeup",
         "verdict": "satisfied"
       }
     ],
@@ -13,6 +13,7 @@
       "caller-controlled-time-state",
       "cutoff-history",
       "fail-closed",
+      "graphql-pagination",
       "launchd-restricted-path",
       "malformed-unknown-authority",
       "missing-executable",
@@ -22,96 +23,97 @@
       "replay",
       "restart-crash-retry",
       "stale-head-and-check-evidence",
+      "standalone-issue-comment",
       "tamper-resistance",
       "transaction-snapshot-consistency",
       "trusted-dispatch-only",
       "unresolved-findings-and-reviewer-unavailability"
     ],
     "base_ref": "main",
-    "base_sha": "19857a83eca1d6a9fee875e48ce1b430ce07899f",
+    "base_sha": "f7418b97946dafa64899dc77d1ae6309c46bd10c",
     "defect_families": [
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewed staged M5 wakeup CLI discovery and focused tests; no change to privileged readiness or review acceptance.",
+        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
         "family": "DFF-035",
         "outcome": "clear"
       }
@@ -120,23 +122,23 @@
     "issue": "588",
     "review_target": [
       {
-        "blob_sha": "f3c0420544b925df40cc476ffba9eff8acc3fcae",
+        "blob_sha": "03617ec12cb790d6ade9f92abc5de32a8446d4f7",
         "path": "scripts/hunter_review_wakeup_poll.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "cdfbcd237e972dfda410015a9cbe511573e4a84b",
+        "blob_sha": "232df265c7b6b95225ba095024750e25b8300129",
         "path": "tests/test_hunter_review_wakeup_poll.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "67a91ae9ddc0ad78c0ba6db6428f43d11617a6ae9eb6b9d72a79ba7339667019"
+    "review_target_digest": "b63c3fded1e039c86f5cd5e51c4be51a7f823bade42378b0d4d63a82912fdc15"
   },
-  "review_id": "76d9d48b2ae0c2af65b3585e0d437430a58d963db5f1c8cc25d4b8fd3dd7736f",
+  "review_id": "52ccdd1f27f590bc0052ad70a166922f504060e5d195afd5f780fd28b5a3f4e3",
   "review_request": {
-    "claims_id": "76d9d48b2ae0c2af65b3585e0d437430a58d963db5f1c8cc25d4b8fd3dd7736f",
+    "claims_id": "52ccdd1f27f590bc0052ad70a166922f504060e5d195afd5f780fd28b5a3f4e3",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
