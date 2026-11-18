@@ -909,11 +909,7 @@ def validate_code_write_policy() -> list[str]:
         reviewer_pool = authority.get("reviewer_pool")
         agents = reviewer_pool.get("agents", []) if isinstance(reviewer_pool, dict) else []
         local = next((a for a in agents if isinstance(a, dict) and a.get("id") == "local-ollama"), None)
-        if (
-            not isinstance(local, dict)
-            or local.get("authority_eligible") is not False
-            or local.get("enabled") is not False
-        ):
+        if local is not None and (local.get("authority_eligible") is not False or local.get("enabled") is not False):
             errors.append("local-ollama must be triage-only and disabled until trusted health admission exists")
         reviewer_pool = authority.get("reviewer_pool")
         if authority.get("fallback") != "none-required":

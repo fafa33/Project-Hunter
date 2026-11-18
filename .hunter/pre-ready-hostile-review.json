@@ -33,152 +33,157 @@
     "base_sha": "f7418b97946dafa64899dc77d1ae6309c46bd10c",
     "defect_families": [
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "family": "DFF-017",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
         "family": "DFF-052",
         "outcome": "clear"
       }
@@ -195,6 +200,12 @@
       {
         "blob_sha": "a2cbec3d51a5a94562ec0d2c9eb3a9751ceceaac",
         "path": "docs/CODE_WRITE_POLICY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "3a0ab2bf5ff4f0766d736015d0cd685a54e5d8be",
+        "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -223,11 +234,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "b06d5bf7734cafdc3196bf5a97e2700f9cfd3c63d1ac6140aa051d9c8abb1b7b"
+    "review_target_digest": "dfb5ab4326ec3241d184f7662553c9d0b110422cc614948fe6e20ee933c998c0"
   },
-  "review_id": "8808c81f931e5765ea8e92e0aebc0c5e67f8f6fc3602f41331a8c68e1dfa8fa2",
+  "review_id": "5e0bfd1b2cd1c5c1297c4834288e824ff7969b436d830183743f3dfa36cbacb3",
   "review_request": {
-    "claims_id": "8808c81f931e5765ea8e92e0aebc0c5e67f8f6fc3602f41331a8c68e1dfa8fa2",
+    "claims_id": "5e0bfd1b2cd1c5c1297c4834288e824ff7969b436d830183743f3dfa36cbacb3",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
