@@ -179,15 +179,26 @@ def enforce_candidate_admission(
         ):
             print(f"PR #{pr_number} stale before Ready transition")
             return 1
+        pre_ready_state, pre_ready_description = ready_checks(
+            repository, token, head_sha, latest.get("mergeable"), pr_number
+        )
+        if pre_ready_state == "pending":
+            print(f"PR #{pr_number} remains Draft: pre-Ready checks are pending: {pre_ready_description}")
+            return 0
+        if pre_ready_state != "success":
+            print(f"PR #{pr_number} remains Draft: pre-Ready checks failed: {pre_ready_description}")
+            return 1
+
         pull_request_node_id = str(latest.get("node_id") or "").strip()
         if not pull_request_node_id:
             print(f"PR #{pr_number} remains Draft: pull-request node id is unavailable")
             return 1
         # The trusted admission controller owns only the Draft -> Ready transition.
-        # Exact-head/base/fork proof above is mandatory; merge remains separately
-        # owner-authorized. Treat the mutation response as advisory and confirm the
-        # resulting state through a fresh primary-token read to handle ambiguous
-        # GraphQL transport outcomes without forging readiness.
+        # Exact-head/base/fork and current security/evidence checks above are
+        # mandatory; merge remains separately owner-authorized. Treat the mutation
+        # response as advisory and confirm the resulting state through a fresh
+        # primary-token read to handle ambiguous GraphQL outcomes without forging
+        # readiness.
         mark_ready(mutation_token, pull_request_node_id)
         confirmed = governance.read_mergeability(repository, token, pr_number)
         if (
@@ -197,7 +208,17 @@ def enforce_candidate_admission(
             or (confirmed.get("base") or {}).get("sha") != (pr.get("base") or {}).get("sha")
             or confirmed.get("node_id") != pr.get("node_id")
         ):
-            print(f"PR #{pr_number} Ready transition was not confirmed on the exact admitted candidate")
+            # The privileged mutation may already have taken effect even though the
+            # candidate changed before confirmation. Restore Draft on the still-open
+            # PR so a HEAD/base/node race cannot leave an unadmitted candidate Ready.
+            if confirmed.get("state") == "open" and confirmed.get("draft") is False:
+                rollback_node_id = str(confirmed.get("node_id") or pull_request_node_id).strip()
+                if not convert_to_draft(mutation_token, rollback_node_id):
+                    print(f"PR #{pr_number} Ready confirmation raced and Draft rollback was not confirmed")
+                else:
+                    print(f"PR #{pr_number} Ready confirmation raced; restored Draft fail-closed")
+            else:
+                print(f"PR #{pr_number} Ready transition was not confirmed on the exact admitted candidate")
             return 1
         print(f"PR #{pr_number} admitted and promoted Ready on exact head {head_sha}")
         return 0

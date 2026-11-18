@@ -12,6 +12,7 @@ from test_issue_496_prevention_loop_binding import _build, _compiled_prompt_cont
 
 
 def test_known_defect_blocks_admission_then_corrected_proof_promotes_ready(monkeypatch, tmp_path):
+    monkeypatch.setattr(admission, "ready_checks", lambda *_: ("success", "security/evidence checks pass"))
     """An applicable prevention rule remains in the signed build; a failing
     exact-head trusted preflight must not transition Draft to Ready.
     """

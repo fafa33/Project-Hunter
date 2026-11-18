@@ -2,9 +2,15 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "After exact-head candidate admission succeeds for a safe same-repository Draft PR, the trusted controller must perform Draft\u2192Ready using the existing narrow mutation token, then confirm open/non-Draft/exact-head/base/node state by fresh read. Any historical regression expecting owner-only Ready must be updated to the canonical automatic-admission contract; ambiguous mutation without confirmed Ready fails closed. Merge approval remains separate and manual.",
-        "evidence": "32 direct/legacy candidate-contract tests pass after updating the stale Issue #496 owner-only Ready expectation; related readiness/review-wakeup suites and Defect Prevention Guard previously passed.",
-        "id": "ISSUE-736-native-ready",
+        "criterion": "Draft\u2192Ready promotion must require current ready_checks security/evidence success before mark_ready; pending stays Draft and failure stays Draft/fails closed.",
+        "evidence": "ready_checks now runs after exact-head/base/node recheck and before mutation; explicit pending/failure regressions pass.",
+        "id": "PR759-Codex-P1",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "If post-mutation confirmation detects HEAD/base/node/state race, the still-open Ready PR must be restored to Draft using the existing mutation token.",
+        "evidence": "post-mutation mismatch now invokes convert_to_draft fail-closed; dedicated HEAD-race and base-race regressions pass.",
+        "id": "PR759-Codex-P2",
         "verdict": "satisfied"
       }
     ],
@@ -23,6 +29,9 @@
       "monotonicity",
       "mutation-token-routing",
       "persistence-restrictions",
+      "post-ready-base-race-rollback",
+      "post-ready-head-race-rollback",
+      "pre-ready-security-evidence-boundary",
       "replay",
       "restart-crash-retry",
       "stale-head-and-check-evidence",
@@ -34,107 +43,107 @@
     "base_sha": "3efbb03f91cff753097559dea47afd15572317ea",
     "defect_families": [
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 change restores existing trusted Ready mutation only after exact-head/base/fork/node rechecks and confirms resulting state; no merge authority added.",
+        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
         "family": "DFF-057",
         "outcome": "clear"
       }
@@ -143,29 +152,29 @@
     "issue": "736",
     "review_target": [
       {
-        "blob_sha": "c8ba78319cc7037f042714956a7a9661719c71a0",
+        "blob_sha": "e5343928e3082f675bc27e5c5798e7e9d540615d",
         "path": "scripts/hunter_candidate_admission.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d17bcda449185cae7e0fb5b2c2ad568ab3f14a72",
+        "blob_sha": "f1dbbd45e5465798ab02facdbe6e9c5dc112037b",
         "path": "tests/test_hunter_candidate_admission.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "27ef382ae45a968eaf53dfa70ea1128d8f7da3fb",
+        "blob_sha": "4d836b09696379e4f6fd129114f0e7f3cf85a882",
         "path": "tests/test_issue_496_candidate_contract.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "e7e192c2ef8f8319574786858659c93fc76fcddf1b7e61d04be94189bd3c9760"
+    "review_target_digest": "37b0a7b0b652a777a69cdc20f3eda30683cb5512f6ab3c490e66d164d1b95d7b"
   },
-  "review_id": "439b64028bbd5dc809beb3f3677101e4998a133fa51e3312924aec1a1fea2f0f",
+  "review_id": "570246bcdc85dfc5260c42f2cfa20955ea4791805c5607ed8fb85257b0cacda3",
   "review_request": {
-    "claims_id": "439b64028bbd5dc809beb3f3677101e4998a133fa51e3312924aec1a1fea2f0f",
+    "claims_id": "570246bcdc85dfc5260c42f2cfa20955ea4791805c5607ed8fb85257b0cacda3",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
