@@ -2,9 +2,9 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Only Codex may be enabled; trusted-main admission must continue to verify the inert local sentinel until a separate controller cutover",
-        "evidence": "Enabled reviewer set is exactly Codex; local-ollama is disabled and authority_eligible=false; Gemini/Groq/Copilot absent; 559 tests pass.",
-        "id": "PR755-bootstrap-compatible-codex-only",
+        "criterion": "One focused local lane; one canonical hosted full proof per immutable head except trusted-definition changes; parallel independent checks; per-stage deadlines and bounded reviewer retry/timeout; unavailable reviewers nonblocking while substantive findings remain blocking.",
+        "evidence": "Existing proof-reuse, parallel-lane, terminal-state and finding-block regressions pass. Reviewer collector old 52-minute envelope reduced to 38 minutes around the current 1920-second active-pool hard bound. 500 focused tests, Defect Prevention Guard and Ruff pass.",
+        "id": "M6-bounded-execution",
         "verdict": "satisfied"
       }
     ],
@@ -14,6 +14,7 @@
       "cutoff-history",
       "fail-closed",
       "graphql-pagination",
+      "immutable-head-deduplication",
       "launchd-restricted-path",
       "malformed-unknown-authority",
       "missing-executable",
@@ -22,173 +23,127 @@
       "provider-summary-not-approval",
       "replay",
       "restart-crash-retry",
+      "reviewer-timeout-budget",
+      "reviewer-unavailability",
       "stale-head-and-check-evidence",
       "standalone-issue-comment",
+      "substantive-finding-blocking",
       "tamper-resistance",
       "transaction-snapshot-consistency",
+      "trusted-definition-full-proof-exception",
       "trusted-dispatch-only",
       "unresolved-findings-and-reviewer-unavailability"
     ],
     "base_ref": "main",
-    "base_sha": "f7418b97946dafa64899dc77d1ae6309c46bd10c",
+    "base_sha": "78050cef347b005fe9484b9fe76044c16fde7cce",
     "defect_families": [
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
-        "family": "DFF-007",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
-        "family": "DFF-008",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
-        "family": "DFF-017",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
-        "family": "DFF-019",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
-        "family": "DFF-020",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
-        "family": "DFF-021",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
-        "family": "DFF-023",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
-        "family": "DFF-026",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
-        "family": "DFF-038",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
-        "family": "DFF-045",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
+        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
         "family": "DFF-052",
         "outcome": "clear"
       }
@@ -197,77 +152,23 @@
     "issue": "588",
     "review_target": [
       {
-        "blob_sha": "67f801ad28654aa8f27dfee3b221dd44775dbda7",
+        "blob_sha": "180fbd83434be5d3118b3736d33ce8e1365b812e",
         "path": ".github/workflows/hunter-reviewer-collector.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "2d55e16fdd9dfa9084eb5cacd391bd6ec9194f96",
-        "path": "docs/CODE_WRITE_POLICY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "416654500802b3664182146c0f33999feb6c098b",
-        "path": "docs/DEFECT_REGISTRY.json",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "3a0ab2bf5ff4f0766d736015d0cd685a54e5d8be",
-        "path": "scripts/hunter_defect_prevention_preflight.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "03617ec12cb790d6ade9f92abc5de32a8446d4f7",
-        "path": "scripts/hunter_review_wakeup_poll.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "94365ba6ad613c109d1a25ed4678efa8bb8a8674",
-        "path": "tests/test_code_write_policy.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "a2a3020fe5a2d452b4e15b5ddbc66b59b2d3ddd8",
-        "path": "tests/test_hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "232df265c7b6b95225ba095024750e25b8300129",
-        "path": "tests/test_hunter_review_wakeup_poll.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "d7e71e7efa6562d0a7579057bfa217cdd2703633",
-        "path": "tests/test_hunter_reviewer_benchmark.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "1c472cf4a70cc9ab8e712e4cb20efa5c4f1459e7",
-        "path": "tests/test_hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "08aa81e5dc48dd473735003ec6428184d66b8dcd",
-        "path": "tests/test_review_orchestrator_collector_finalization.py",
+        "blob_sha": "258bbcff7fd13fecc84607a95617e0ec57d70e54",
+        "path": "tests/test_reviewer_collector_deadlines.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "da69a930103c913596d4874db1196f2b55583ee7b67558ad81731d054a9bfa80"
+    "review_target_digest": "5aa1f2848da7a1210bde9b8b919a720e0569bcf141248a8c0be4616eab046fcd"
   },
-  "review_id": "21ed22f2ae9d3bf660816f6280213c3aa03baff2d9f93f2938eabcf814c157b8",
+  "review_id": "d2619711ec8ddbec4a778ba038f26b91bbc78e105907327a429d09e37f1b4c8f",
   "review_request": {
-    "claims_id": "21ed22f2ae9d3bf660816f6280213c3aa03baff2d9f93f2938eabcf814c157b8",
+    "claims_id": "d2619711ec8ddbec4a778ba038f26b91bbc78e105907327a429d09e37f1b4c8f",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

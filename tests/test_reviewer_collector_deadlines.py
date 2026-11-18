@@ -225,6 +225,12 @@ def test_workflow_reserves_bounded_cleanup_and_separates_partial_artifacts():
     configured, error = review.load_reviewer_pool()
     assert configured is not None and not error
     assert collection["timeout-minutes"] * 60 > review.reviewer_chain_worst_case_seconds(configured)
+    # M6: retired reviewer budgets may not leave this exact-head cycle parked
+    # behind the old multi-provider 52-minute envelope. The workflow budget is
+    # derived with small cleanup headroom around the live pool's hard bound.
+    chain_seconds = review.reviewer_chain_worst_case_seconds(configured)
+    assert job["timeout-minutes"] <= (chain_seconds + 6 * 60 + 59) // 60
+    assert collection["timeout-minutes"] <= (chain_seconds + 2 * 60 + 59) // 60
     uploads = [step for step in steps if step.get("uses", "").startswith("actions/upload-artifact@")]
     diagnostics = next(step for step in uploads if step["with"]["path"] == "reviewer-progress.json")
     assert diagnostics["if"] == "always()"
