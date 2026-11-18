@@ -2,27 +2,15 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Draft\u2192Ready promotion must require current ready_checks security/evidence success before mark_ready; pending stays Draft and failure stays Draft/fails closed.",
-        "evidence": "ready_checks now runs after exact-head/base/node recheck and before mutation; explicit pending/failure regressions pass.",
-        "id": "PR759-Codex-P1",
+        "criterion": "Draft\u2192Ready promotion must consume the live PR/head-bound Issue acceptance verdict; pending or failed registered-Issue acceptance must not promote.",
+        "evidence": "ready_checks now supplies governance.issue_acceptance_state(...) to StaticReadinessObservation; dedicated pending/failure regression passes.",
+        "id": "ISSUE-736-acceptance-gate",
         "verdict": "satisfied"
       },
       {
-        "criterion": "If post-mutation confirmation detects HEAD/base/node/state race, the still-open Ready PR must be restored to Draft using the existing mutation token.",
-        "evidence": "post-mutation mismatch now invokes convert_to_draft fail-closed; dedicated HEAD-race and base-race regressions pass.",
-        "id": "PR759-Codex-P2",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "If pre-Ready security/evidence checks are pending after preflight completion, trusted Candidate Admission must reconcile later without manual Ready intervention, using the same controller and current live PR state.",
-        "evidence": "Existing Candidate Admission workflow now has a bounded trusted schedule fallback every ten minutes; scheduled runs enumerate current candidate PRs and omit stale event head binding, forcing fresh exact-head evaluation. 412 focused tests + Defect Prevention Guard + Ruff pass.",
-        "id": "PR759-Codex-P3",
-        "verdict": "satisfied"
-      },
-      {
-        "criterion": "Scheduled Candidate Admission reconciliation must continue across all open candidates when an earlier PR fails admission, while still returning aggregate failure after the sweep.",
-        "evidence": "Workflow loop now captures each candidate nonzero result, continues the sweep, and exits nonzero afterward if any failed. 413 focused tests + Defect Prevention Guard + Ruff pass.",
-        "id": "PR759-Codex-P4",
+        "criterion": "If mark_ready may have succeeded but the post-mutation confirmation read fails, the controller must attempt fail-closed Draft restoration using the already-verified node id and mutation token.",
+        "evidence": "Confirmation read is caught; convert_to_draft is attempted before returning failure; dedicated API-outage rollback regression passes.",
+        "id": "ISSUE-736-confirmation-read-rollback",
         "verdict": "satisfied"
       }
     ],
@@ -36,20 +24,21 @@
       "duplicate-ready-idempotency",
       "fail-closed",
       "fail-closed-admission-and-receipt",
+      "fail-closed-draft-rollback",
       "fork-ready-block",
-      "late-security-evidence-reconciliation",
+      "late-codeql-evidence",
+      "late-knowledge-receipt",
       "malformed-unknown-authority",
       "monotonicity",
       "mutation-token-routing",
+      "no-stale-event-head-on-schedule",
       "persistence-restrictions",
-      "post-ready-base-race-rollback",
-      "post-ready-head-race-rollback",
-      "pre-ready-security-evidence-boundary",
+      "post-ready-confirmation-read-outage",
+      "registered-issue-acceptance-failure",
+      "registered-issue-acceptance-pending",
       "replay",
       "restart-crash-retry",
-      "scheduled-aggregate-failure",
-      "scheduled-current-state-recheck",
-      "scheduled-multi-pr-failure-isolation",
+      "scheduled-current-head-reconcile",
       "stale-head-and-check-evidence",
       "tamper-resistance",
       "transaction-snapshot-consistency",
@@ -59,132 +48,132 @@
     "base_sha": "3efbb03f91cff753097559dea47afd15572317ea",
     "defect_families": [
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-052",
         "outcome": "clear"
       },
       {
-        "evidence": "PR #759 Codex findings P1-P4 fixed in the existing Candidate Admission controller/workflow; no new orchestrator or authority. 413 focused tests pass.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-057",
         "outcome": "clear"
       }
@@ -199,13 +188,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "e5343928e3082f675bc27e5c5798e7e9d540615d",
+        "blob_sha": "a033b16e60b0f42bbe341996cf9cfccb946b1888",
         "path": "scripts/hunter_candidate_admission.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "b7580cc10d0f19ea57c96675595b61be8fa1cf48",
+        "blob_sha": "2c54c1b098a901c0b693428793f045079b87a0b0",
         "path": "tests/test_hunter_candidate_admission.py",
         "previous_path": "",
         "status": "modified"
@@ -217,11 +206,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "f7cf9154109824f7a21460ab50d9c7d2f52641e9095fe581c0bad20f185e11f4"
+    "review_target_digest": "361cfafab7d00329c084e0ad1e309ec2e133421d443e25c72d8e78a0402e6321"
   },
-  "review_id": "1f48ec30cabcbf7e8ef58308e5fe4322628dd9c964d3c588ed423730681f969b",
+  "review_id": "4078f0268221d9a1807ebdeb1c33cede75fd8ea56ce85e7663351b28b0760973",
   "review_request": {
-    "claims_id": "1f48ec30cabcbf7e8ef58308e5fe4322628dd9c964d3c588ed423730681f969b",
+    "claims_id": "4078f0268221d9a1807ebdeb1c33cede75fd8ea56ce85e7663351b28b0760973",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

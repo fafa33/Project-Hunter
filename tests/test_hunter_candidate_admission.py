@@ -495,6 +495,11 @@ def test_main_without_app_mutation_token_falls_back(monkeypatch) -> None:
 
 
 def test_ready_checks_is_success_with_a_trusted_knowledge_receipt_status(monkeypatch) -> None:
+    monkeypatch.setattr(
+        admission.governance,
+        "issue_acceptance_state",
+        lambda *_: ("success", "not governed"),
+    )
     receipt_status = {
         "id": 1,
         "context": "Hunter Knowledge Receipt / PR #371",
@@ -530,6 +535,11 @@ def test_ready_checks_is_success_with_a_trusted_knowledge_receipt_status(monkeyp
 
 
 def test_ready_checks_is_not_success_with_no_knowledge_receipt_status(monkeypatch) -> None:
+    monkeypatch.setattr(
+        admission.governance,
+        "issue_acceptance_state",
+        lambda *_: ("success", "not governed"),
+    )
     """The gap Copilot found: StaticReadinessObservation no longer defaults this to success, so an
 
     absent Knowledge Receipt status must leave ready_checks pending, never silently success.
@@ -553,6 +563,11 @@ def test_ready_checks_is_not_success_with_no_knowledge_receipt_status(monkeypatc
 
 
 def test_ready_checks_rejects_duplicate_receipts_hidden_by_default_latest_filter(monkeypatch) -> None:
+    monkeypatch.setattr(
+        admission.governance,
+        "issue_acceptance_state",
+        lambda *_: ("success", "not governed"),
+    )
     """Candidate admission must inspect every check run, including older same-name receipts."""
     import hunter_merge_readiness_v2 as readiness
 
@@ -658,3 +673,73 @@ def test_scheduled_reconciliation_continues_after_individual_candidate_failure()
     assert "ADMISSION_FAILURES=1" in script
     assert 'if [[ "${ADMISSION_FAILURES}" -ne 0 ]]' in script
     assert "all candidates were still reconciled" in script
+
+
+def test_ready_checks_enforces_registered_issue_acceptance(monkeypatch):
+    import hunter_merge_readiness_v2 as readiness
+
+    receipt = {
+        "name": "Hunter Knowledge Receipt / PR #371",
+        "external_id": f"knowledge-receipt:v1:371:{HEAD}",
+        "head_sha": HEAD,
+        "app": {"slug": "github-actions"},
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-11-15T13:00:00Z",
+        "output": {"summary": "verified [rt:44136fa355b3678a]"},
+    }
+
+    def fake_request(_repo: str, _token: str, _method: str, path: str):
+        if "check-runs" in path:
+            return {
+                "check_runs": [
+                    {"id": n, "name": name, "status": "completed", "conclusion": "success"}
+                    for n, name in enumerate(("Quality Gates", "dependency-review", "CodeQL"), 1)
+                ]
+                + [receipt]
+            }
+        return [{"id": 1, "context": "Hunter Governance Review", "state": "success"}]
+
+    monkeypatch.setattr(admission.governance, "request_json", fake_request)
+    monkeypatch.setattr(readiness, "_status_age_seconds", lambda _status: 1.0)
+    monkeypatch.setattr(readiness, "knowledge_receipt_check_bound", lambda *_: ("success", "receipt verified"))
+    monkeypatch.setattr(
+        admission.governance, "issue_acceptance_state", lambda *_: ("pending", "acceptance evidence pending")
+    )
+    state, detail = admission.ready_checks("fafa33/Project-Hunter", "token", HEAD, True, 371)
+    assert state == "pending"
+    assert "acceptance" in detail.lower()
+
+    monkeypatch.setattr(admission.governance, "issue_acceptance_state", lambda *_: ("failure", "acceptance failed"))
+    state, detail = admission.ready_checks("fafa33/Project-Hunter", "token", HEAD, True, 371)
+    assert state == "failure"
+    assert "acceptance" in detail.lower()
+
+
+def test_post_ready_confirmation_read_failure_restores_draft(monkeypatch):
+    initial = _pr(draft=True)
+    latest = _pr(draft=True)
+    calls = {"read": 0}
+
+    def read_mergeability(*_args):
+        calls["read"] += 1
+        if calls["read"] == 1:
+            return initial
+        if calls["read"] == 2:
+            return latest
+        raise RuntimeError("GitHub API unavailable")
+
+    monkeypatch.setattr(admission.governance, "read_mergeability", read_mergeability)
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "ready_checks", lambda *_: ("success", "checks pass"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: True)
+    rolled_back: list[tuple[str, str]] = []
+
+    def rollback(token: str, node: str) -> bool:
+        rolled_back.append((token, node))
+        return True
+
+    monkeypatch.setattr(admission, "convert_to_draft", rollback)
+
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "read-token", 616, HEAD, "app-token") == 1
+    assert rolled_back == [("app-token", "PR_test_node")]

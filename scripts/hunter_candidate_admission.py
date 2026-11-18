@@ -109,6 +109,7 @@ def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | N
         # a fingerprinted verdict against live review-thread state before this privileged Draft
         # Promotion path trusts it (ADR 0039 L11 hardening, Copilot F1/F3, PR #737; Issue #586).
         knowledge_receipt = readiness.knowledge_receipt_check_bound(checks, pr_number, head_sha)
+        issue_acceptance = governance.issue_acceptance_state(repository, token, head_sha, pr_number)
         decision = readiness.evaluate(
             readiness.StaticReadinessObservation(
                 draft=False,
@@ -117,6 +118,7 @@ def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | N
                 check_runs=tuple(checks),
                 governance_status=latest,
                 knowledge_receipt=knowledge_receipt,
+                issue_acceptance=issue_acceptance,
             )
         )
         return decision.state, decision.description
@@ -200,7 +202,16 @@ def enforce_candidate_admission(
         # primary-token read to handle ambiguous GraphQL outcomes without forging
         # readiness.
         mark_ready(mutation_token, pull_request_node_id)
-        confirmed = governance.read_mergeability(repository, token, pr_number)
+        try:
+            confirmed = governance.read_mergeability(repository, token, pr_number)
+        except Exception as exc:
+            # The Ready mutation may have succeeded even if the confirmation
+            # read is unavailable. Restore Draft with the already-verified node
+            # id so an API outage cannot leave an unconfirmed candidate Ready.
+            rolled_back = convert_to_draft(mutation_token, pull_request_node_id)
+            outcome = "restored Draft" if rolled_back else "Draft rollback was not confirmed"
+            print(f"PR #{pr_number} Ready confirmation read failed " f"({type(exc).__name__}: {exc}); {outcome}.")
+            return 1
         if (
             confirmed.get("state") != "open"
             or confirmed.get("draft") is not False
