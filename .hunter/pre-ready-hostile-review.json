@@ -2,8 +2,8 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "For every future PR, authenticated Codex exact-head completion must terminalize optional reviewer orchestration before collector dispatch and must terminalize an already-pending same-head cycle, without overwriting real REVIEW_CLEAR/FINDINGS_OPEN authority.",
-        "evidence": "Canonical orchestrator now performs pre-dispatch exact-head Codex completion dedup in trusted GitHub Actions context. Direct helper author/head binding plus absent-cycle, pending-cycle, and terminal-preservation regressions pass. 650 focused tests + Defect Prevention Guard + Ruff pass.",
+        "criterion": "Repository-wide Codex exact-head completion dedup must run only in the authenticated GitHub Actions context for the same GITHUB_REPOSITORY, preventing synthetic or cross-repository test/runtime contamination while preserving no-dispatch and pending-cycle terminalization.",
+        "evidence": "Guard now requires GITHUB_ACTIONS=true and GITHUB_REPOSITORY==repository before reading Codex completion. Previously failing remediation-generation CI fixtures now pass; 687 focused tests + Defect Prevention Guard + Ruff pass.",
         "id": "M7-codex-pre-dispatch-dedup",
         "verdict": "satisfied"
       }
@@ -11,6 +11,7 @@
     "adversarial_dimensions": [
       "authorization",
       "caller-controlled-time-state",
+      "ci-fixture-isolation",
       "codex-author-and-head-binding",
       "codex-null-finding-summary",
       "cutoff-history",
@@ -27,6 +28,7 @@
       "provider-completion-not-authority",
       "provider-summary-not-approval",
       "replay",
+      "repository-binding",
       "restart-crash-retry",
       "shadow-false-ready",
       "shadow-head-drift",
@@ -224,7 +226,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "8bc5f1232cdf4f880739548fa42c22fc4358bd22",
+        "blob_sha": "727b0fce6d5df2d2d3a7b616279fc45bfab321a7",
         "path": "scripts/hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
@@ -242,7 +244,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "33a209789f1831263ffc6407436135a3980188b7",
+        "blob_sha": "595f08cb2a37ed5593a1ff8e50b01794cf499803",
         "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
@@ -254,11 +256,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "891e26b390b293d4a275137dcef1c36bb9558a638a9f69a3192a70b097242f33"
+    "review_target_digest": "cb77089d38e64178b5fd891040cbb9d31bb74325a275207a17bba4dffe21d97b"
   },
-  "review_id": "be3c223b152e29dbb2f8c65d77c35ccc4e56cbdad6b3e12976a5cd9aa6ea85d7",
+  "review_id": "9ad62a935852d335212db1f1ef850a2ee7d77ed8d2315129b5e0098abbdc091b",
   "review_request": {
-    "claims_id": "be3c223b152e29dbb2f8c65d77c35ccc4e56cbdad6b3e12976a5cd9aa6ea85d7",
+    "claims_id": "9ad62a935852d335212db1f1ef850a2ee7d77ed8d2315129b5e0098abbdc091b",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

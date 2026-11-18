@@ -1261,8 +1261,10 @@ def ensure_collector(
     # never spend another optional collector window waiting for the same provider.
     # Completion is deliberately mapped to the existing non-authoritative terminal
     # state; findings/approval remain owned by their canonical evidence paths.
-    if os.environ.get("GITHUB_ACTIONS") == "true" and exact_head_codex_completion(
-        repository, token, pr_number, head_sha
+    if (
+        os.environ.get("GITHUB_ACTIONS") == "true"
+        and os.environ.get("GITHUB_REPOSITORY") == repository
+        and exact_head_codex_completion(repository, token, pr_number, head_sha)
     ):
         if (
             state == "present"

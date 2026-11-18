@@ -2694,6 +2694,7 @@ def test_reconcile_workflow_passes_expected_head_to_both_trusted_controllers():
 
 def test_exact_head_codex_completion_prevents_new_collector_dispatch(monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     published = []
     dispatched = []
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64)
@@ -2713,6 +2714,7 @@ def test_exact_head_codex_completion_prevents_new_collector_dispatch(monkeypatch
 
 def test_exact_head_codex_completion_terminalizes_existing_waiting_cycle(monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     existing = make_cycle(state="WAITING_FOR_REVIEWER", trigger_id=44354386709)
     published = []
     dispatched = []
@@ -2733,6 +2735,7 @@ def test_exact_head_codex_completion_terminalizes_existing_waiting_cycle(monkeyp
 
 def test_exact_head_codex_completion_never_overwrites_real_terminal_authority(monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
     for state in ("REVIEW_CLEAR", "FINDINGS_OPEN", "REVIEWER_UNAVAILABLE"):
         existing = make_cycle(state=state, trigger_id=123)
         published = []
