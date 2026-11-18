@@ -2,15 +2,16 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "An authenticated exact-head Codex summary with status=completed must end optional reviewer waiting even when finding-summary fields are null; it must not create review/merge authority, while unresolved threads and CHANGES_REQUESTED remain fail-closed.",
-        "evidence": "Added separate completed-vs-clear parser semantics; collector uses completed only to terminalize unavailability. 646 focused tests + Defect Prevention Guard + Ruff pass.",
-        "id": "M7-codex-completion-terminal",
+        "criterion": "For every future PR, authenticated Codex exact-head completion must terminalize optional reviewer orchestration before collector dispatch and must terminalize an already-pending same-head cycle, without overwriting real REVIEW_CLEAR/FINDINGS_OPEN authority.",
+        "evidence": "Canonical orchestrator now performs pre-dispatch exact-head Codex completion dedup in trusted GitHub Actions context. Direct helper author/head binding plus absent-cycle, pending-cycle, and terminal-preservation regressions pass. 650 focused tests + Defect Prevention Guard + Ruff pass.",
+        "id": "M7-codex-pre-dispatch-dedup",
         "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
       "authorization",
       "caller-controlled-time-state",
+      "codex-author-and-head-binding",
       "codex-null-finding-summary",
       "cutoff-history",
       "fail-closed",
@@ -20,7 +21,9 @@
       "missing-executable",
       "monotonicity",
       "non-authoritative-rollout",
+      "pending-cycle-terminalization",
       "persistence-restrictions",
+      "pre-dispatch-provider-completion-dedup",
       "provider-completion-not-authority",
       "provider-summary-not-approval",
       "replay",
@@ -31,6 +34,7 @@
       "stale-head-and-check-evidence",
       "standalone-issue-comment",
       "tamper-resistance",
+      "terminal-authority-preservation",
       "transaction-snapshot-consistency",
       "trusted-dispatch-only",
       "unresolved-findings-and-reviewer-unavailability"
@@ -39,152 +43,167 @@
     "base_sha": "6938aacc7496ec37eacce7f2d90d70f852fe7108",
     "defect_families": [
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-039",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
+        "family": "DFF-042",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
+        "family": "DFF-044",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
+        "family": "DFF-046",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-050",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-053",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-055",
         "outcome": "clear"
       },
       {
-        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "evidence": "Root fix lives in canonical ensure_collector path, applies repository-wide to future PRs, authenticates Codex author + exact head, and never grants review/merge authority. 650 focused tests pass.",
         "family": "DFF-057",
         "outcome": "clear"
       }
@@ -205,6 +224,12 @@
         "status": "modified"
       },
       {
+        "blob_sha": "8bc5f1232cdf4f880739548fa42c22fc4358bd22",
+        "path": "scripts/hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "e32ea1e4c824361eb80108fe2bc0eff80c0adfcf",
         "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
@@ -217,17 +242,23 @@
         "status": "modified"
       },
       {
+        "blob_sha": "33a209789f1831263ffc6407436135a3980188b7",
+        "path": "tests/test_hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "35ac0f74331f0679a660a97a3b21e076b8876177",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "96b36a01faa4495fa3385bf7942c5bc6b77ded11255c248586cd9d1f0c77e4cd"
+    "review_target_digest": "891e26b390b293d4a275137dcef1c36bb9558a638a9f69a3192a70b097242f33"
   },
-  "review_id": "5d7de449933c883d03f4380b708ad528133e2c712b783e3596af75eaa6bff493",
+  "review_id": "be3c223b152e29dbb2f8c65d77c35ccc4e56cbdad6b3e12976a5cd9aa6ea85d7",
   "review_request": {
-    "claims_id": "5d7de449933c883d03f4380b708ad528133e2c712b783e3596af75eaa6bff493",
+    "claims_id": "be3c223b152e29dbb2f8c65d77c35ccc4e56cbdad6b3e12976a5cd9aa6ea85d7",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
