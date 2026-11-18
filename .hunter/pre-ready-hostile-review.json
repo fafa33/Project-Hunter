@@ -12,6 +12,12 @@
         "evidence": "post-mutation mismatch now invokes convert_to_draft fail-closed; dedicated HEAD-race and base-race regressions pass.",
         "id": "PR759-Codex-P2",
         "verdict": "satisfied"
+      },
+      {
+        "criterion": "If pre-Ready security/evidence checks are pending after preflight completion, trusted Candidate Admission must reconcile later without manual Ready intervention, using the same controller and current live PR state.",
+        "evidence": "Existing Candidate Admission workflow now has a bounded trusted schedule fallback every ten minutes; scheduled runs enumerate current candidate PRs and omit stale event head binding, forcing fresh exact-head evaluation. 412 focused tests + Defect Prevention Guard + Ruff pass.",
+        "id": "PR759-Codex-P3",
+        "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
@@ -25,6 +31,7 @@
       "fail-closed",
       "fail-closed-admission-and-receipt",
       "fork-ready-block",
+      "late-security-evidence-reconciliation",
       "malformed-unknown-authority",
       "monotonicity",
       "mutation-token-routing",
@@ -34,6 +41,7 @@
       "pre-ready-security-evidence-boundary",
       "replay",
       "restart-crash-retry",
+      "scheduled-current-state-recheck",
       "stale-head-and-check-evidence",
       "tamper-resistance",
       "transaction-snapshot-consistency",
@@ -43,107 +51,132 @@
     "base_sha": "3efbb03f91cff753097559dea47afd15572317ea",
     "defect_families": [
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "family": "DFF-028",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "family": "DFF-036",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1/P2 fixed at the privileged Draft\u2192Ready boundary; 160 focused readiness/admission tests, Defect Prevention Guard and Ruff pass.",
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "family": "DFF-046",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
+        "family": "DFF-052",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "PR #759 Codex P1/P2/P3 fixed at the existing Candidate Admission boundary; no new orchestrator or authority. 412 focused tests pass.",
         "family": "DFF-057",
         "outcome": "clear"
       }
@@ -152,13 +185,19 @@
     "issue": "736",
     "review_target": [
       {
+        "blob_sha": "0d89f9dae99d324cd0141393820bfb0e6df728a4",
+        "path": ".github/workflows/hunter-candidate-admission.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "e5343928e3082f675bc27e5c5798e7e9d540615d",
         "path": "scripts/hunter_candidate_admission.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "f1dbbd45e5465798ab02facdbe6e9c5dc112037b",
+        "blob_sha": "51ce9da7ce26dfb0459ceea3ea7cd7176ffd2c4f",
         "path": "tests/test_hunter_candidate_admission.py",
         "previous_path": "",
         "status": "modified"
@@ -170,11 +209,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "37b0a7b0b652a777a69cdc20f3eda30683cb5512f6ab3c490e66d164d1b95d7b"
+    "review_target_digest": "f14e8049a8aec0cb0e813b3d31f77d8af88e11f26eb98ebe53896d191d753e41"
   },
-  "review_id": "570246bcdc85dfc5260c42f2cfa20955ea4791805c5607ed8fb85257b0cacda3",
+  "review_id": "faedde7763509289a3259470d2d180a49f1aa6107cec5a2a42884f5e2b3cc7cd",
   "review_request": {
-    "claims_id": "570246bcdc85dfc5260c42f2cfa20955ea4791805c5607ed8fb85257b0cacda3",
+    "claims_id": "faedde7763509289a3259470d2d180a49f1aa6107cec5a2a42884f5e2b3cc7cd",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

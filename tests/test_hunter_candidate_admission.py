@@ -212,6 +212,8 @@ def test_candidate_admission_workflow_is_trusted_and_reconciles_after_preflight(
 
     assert "pull_request_target:" not in workflow
     assert "workflow_run:" in workflow
+    assert "schedule:" in workflow
+    assert 'cron: "9,19,29,39,49,59 * * * *"' in workflow
     assert "Hunter / Pre-PR Preflight" in workflow
     assert "completed" in workflow
     assert "ready_for_review" not in workflow
@@ -233,6 +235,7 @@ def test_pull_request_target_does_not_run_admission_before_trusted_preflight_com
     workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text())
     condition = workflow["jobs"]["candidate-admission"]["if"]
     assert "github.event_name == 'workflow_run'" in condition
+    assert "github.event_name == 'schedule'" in condition
     assert "github.event_name == 'pull_request_target'" not in condition
 
 
@@ -632,3 +635,14 @@ def test_post_ready_base_race_restores_draft(monkeypatch):
     monkeypatch.setattr(admission, "convert_to_draft", lambda token, node: rolled_back.append((token, node)) or True)
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "read-token", 616, HEAD, "app-token") == 1
     assert rolled_back == [("app-token", "PR_test_node")]
+
+
+def test_candidate_admission_schedule_reconciles_late_pre_ready_evidence() -> None:
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text())
+    assert workflow[True]["schedule"] == [{"cron": "9,19,29,39,49,59 * * * *"}]
+    script = workflow["jobs"]["candidate-admission"]["steps"][-1]["run"]
+    assert 'if [[ -n "${EVENT_HEAD_SHA}" ]]' in script
+    assert '--head-sha "${EVENT_HEAD_SHA}"' in script
+    assert "readiness.candidate_prs()" in script

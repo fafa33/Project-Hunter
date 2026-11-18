@@ -7,6 +7,8 @@ on:
       - Hunter / Trusted Preflight Upgrade
     types:
       - completed
+  schedule:
+    - cron: "9,19,29,39,49,59 * * * *"
 
 permissions:
   checks: read
@@ -25,9 +27,10 @@ jobs:
     # proof-producing workflow completes, then re-reads exact-head state and
     # fails closed if that proof is missing, stale, or failed.
     if: >-
-      github.event_name == 'workflow_run' &&
-      (github.event.workflow_run.event == 'push' ||
-       github.event.workflow_run.event == 'pull_request_target')
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_run' &&
+       (github.event.workflow_run.event == 'push' ||
+        github.event.workflow_run.event == 'pull_request_target'))
     name: Hunter Candidate Admission
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -85,8 +88,14 @@ jobs:
           BRIDGE="${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/${B}strap_external_review_469.py"
           while IFS= read -r PR_NUMBER; do
             [[ -n "${PR_NUMBER}" ]] || continue
-            python "${BRIDGE}" candidate \
-              --pr "${PR_NUMBER}" \
-              --repository "${GH_REPO}" \
-              --head-sha "${EVENT_HEAD_SHA}"
+            if [[ -n "${EVENT_HEAD_SHA}" ]]; then
+              python "${BRIDGE}" candidate \
+                --pr "${PR_NUMBER}" \
+                --repository "${GH_REPO}" \
+                --head-sha "${EVENT_HEAD_SHA}"
+            else
+              python "${BRIDGE}" candidate \
+                --pr "${PR_NUMBER}" \
+                --repository "${GH_REPO}"
+            fi
           done <<< "${PR_NUMBERS}"
