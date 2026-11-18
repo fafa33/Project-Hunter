@@ -401,7 +401,7 @@
       "guard_boundary": "reviewer-pool admission and trusted health gating",
       "guard": "A self-hosted reviewer that is triage-only may not be enabled in the canonical active reviewer pool unless trusted default-branch health admission proves a fresh heartbeat before dispatch. Offline, sleeping, disconnected, or unhealthy local compute is an availability condition, never a candidate failure and never a reason to delay authority progression. Until that health gate exists, local-ollama remains disabled and authority progression starts with Codex; enabling it requires both the benchmark gate and trusted health admission.",
       "status": "guarded",
-      "test": "tests/test_code_write_policy.py::test_local_ollama_is_triage_only_and_disabled_without_health_admission"
+      "test": "tests/test_code_write_policy.py::test_any_configured_local_reviewer_remains_disabled_and_triage_only"
     },
     {
       "id": "DFF-030",
@@ -1895,7 +1895,7 @@
         "guard_reference": "scripts/hunter_merge_readiness_v2.py::review_authority_state"
       },
       "regression_evidence": [
-        "tests/test_code_write_policy.py::test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_guard",
+        "tests/test_code_write_policy.py::test_code_write_policy_declares_codex_only_reviewer_pool_with_a_last_resort_guard",
         "tests/test_code_write_policy.py::test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallback",
         "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_a_fallback_without_a_recorded_reason_requirement",
         "tests/test_code_write_policy.py::test_code_write_policy_guard_rejects_a_pool_without_a_strict_last_resort",

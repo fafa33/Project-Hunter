@@ -7,12 +7,43 @@ import hunter_reviewer_benchmark as benchmark
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_local_reviewer_cannot_gain_authority_without_benchmark_evidence():
+def _legacy_local_agent() -> dict:
+    return {
+        "id": "local-ollama",
+        "priority": 2,
+        "enabled": False,
+        "trigger_method": "github-workflow:hunter-local-reviewer.yml",
+        "exact_head_support": True,
+        "ack_timeout_seconds": 30,
+        "review_timeout_seconds": 300,
+        "retryable": False,
+        "evidence_parser": "hunter.local-review.v1",
+        "fallback_eligibility": False,
+        "authority_eligible": False,
+        "quality_gate": {
+            "required": True,
+            "benchmark_id": "hunter-local-reviewer-v1",
+            "minimum_recall": 0.75,
+            "maximum_false_positive_rate": 0.25,
+            "authority_until_pass": "triage-only",
+            "last_benchmark": {
+                "model": "qwen2.5-coder:7b",
+                "recall": 1.0,
+                "false_positive_rate": 1.0,
+                "latency_seconds": 152.276,
+                "passed": False,
+            },
+        },
+    }
+
+
+def test_local_reviewer_remains_inert_until_reapproved():
     pool, error = review.load_reviewer_pool()
-    assert not error
+    assert not error and pool is not None
     local = next(a for a in pool["agents"] if a["id"] == "local-ollama")
-    assert local["quality_gate"]["required"] is True
-    assert local["quality_gate"]["benchmark_id"]
+    assert local["enabled"] is False
+    assert local["authority_eligible"] is False
+    assert local not in review.enabled_pool_reviewers(pool)
 
 
 def test_score_measures_recall_and_false_positive_rate():
@@ -29,8 +60,9 @@ def test_benchmark_fixture_covers_recorded_failure_classes():
 
 
 def test_failed_quality_threshold_keeps_local_reviewer_triage_only():
-    pool, error = review.load_reviewer_pool()
-    assert not error
+    policy = _policy_with_local_agent()
+    pool, error = review.load_reviewer_pool(policy)
+    assert not error and pool is not None
     local = next(a for a in pool["agents"] if a["id"] == "local-ollama")
     gate = local["quality_gate"]
     result = gate["last_benchmark"]
@@ -54,13 +86,15 @@ def _policy_with_local_agent(**agent_overrides):
 
     policy = json.loads((ROOT / "docs/CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
-    for agent in pool["agents"]:
-        if agent["id"] == "local-ollama":
-            for key, value in agent_overrides.items():
-                if value is benchmark_removed:
-                    agent.pop(key, None)
-                else:
-                    agent[key] = value
+    local = next((agent for agent in pool["agents"] if agent["id"] == "local-ollama"), None)
+    if local is None:
+        local = _legacy_local_agent()
+        pool["agents"].append(local)
+    for key, value in agent_overrides.items():
+        if value is benchmark_removed:
+            local.pop(key, None)
+        else:
+            local[key] = value
     return policy
 
 

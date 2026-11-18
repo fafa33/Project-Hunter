@@ -49,7 +49,9 @@ def active_prs() -> tuple[int, ...]:
 def review_revision(number: int) -> str:
     # The live GraphQL review-thread nodes capture new bot/human findings and
     # resolution transitions. Reviews capture CHANGES_REQUESTED transitions.
-    query = """query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved comments(first:100){pageInfo{hasNextPage} nodes{id body updatedAt}}}} reviews(first:100){pageInfo{hasNextPage} nodes{id state submittedAt}}}}}"""
+    # PR issue comments capture Codex completion summaries published without a
+    # GitHub Review object; they are wakeup evidence, never review authority.
+    query = """query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){pullRequest(number:$number){headRefOid comments(first:100){pageInfo{hasNextPage} nodes{id body updatedAt}} reviewThreads(first:100){pageInfo{hasNextPage} nodes{id isResolved comments(first:100){pageInfo{hasNextPage} nodes{id body updatedAt}}}} reviews(first:100){pageInfo{hasNextPage} nodes{id state submittedAt}}}}}"""
     data = gh(
         "api",
         "graphql",
@@ -65,7 +67,7 @@ def review_revision(number: int) -> str:
     pr = ((data.get("data") or {}).get("repository") or {}).get("pullRequest")
     if not isinstance(pr, dict):
         raise ValueError("review evidence unavailable")
-    for collection in ("reviewThreads", "reviews"):
+    for collection in ("comments", "reviewThreads", "reviews"):
         block = pr.get(collection) or {}
         if (block.get("pageInfo") or {}).get("hasNextPage"):
             raise ValueError("review evidence pagination limit exceeded")

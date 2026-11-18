@@ -148,3 +148,40 @@ def test_missing_cli_fails_with_actionable_diagnosis(monkeypatch):
     monkeypatch.setattr(poll.Path, "is_file", lambda p: False)
     with pytest.raises(RuntimeError, match="configure launchd PATH"):
         poll.gh_binary()
+
+
+def test_issue_comment_only_codex_completion_changes_revision(monkeypatch):
+    before = response()
+    after = response()
+    after["data"]["repository"]["pullRequest"]["comments"] = {
+        "pageInfo": {"hasNextPage": False},
+        "nodes": [
+            {
+                "id": "codex-summary",
+                "body": "<!-- codex-pull-request-review-summary --> complete",
+                "updatedAt": "2026-11-18T10:00:00Z",
+            }
+        ],
+    }
+    before["data"]["repository"]["pullRequest"]["comments"] = {"pageInfo": {"hasNextPage": False}, "nodes": []}
+
+    def serve(payload):
+        def query(*args):
+            assert "comments(first:100)" in args[3]
+            assert "pullRequest(number:$number){headRefOid comments(first:100)" in args[3]
+            return payload
+
+        return query
+
+    monkeypatch.setattr(poll, "gh", serve(before))
+    initial = poll.review_revision(745)
+    monkeypatch.setattr(poll, "gh", serve(after))
+    assert poll.review_revision(745) != initial
+
+
+def test_issue_comment_pagination_fails_closed(monkeypatch):
+    payload = response()
+    payload["data"]["repository"]["pullRequest"]["comments"] = {"pageInfo": {"hasNextPage": True}, "nodes": []}
+    monkeypatch.setattr(poll, "gh", lambda *args: payload)
+    with pytest.raises(ValueError, match="pagination"):
+        poll.review_revision(745)
