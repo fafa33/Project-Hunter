@@ -154,6 +154,34 @@
             "github_login": "chatgpt-codex-connector[bot]",
             "ack_timeout_seconds": 30,
             "review_timeout_seconds": 1800
+          },
+          {
+            "id": "local-ollama",
+            "priority": 2,
+            "enabled": false,
+            "trigger_method": "github-workflow:hunter-local-reviewer.yml",
+            "exact_head_support": true,
+            "ack_timeout_seconds": 30,
+            "review_timeout_seconds": 300,
+            "retryable": false,
+            "evidence_parser": "hunter.local-review.v1",
+            "fallback_eligibility": false,
+            "authority_eligible": false,
+            "note": "Inactive triage-only compatibility sentinel required by the current trusted-main admission guard. Not an active reviewer and cannot block or satisfy review authority; removal requires a separately proven trusted-controller cutover.",
+            "quality_gate": {
+              "required": true,
+              "benchmark_id": "hunter-local-reviewer-v1",
+              "minimum_recall": 0.75,
+              "maximum_false_positive_rate": 0.25,
+              "authority_until_pass": "triage-only",
+              "last_benchmark": {
+                "model": "qwen2.5-coder:7b",
+                "recall": 1.0,
+                "false_positive_rate": 1.0,
+                "latency_seconds": 152.276,
+                "passed": false
+              }
+            }
           }
         ]
       },

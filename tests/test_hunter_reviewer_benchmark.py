@@ -37,10 +37,13 @@ def _legacy_local_agent() -> dict:
     }
 
 
-def test_local_reviewer_is_absent_from_canonical_pool_until_reapproved():
+def test_local_reviewer_remains_inert_until_reapproved():
     pool, error = review.load_reviewer_pool()
     assert not error and pool is not None
-    assert all(a["id"] != "local-ollama" for a in pool["agents"])
+    local = next(a for a in pool["agents"] if a["id"] == "local-ollama")
+    assert local["enabled"] is False
+    assert local["authority_eligible"] is False
+    assert local not in review.enabled_pool_reviewers(pool)
 
 
 def test_score_measures_recall_and_false_positive_rate():
@@ -83,13 +86,15 @@ def _policy_with_local_agent(**agent_overrides):
 
     policy = json.loads((ROOT / "docs/CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
-    local = _legacy_local_agent()
+    local = next((agent for agent in pool["agents"] if agent["id"] == "local-ollama"), None)
+    if local is None:
+        local = _legacy_local_agent()
+        pool["agents"].append(local)
     for key, value in agent_overrides.items():
         if value is benchmark_removed:
             local.pop(key, None)
         else:
             local[key] = value
-    pool["agents"].append(local)
     return policy
 
 

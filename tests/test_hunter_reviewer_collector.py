@@ -1161,7 +1161,7 @@ def test_canonical_pool_is_codex_only():
 
     policy = json.loads((collector.review.ROOT / "docs/CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
-    assert [a["id"] for a in pool["agents"]] == ["codex"]
+    assert [a["id"] for a in pool["agents"] if a["enabled"]] == ["codex"]
     assert [a["id"] for a in collector.review.authority_pool_reviewers(pool)] == ["codex"]
     assert pool["last_resort"] == "hunter-guard"
 

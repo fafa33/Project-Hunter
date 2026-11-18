@@ -88,8 +88,8 @@ def test_code_write_policy_declares_codex_only_reviewer_pool_with_a_last_resort_
     assert pool["timeout_policy"]["bounded"] is True
     assert pool["timeout_policy"]["default_seconds"] > 0
     assert pool["timeout_policy"]["max_seconds"] >= pool["timeout_policy"]["default_seconds"]
-    assert [agent["id"] for agent in pool["agents"]] == ["codex"]
-    codex = pool["agents"][0]
+    assert [agent["id"] for agent in pool["agents"] if agent["enabled"]] == ["codex"]
+    codex = next(agent for agent in pool["agents"] if agent["id"] == "codex")
     assert codex["enabled"] is True
     assert codex["priority"] == 1
     assert codex["exact_head_support"] is True

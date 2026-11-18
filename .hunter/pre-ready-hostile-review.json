@@ -2,9 +2,9 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "All reviewer-policy, collector-finalization and benchmark regressions must support canonical Codex-only pool without weakening fail-closed synthetic reviewer admission",
-        "evidence": "78 directly failing tests pass; combined focused suite 580 passed; Defect Prevention Guard passed.",
-        "id": "PR755-hosted-gates",
+        "criterion": "Only Codex may be enabled; trusted-main admission must continue to verify the inert local sentinel until a separate controller cutover",
+        "evidence": "Enabled reviewer set is exactly Codex; local-ollama is disabled and authority_eligible=false; Gemini/Groq/Copilot absent; 559 tests pass.",
+        "id": "PR755-bootstrap-compatible-codex-only",
         "verdict": "satisfied"
       }
     ],
@@ -33,162 +33,162 @@
     "base_sha": "f7418b97946dafa64899dc77d1ae6309c46bd10c",
     "defect_families": [
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-017",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-045",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
+        "evidence": "Codex remains sole enabled reviewer; inert local sentinel retained only for trusted-main bootstrap compatibility; 559 focused tests and prevention guard pass.",
         "family": "DFF-052",
         "outcome": "clear"
       }
@@ -203,7 +203,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "a2cbec3d51a5a94562ec0d2c9eb3a9751ceceaac",
+        "blob_sha": "2d55e16fdd9dfa9084eb5cacd391bd6ec9194f96",
         "path": "docs/CODE_WRITE_POLICY.json",
         "previous_path": "",
         "status": "modified"
@@ -227,7 +227,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "59d7e6c7ada9efedade789629a53d96dde24d7ea",
+        "blob_sha": "94365ba6ad613c109d1a25ed4678efa8bb8a8674",
         "path": "tests/test_code_write_policy.py",
         "previous_path": "",
         "status": "modified"
@@ -245,13 +245,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "c9f4bbce9f7493f3f91a8124a71bfd2665fc452f",
+        "blob_sha": "d7e71e7efa6562d0a7579057bfa217cdd2703633",
         "path": "tests/test_hunter_reviewer_benchmark.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "c9897b502643715a6941a51e88081da22e04b7c8",
+        "blob_sha": "1c472cf4a70cc9ab8e712e4cb20efa5c4f1459e7",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
@@ -263,11 +263,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "839be031a396b437e9c0a3329606905bf8e571ffd2014bfc9a3ac3997482a86c"
+    "review_target_digest": "da69a930103c913596d4874db1196f2b55583ee7b67558ad81731d054a9bfa80"
   },
-  "review_id": "f1543f7476293a32923d1a7097d83e20a04f618b404a7afc2e748527d263e10f",
+  "review_id": "21ed22f2ae9d3bf660816f6280213c3aa03baff2d9f93f2938eabcf814c157b8",
   "review_request": {
-    "claims_id": "f1543f7476293a32923d1a7097d83e20a04f618b404a7afc2e748527d263e10f",
+    "claims_id": "21ed22f2ae9d3bf660816f6280213c3aa03baff2d9f93f2938eabcf814c157b8",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
