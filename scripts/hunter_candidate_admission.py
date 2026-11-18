@@ -179,9 +179,27 @@ def enforce_candidate_admission(
         ):
             print(f"PR #{pr_number} stale before Ready transition")
             return 1
-        # Temporary owner-controlled Ready transition. The verified proof and
-        # exact-head/base/fork safety checks above remain mandatory.
-        print(f"PR #{pr_number} admission passed on {head_sha}; awaiting owner Draft-to-Ready transition")
+        pull_request_node_id = str(latest.get("node_id") or "").strip()
+        if not pull_request_node_id:
+            print(f"PR #{pr_number} remains Draft: pull-request node id is unavailable")
+            return 1
+        # The trusted admission controller owns only the Draft -> Ready transition.
+        # Exact-head/base/fork proof above is mandatory; merge remains separately
+        # owner-authorized. Treat the mutation response as advisory and confirm the
+        # resulting state through a fresh primary-token read to handle ambiguous
+        # GraphQL transport outcomes without forging readiness.
+        mark_ready(mutation_token, pull_request_node_id)
+        confirmed = governance.read_mergeability(repository, token, pr_number)
+        if (
+            confirmed.get("state") != "open"
+            or confirmed.get("draft") is not False
+            or (confirmed.get("head") or {}).get("sha") != head_sha
+            or (confirmed.get("base") or {}).get("sha") != (pr.get("base") or {}).get("sha")
+            or confirmed.get("node_id") != pr.get("node_id")
+        ):
+            print(f"PR #{pr_number} Ready transition was not confirmed on the exact admitted candidate")
+            return 1
+        print(f"PR #{pr_number} admitted and promoted Ready on exact head {head_sha}")
         return 0
     if admission_state == "success":
         admission_state, description = ready_checks(repository, token, head_sha, pr.get("mergeable"), pr_number)
