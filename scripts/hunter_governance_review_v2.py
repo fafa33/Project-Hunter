@@ -470,33 +470,52 @@ def native_codex_clear_review(body: str, head_sha: str) -> bool:
     return bool(match and head_sha.strip().lower().startswith(match.group(1).lower()))
 
 
+def _native_codex_summary_review(body: str, head_sha: str) -> dict[str, Any] | None:
+    """Return the authenticated exact-head Codex review-state envelope, if valid."""
+    if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+        return None
+    prefix = "<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 "
+    if not body.startswith(prefix):
+        return None
+    end = body.find(" -->", len(prefix))
+    if end < 0 or end > len(prefix) + 4096:
+        return None
+    try:
+        state = json.loads(body[len(prefix) : end])
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(state, dict) or not isinstance(state.get("code_review"), dict):
+        return None
+    review = state["code_review"]
+    if review.get("commit_sha") != head_sha or not body[end + 4 :].lstrip().startswith("<details>"):
+        return None
+    return review
+
+
+def native_codex_summary_completed(body: str, head_sha: str) -> bool:
+    """Provider completion evidence only; never review or merge authority.
+
+    Codex may publish ``null`` finding summary fields even after completing the
+    exact-head review. That ambiguity must not keep the optional reviewer cycle
+    pending: canonical unresolved threads / CHANGES_REQUESTED remain the
+    fail-closed finding authority elsewhere.
+    """
+    review = _native_codex_summary_review(body, head_sha)
+    return bool(review is not None and review.get("status") == "completed")
+
+
 def native_codex_summary_clear(body: str, head_sha: str) -> bool:
-    """Validate Codex's authenticated issue-comment completion envelope.
+    """Validate Codex's exact-head completed-and-explicitly-clean envelope.
 
     This is provider completion evidence, NOT a GitHub review object or an
     approval. The caller must authenticate the comment author separately.
     """
-    if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
-        return False
-    prefix = "<!-- codex-pull-request-review-summary -->\n<!-- codex-review-state:v1 "
-    if not body.startswith(prefix):
-        return False
-    end = body.find(" -->", len(prefix))
-    if end < 0 or end > len(prefix) + 4096:
-        return False
-    try:
-        state = json.loads(body[len(prefix) : end])
-    except (ValueError, TypeError):
-        return False
-    if not isinstance(state, dict) or not isinstance(state.get("code_review"), dict):
-        return False
-    review = state["code_review"]
-    return (
-        review.get("status") == "completed"
-        and review.get("commit_sha") == head_sha
+    review = _native_codex_summary_review(body, head_sha)
+    return bool(
+        review is not None
+        and review.get("status") == "completed"
         and review.get("has_any_findings") is False
         and review.get("has_unresolved_findings") is False
-        and body[end + 4 :].lstrip().startswith("<details>")
     )
 
 

@@ -92,6 +92,58 @@ def project(snap: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return result
 
 
+def compare_live_readiness(repo: str, token: str, pr_number: int, snap: dict[str, Any]) -> dict[str, Any]:
+    """Read-only exact-head parity for non-Draft rollout observations."""
+    legacy = _latest_status(snap["statuses"], readiness.CONTEXT)
+    base = {
+        "head_sha": snap["head_sha"],
+        "draft": snap["draft"],
+        "mergeable": snap["mergeable"],
+        "domain": "merge-readiness",
+    }
+    if legacy is None:
+        return {**base, "semantic_state": "UNKNOWN", "reason": "legacy readiness status missing"}
+    previous_repo, previous_token = readiness.REPO, readiness.TOKEN
+    try:
+        readiness.REPO, readiness.TOKEN = repo, token
+        live = readiness.decide(pr_number)
+    finally:
+        readiness.REPO, readiness.TOKEN = previous_repo, previous_token
+    if live is None:
+        return {**base, "semantic_state": "UNKNOWN", "reason": "PR no longer open"}
+    live_head, successor = live
+    if live_head != snap["head_sha"]:
+        return {
+            **base,
+            "semantic_state": "UNKNOWN",
+            "reason": "head changed during shadow comparison",
+            "observed_live_head": live_head,
+        }
+    # `decide()` binds its result to the HEAD from its first PR read. Re-read
+    # after every live readiness fact has been evaluated so a concurrent push
+    # cannot mix PR-scoped review facts from a new HEAD with old-head checks.
+    final_pr = get_json(repo, token, f"pulls/{pr_number}")
+    final_head = str((final_pr.get("head") or {}).get("sha") or "").strip() if isinstance(final_pr, dict) else ""
+    if final_head != snap["head_sha"]:
+        return {
+            **base,
+            "semantic_state": "UNKNOWN",
+            "reason": "head changed during shadow comparison",
+            "observed_live_head": final_head,
+        }
+    legacy_state = str(legacy.get("state") or "")
+    return {
+        **base,
+        "semantic_state": "COMPARED",
+        "legacy_state": legacy_state,
+        "successor_state": successor.state,
+        "successor_description": successor.description,
+        "parity": legacy_state == successor.state,
+        "false_ready": legacy_state == "success" and successor.state != "success",
+        "missed_blocker": successor.state == "failure" and legacy_state != "failure",
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--repository", required=True)
@@ -102,6 +154,8 @@ def main() -> int:
     snap = snapshot(args.repository, token, args.pr)
     canonical = json.dumps(snap, sort_keys=True, separators=(",", ":")).encode()
     projections = project(snap)
+    if not snap["draft"]:
+        projections["merge-readiness"] = compare_live_readiness(args.repository, token, args.pr, snap)
     record = {
         "schema": "hunter.governance-shadow-observation.v1",
         "authoritative": False,

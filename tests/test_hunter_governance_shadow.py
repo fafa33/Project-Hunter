@@ -55,3 +55,84 @@ def test_shadow_output_path_is_not_cli_controlled():
 def test_shadow_workflow_does_not_install_dependencies():
     text = Path(".github/workflows/hunter-governance-shadow.yml").read_text()
     assert "pip install" not in text
+
+
+def test_non_draft_live_shadow_records_exact_head_parity(monkeypatch):
+    snap = {
+        "pr_number": 756,
+        "head_sha": "a" * 40,
+        "draft": False,
+        "mergeable": True,
+        "checks": [],
+        "reviews": [],
+        "statuses": [{"id": 7, "context": shadow.readiness.CONTEXT, "state": "success"}],
+    }
+    monkeypatch.setattr(
+        shadow.readiness, "decide", lambda _pr: ("a" * 40, shadow.readiness.Decision("success", "ready"))
+    )
+    monkeypatch.setattr(shadow, "get_json", lambda *_args: {"head": {"sha": "a" * 40}})
+    item = shadow.compare_live_readiness("owner/repo", "token", 756, snap)
+    assert item["semantic_state"] == "COMPARED"
+    assert item["parity"] is True
+    assert item["false_ready"] is False
+    assert item["missed_blocker"] is False
+
+
+def test_non_draft_live_shadow_flags_false_ready_and_missed_blocker(monkeypatch):
+    snap = {
+        "pr_number": 756,
+        "head_sha": "a" * 40,
+        "draft": False,
+        "mergeable": True,
+        "checks": [],
+        "reviews": [],
+        "statuses": [{"id": 7, "context": shadow.readiness.CONTEXT, "state": "success"}],
+    }
+    monkeypatch.setattr(
+        shadow.readiness,
+        "decide",
+        lambda _pr: ("a" * 40, shadow.readiness.Decision("failure", "Unresolved review threads remain: 1.")),
+    )
+    monkeypatch.setattr(shadow, "get_json", lambda *_args: {"head": {"sha": "a" * 40}})
+    item = shadow.compare_live_readiness("owner/repo", "token", 756, snap)
+    assert item["parity"] is False
+    assert item["false_ready"] is True
+    assert item["missed_blocker"] is True
+
+
+def test_non_draft_live_shadow_refuses_cross_head_comparison(monkeypatch):
+    snap = {
+        "pr_number": 756,
+        "head_sha": "a" * 40,
+        "draft": False,
+        "mergeable": True,
+        "checks": [],
+        "reviews": [],
+        "statuses": [{"id": 7, "context": shadow.readiness.CONTEXT, "state": "success"}],
+    }
+    monkeypatch.setattr(
+        shadow.readiness, "decide", lambda _pr: ("b" * 40, shadow.readiness.Decision("success", "ready"))
+    )
+    item = shadow.compare_live_readiness("owner/repo", "token", 756, snap)
+    assert item["semantic_state"] == "UNKNOWN"
+    assert item["reason"] == "head changed during shadow comparison"
+
+
+def test_non_draft_live_shadow_rechecks_head_after_successor_evaluation(monkeypatch):
+    snap = {
+        "pr_number": 756,
+        "head_sha": "a" * 40,
+        "draft": False,
+        "mergeable": True,
+        "checks": [],
+        "reviews": [],
+        "statuses": [{"id": 7, "context": shadow.readiness.CONTEXT, "state": "success"}],
+    }
+    monkeypatch.setattr(
+        shadow.readiness, "decide", lambda _pr: ("a" * 40, shadow.readiness.Decision("success", "ready"))
+    )
+    monkeypatch.setattr(shadow, "get_json", lambda *_args: {"head": {"sha": "b" * 40}})
+    item = shadow.compare_live_readiness("owner/repo", "token", 756, snap)
+    assert item["semantic_state"] == "UNKNOWN"
+    assert item["reason"] == "head changed during shadow comparison"
+    assert item["observed_live_head"] == "b" * 40

@@ -1192,6 +1192,16 @@
       "guard": "KiloContainerIsolation.run launches the agent through a supervised docker CLI Popen poll loop instead of one subprocess.run(timeout=...) call. Every KILO_POLL_INTERVAL_SECONDS it re-derives the idle deadline from two host-trusted signals only: a live git status read of the agent's own bind-mounted workspace (_workspace_changed_entries), and new, successfully executed, non-repeated commands in the broker's own log (_new_broker_commands) -- never the agent's own stdout/stderr, which grows just as readily on an idle heartbeat as on real work, and never a denied or repeated command, which parse_broker_trace already excludes or this dedups. No trusted evidence of progress within KILO_IDLE_STALL_SECONDS (360 s, kept comfortably above PRH-132's own 235 s silent-turn evidence) kills the run as STALLED before the historical 720 s figure would be reached; continuous progress may cross 720 s but is still bounded by KILO_HARD_CEILING_SECONDS (900 s, with margin inside the hosted job's 20-minute budget), reported as a distinct FAILED_CEILING reason -- a genuine resource/runtime limit, not a stall. Either path still raises subprocess.TimeoutExpired with the captured partial output, so every existing caller, the PRH-132 diagnostic, and ADR 0041 F2's closed admissible-cause set (MODEL_TIMEOUT stays permanently excluded from Codex fallback) are unchanged.",
       "test": "tests/test_issue_agent_kilo_container_port.py::test_an_active_run_may_exceed_the_flat_wall_clock_while_progressing; tests/test_issue_agent_kilo_container_port.py::test_a_silent_or_genuinely_stalled_execution_terminates; tests/test_issue_agent_kilo_container_port.py::test_repeated_meaningless_output_does_not_reset_idle_time; tests/test_issue_agent_kilo_container_port.py::test_repeated_denied_commands_do_not_count_as_progress; tests/test_issue_agent_kilo_container_port.py::test_valid_scoped_changes_count_as_meaningful_progress; tests/test_issue_agent_kilo_container_port.py::test_model_timeout_propagates_and_stop_removes_every_container",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-134",
+      "class": "governance-production-guard-leaks-into-hosted-test-context",
+      "source": "Issue #588 / PR #757: after adding exact-head Codex completion dedup, Hosted Pre-PR run 44362780632 and Trusted Preflight run 44362790081 failed because GITHUB_ACTIONS=true is also present in pytest on GitHub-hosted runners; synthetic owner/repo fixtures were therefore sent through the production comment-read path. Earlier, reviewer collector run 44354491426 had remained in progress despite an exact-head Codex completed summary, proving the need for a root pre-dispatch dedup rather than a PR-specific status patch.",
+      "classification": "systemic",
+      "guard_boundary": "canonical review orchestration before provider completion lookup or collector dispatch",
+      "guard": "A governance/orchestration production-only branch must bind to the authenticated repository identity, not merely to GITHUB_ACTIONS or other environment presence shared with hosted tests. Exact-head Codex completion dedup requires GITHUB_ACTIONS=true AND GITHUB_REPOSITORY==the repository argument, authenticated Codex author, and exact HEAD. Provider completion may terminate optional waiting but never mint REVIEW_CLEAR/approval or overwrite FINDINGS_OPEN. Every change at this boundary must include paired regressions for real production binding and hosted fixture isolation before push.",
+      "test": "tests/test_hunter_review_orchestrator.py::test_exact_head_codex_completion_helper_binds_author_and_head; tests/test_hunter_review_orchestrator.py::test_exact_head_codex_completion_prevents_new_collector_dispatch; tests/test_hunter_review_orchestrator.py::test_exact_head_codex_completion_terminalizes_existing_waiting_cycle; tests/test_hunter_review_orchestrator.py::test_exact_head_codex_completion_never_overwrites_real_terminal_authority; tests/test_hunter_reviewer_collector.py::test_codex_exact_head_summary_ends_wait_without_forging_review_authority; tests/test_review_after_remediation_generation.py::test_a_changed_head_starts_an_ordinary_new_exact_head_cycle",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -2953,6 +2963,41 @@
         "PR #737 Copilot review, 2026-11-12 (discussion_r4553826778, r4553826901, r4553826979, r4553827043, r4553827094, r4553827147, r4553827202, r4553827261): 8 High findings -- stale success surviving thread resolution or a failed status post, an abbreviated SHA/short invariant marked receipt-eligible and able to abort ingestion, a SHA-scoped status with no PR dimension, an unauthenticated publisher, a fail-open StaticReadinessObservation default, and a refused observation silently discarding its obligation -- all threads owner-resolved after hardening on the same branch. Targeted Issue #586 verification found F1/F3 bounded by a 45-minute expiry, not proven fully eliminated; resolved GitHub threads must not be equated with signed finding proof.",
         "PR #738 targeted verification: reproductions demonstrated conflicting deterministic classifications when ingestion inherited another finding's fingerprint match, and missing owner classification when a non-authority original message carried a family tag. The regression pair exercises real signed ledger append and replay; receipt planning now consults the existing ingestion planner instead of using literal-tag presence as a proxy.",
         "Issue #586 targeted root-cause remediation, 2026-11-13 (PR #737 discussion_r4553826778 [F1] and r4553826979 [F3]): the prior round's 45-minute freshness bound was independent review, confirmed by this round's own reproduction, as narrowing rather than eliminating two stale-success windows -- a thread resolving into a new obligation after publish, and a transient status-publish failure leaving a stale success in place. The obligation-fingerprint hardening above closes both for the case a thread's resolution state actually changes; it does not close a disposition added to an already-resolved thread, or the irreducible interval between a live check and the separate human merge action -- both documented as residual, not claimed as eliminated."
+      ]
+    },
+    {
+      "id": "DFF-058",
+      "title": "governance-runtime-context-must-bind-production-repository-and-isolate-hosted-fixtures",
+      "invariant": "Any governance, review-orchestration, or trusted-admission behavior that is intended only for a live GitHub repository must bind to authenticated production context, including exact repository identity and exact candidate HEAD. Environment flags shared by CI tests, such as GITHUB_ACTIONS=true, are never sufficient authority. Hosted/synthetic fixtures must remain isolated. Provider completion may end optional waiting, but it must never become review approval, hide unresolved findings, or overwrite an existing authoritative terminal state.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_review_orchestrator.py",
+          "scripts/hunter_reviewer_collector.py",
+          "scripts/hunter_governance_review_v2.py",
+          ".github/workflows/hunter-governance-reconcile.yml",
+          ".github/workflows/hunter-reviewer-collector.yml",
+          "tests/test_hunter_review_orchestrator.py",
+          "tests/test_hunter_reviewer_collector.py",
+          "tests/test_review_after_remediation_generation.py"
+        ],
+        "rationale": "Changes to runtime-context detection, reviewer completion, dispatch deduplication, reconcile, or hosted test harnesses can either reintroduce indefinite WAITING_FOR_REVIEWER after Codex completed or make production-only code execute inside synthetic CI fixtures and break trusted gates."
+      },
+      "prevention": {
+        "mechanism": "Before any production-only provider lookup or collector dispatch, require authenticated GitHub Actions execution plus GITHUB_REPOSITORY equality with the repository being governed, configured provider login, and exact-head evidence. Keep provider-completed and provider-clear as separate predicates. Pair every boundary change with regressions proving production binding, wrong-author rejection, wrong-head rejection, no duplicate dispatch after completion, pending-cycle terminalization, preservation of REVIEW_CLEAR/FINDINGS_OPEN, and hosted fixture isolation.",
+        "boundary": "local-pre-push",
+        "guard_reference": "scripts/hunter_review_orchestrator.py::ensure_collector"
+      },
+      "regression_evidence": [
+        "tests/test_hunter_review_orchestrator.py::test_exact_head_codex_completion_helper_binds_author_and_head",
+        "tests/test_hunter_review_orchestrator.py::test_exact_head_codex_completion_prevents_new_collector_dispatch",
+        "tests/test_hunter_review_orchestrator.py::test_exact_head_codex_completion_terminalizes_existing_waiting_cycle",
+        "tests/test_hunter_review_orchestrator.py::test_exact_head_codex_completion_never_overwrites_real_terminal_authority",
+        "tests/test_hunter_reviewer_collector.py::test_codex_exact_head_summary_ends_wait_without_forging_review_authority",
+        "tests/test_review_after_remediation_generation.py::test_a_changed_head_starts_an_ordinary_new_exact_head_cycle"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #588 / PR #757; stuck collector run 44354491426 despite exact-head Codex completion; Hosted Pre-PR run 44362780632 and Trusted Preflight run 44362790081 exposed GITHUB_ACTIONS-only context leakage; fixed on signed PR #757 lineage after repository binding was added."
       ]
     }
   ]

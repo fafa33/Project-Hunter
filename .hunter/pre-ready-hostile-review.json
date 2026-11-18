@@ -2,149 +2,221 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "One focused local lane; one canonical hosted full proof per immutable head except trusted-definition changes; parallel independent checks; per-stage deadlines and bounded reviewer retry/timeout; unavailable reviewers nonblocking while substantive findings remain blocking.",
-        "evidence": "Existing proof-reuse, parallel-lane, terminal-state and finding-block regressions pass. Reviewer collector old 52-minute envelope reduced to 38 minutes around the current 1920-second active-pool hard bound. 500 focused tests, Defect Prevention Guard and Ruff pass.",
-        "id": "M6-bounded-execution",
+        "criterion": "The PR #757 orchestration recurrence and CI-context leakage must be captured as durable defect knowledge with canonical selectors before merge.",
+        "evidence": "PRH-134 and DFF-058 added to DEFECT_REGISTRY with production-repository binding, exact-head provider completion semantics, fixture isolation, and regression selectors; Defect Prevention and Artifact guards pass.",
+        "id": "M7-durable-learning",
         "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
       "authorization",
       "caller-controlled-time-state",
+      "ci-fixture-isolation",
+      "codex-author-and-head-binding",
+      "codex-null-finding-summary",
       "cutoff-history",
       "fail-closed",
       "graphql-pagination",
-      "immutable-head-deduplication",
       "launchd-restricted-path",
       "malformed-unknown-authority",
       "missing-executable",
       "monotonicity",
+      "non-authoritative-rollout",
+      "pending-cycle-terminalization",
       "persistence-restrictions",
+      "pre-dispatch-provider-completion-dedup",
+      "provider-completion-not-authority",
       "provider-summary-not-approval",
       "replay",
+      "repository-binding",
       "restart-crash-retry",
-      "reviewer-timeout-budget",
-      "reviewer-unavailability",
+      "shadow-false-ready",
+      "shadow-head-drift",
+      "shadow-missed-blocker",
       "stale-head-and-check-evidence",
       "standalone-issue-comment",
-      "substantive-finding-blocking",
       "tamper-resistance",
+      "terminal-authority-preservation",
       "transaction-snapshot-consistency",
-      "trusted-definition-full-proof-exception",
       "trusted-dispatch-only",
       "unresolved-findings-and-reviewer-unavailability"
     ],
     "base_ref": "main",
-    "base_sha": "78050cef347b005fe9484b9fe76044c16fde7cce",
+    "base_sha": "6938aacc7496ec37eacce7f2d90d70f852fe7108",
     "defect_families": [
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-007",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-008",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-019",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-020",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-021",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-023",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-027",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-036",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-038",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-039",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-042",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-045",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-052",
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-050",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-053",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-055",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-057",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "family": "DFF-058",
         "outcome": "clear"
       }
     ],
@@ -152,23 +224,59 @@
     "issue": "588",
     "review_target": [
       {
-        "blob_sha": "180fbd83434be5d3118b3736d33ce8e1365b812e",
-        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "blob_sha": "3419779549d72ca28d912dee9a711e24c423d2ec",
+        "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "258bbcff7fd13fecc84607a95617e0ec57d70e54",
-        "path": "tests/test_reviewer_collector_deadlines.py",
+        "blob_sha": "005012422e7dc704084d0597d7abd3412d12c506",
+        "path": "scripts/hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "aa771f44b3f0f7c18a583fd7cc1102e82f440ea8",
+        "path": "scripts/hunter_governance_shadow.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "727b0fce6d5df2d2d3a7b616279fc45bfab321a7",
+        "path": "scripts/hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "e32ea1e4c824361eb80108fe2bc0eff80c0adfcf",
+        "path": "scripts/hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "66b4d4a16a0b74d9ed5dd3432345815b91ffcfb2",
+        "path": "tests/test_hunter_governance_shadow.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "595f08cb2a37ed5593a1ff8e50b01794cf499803",
+        "path": "tests/test_hunter_review_orchestrator.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "35ac0f74331f0679a660a97a3b21e076b8876177",
+        "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "5aa1f2848da7a1210bde9b8b919a720e0569bcf141248a8c0be4616eab046fcd"
+    "review_target_digest": "1f0673b3543d645272d33bd15f224c5e3f83209fb28550ca914f733b856f8ce7"
   },
-  "review_id": "d2619711ec8ddbec4a778ba038f26b91bbc78e105907327a429d09e37f1b4c8f",
+  "review_id": "92b23720fb6d362c1b8dc9ddf86168d3bab61abbaed2be45d476237b3f5b3602",
   "review_request": {
-    "claims_id": "d2619711ec8ddbec4a778ba038f26b91bbc78e105907327a429d09e37f1b4c8f",
+    "claims_id": "92b23720fb6d362c1b8dc9ddf86168d3bab61abbaed2be45d476237b3f5b3602",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

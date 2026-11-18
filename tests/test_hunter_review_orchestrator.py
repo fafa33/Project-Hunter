@@ -1817,7 +1817,7 @@ def test_dispatch_identity_and_timestamp_are_durable_before_dispatch(monkeypatch
     monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
     monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64)
     monkeypatch.setattr(orchestrator, "current_run_id", lambda: 777)
-    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle: published.append(cycle))
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle, sink=published: sink.append(cycle))
     monkeypatch.setattr(orchestrator, "collector_liveness", lambda *_args: ("missing", 0))
 
     def accepted_then_process_dies(*_args):
@@ -2690,3 +2690,114 @@ def test_reconcile_workflow_passes_expected_head_to_both_trusted_controllers():
     assert source.count('"-eq 5"') == 0  # Bash compares the numeric result, not a string.
     assert source.count(" -eq 5 ]") == 2
     assert source.count("suppressing invocation outcome markers") == 2
+
+
+def test_exact_head_codex_completion_prevents_new_collector_dispatch(monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    published = []
+    dispatched = []
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda: "d" * 64)
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("absent", None, None))
+    monkeypatch.setattr(orchestrator, "exact_head_codex_completion", lambda *_args: True)
+    monkeypatch.setattr(orchestrator, "current_run_id", lambda: 777)
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle, sink=published: sink.append(cycle))
+    monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatched.append(True))
+
+    result = orchestrator.ensure_collector("owner/repo", "token", 757, HEAD)
+
+    assert result.state == "REVIEWER_UNAVAILABLE"
+    assert result.provider_id == "codex"
+    assert dispatched == []
+    assert published == [result]
+
+
+def test_exact_head_codex_completion_terminalizes_existing_waiting_cycle(monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    existing = make_cycle(state="WAITING_FOR_REVIEWER", trigger_id=44354386709)
+    published = []
+    dispatched = []
+    monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda digest=existing.config_digest: digest)
+    monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args: ("present", existing, None))
+    monkeypatch.setattr(orchestrator, "exact_head_codex_completion", lambda *_args: True)
+    monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle, sink=published: sink.append(cycle))
+    monkeypatch.setattr(orchestrator, "dispatch_collector", lambda *_args: dispatched.append(True))
+
+    result = orchestrator.ensure_collector("owner/repo", "token", existing.pr_number, existing.head_sha)
+
+    assert result.state == "REVIEWER_UNAVAILABLE"
+    assert result.provider_id == "codex"
+    assert result.trigger_id == existing.trigger_id
+    assert dispatched == []
+    assert published == [result]
+
+
+def test_exact_head_codex_completion_never_overwrites_real_terminal_authority(monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "owner/repo")
+    for state in ("REVIEW_CLEAR", "FINDINGS_OPEN", "REVIEWER_UNAVAILABLE"):
+        existing = make_cycle(state=state, trigger_id=123)
+        published = []
+        monkeypatch.setattr(orchestrator, "reviewer_pool_config_digest", lambda digest=existing.config_digest: digest)
+        monkeypatch.setattr(orchestrator, "read_cycle", lambda *_args, current=existing: ("present", current, None))
+        monkeypatch.setattr(orchestrator, "exact_head_codex_completion", lambda *_args: True)
+        monkeypatch.setattr(orchestrator, "publish_cycle", lambda *_args, cycle, sink=published: sink.append(cycle))
+        result = orchestrator.ensure_collector("owner/repo", "token", existing.pr_number, existing.head_sha)
+        assert result == existing
+        assert published == []
+
+
+def test_exact_head_codex_completion_helper_binds_author_and_head(monkeypatch):
+    import json
+
+    envelope = (
+        "<!-- codex-pull-request-review-summary -->\n"
+        "<!-- codex-review-state:v1 "
+        + json.dumps(
+            {
+                "code_review": {
+                    "commit_sha": HEAD,
+                    "status": "completed",
+                    "has_any_findings": None,
+                    "has_unresolved_findings": None,
+                }
+            }
+        )
+        + " -->\n<details><summary>Codex Review Summary</summary></details>"
+    )
+    pool = {
+        "agents": [
+            {
+                "id": "codex",
+                "enabled": True,
+                "priority": 1,
+                "github_login": "chatgpt-codex-connector[bot]",
+            }
+        ]
+    }
+    monkeypatch.setattr(orchestrator.pre_ready, "load_reviewer_pool", lambda: (pool, ""))
+    monkeypatch.setattr(orchestrator.pre_ready, "enabled_pool_reviewers", lambda _pool: _pool["agents"])
+
+    def comments(_repo, _token, method, path, _payload=None):
+        assert method == "GET"
+        assert path == "issues/757/comments?per_page=100&page=1"
+        return [{"user": {"login": "chatgpt-codex-connector[bot]"}, "body": envelope}]
+
+    monkeypatch.setattr(orchestrator, "request_json", comments)
+    assert orchestrator.exact_head_codex_completion("owner/repo", "token", 757, HEAD) is True
+
+    monkeypatch.setattr(
+        orchestrator,
+        "request_json",
+        lambda *_args, **_kwargs: [{"user": {"login": "github-actions[bot]"}, "body": envelope}],
+    )
+    assert orchestrator.exact_head_codex_completion("owner/repo", "token", 757, HEAD) is False
+
+    wrong_head = envelope.replace(HEAD, "b" * 40)
+    monkeypatch.setattr(
+        orchestrator,
+        "request_json",
+        lambda *_args, **_kwargs: [{"user": {"login": "chatgpt-codex-connector[bot]"}, "body": wrong_head}],
+    )
+    assert orchestrator.exact_head_codex_completion("owner/repo", "token", 757, HEAD) is False

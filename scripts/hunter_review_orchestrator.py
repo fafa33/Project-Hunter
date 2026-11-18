@@ -1195,11 +1195,103 @@ def finalize_exhausted_pool(
     return "PUBLISHED: REVIEWER_UNAVAILABLE"
 
 
+def exact_head_codex_completion(repository: str, token: str, pr_number: int, head_sha: str) -> bool:
+    """Return whether authenticated Codex provider activity completed this exact HEAD.
+
+    This is a liveness/deduplication signal only. It never creates review authority,
+    never clears findings, and never bypasses canonical unresolved-thread or
+    CHANGES_REQUESTED enforcement. Unreadable/malformed evidence simply yields
+    ``False`` so orchestration follows its ordinary bounded path.
+    """
+    try:
+        pool, error = pre_ready.load_reviewer_pool()
+        if pool is None or error:
+            return False
+        codex = next(
+            (a for a in pre_ready.enabled_pool_reviewers(pool) if a.get("id") == "codex"),
+            None,
+        )
+        if codex is None:
+            return False
+        login = str(codex.get("github_login") or "").strip().lower()
+        if not login:
+            return False
+        import hunter_governance_review_v2 as governance
+
+        for page in range(1, 21):
+            rows = request_json(repository, token, "GET", f"issues/{pr_number}/comments?per_page=100&page={page}")
+            if not isinstance(rows, list):
+                return False
+            for item in rows:
+                if not isinstance(item, dict):
+                    continue
+                author = str((item.get("user") or {}).get("login") or "").strip().lower()
+                if author != login:
+                    continue
+                if governance.native_codex_summary_completed(str(item.get("body") or ""), head_sha):
+                    return True
+            if len(rows) < 100:
+                return False
+    except (StopIteration, transport.GitHubRequestError, ValueError, TypeError):
+        return False
+    return False
+
+
+def _completed_codex_terminal(
+    pr_number: int, head_sha: str, digest: str, generation_id: str, trigger_id: int, started_at: str
+) -> ReviewCycle:
+    return ReviewCycle(
+        pr_number=pr_number,
+        head_sha=head_sha,
+        state="REVIEWER_UNAVAILABLE",
+        provider_id="codex",
+        trigger_id=trigger_id,
+        started_at=started_at,
+        config_digest=digest,
+        generation_id=generation_id,
+    )
+
+
 def ensure_collector(
     repository: str, token: str, pr_number: int, head_sha: str, generation_id: str = BASE_GENERATION_ID
 ) -> ReviewCycle:
     digest = reviewer_pool_config_digest()
     state, existing, _error = read_cycle(repository, token, pr_number, head_sha)
+    # Root liveness invariant: if Codex has already completed this exact HEAD,
+    # never spend another optional collector window waiting for the same provider.
+    # Completion is deliberately mapped to the existing non-authoritative terminal
+    # state; findings/approval remain owned by their canonical evidence paths.
+    if (
+        os.environ.get("GITHUB_ACTIONS") == "true"
+        and os.environ.get("GITHUB_REPOSITORY") == repository
+        and exact_head_codex_completion(repository, token, pr_number, head_sha)
+    ):
+        if (
+            state == "present"
+            and existing is not None
+            and existing.config_digest == digest
+            and existing.generation_id == generation_id
+        ):
+            if existing.state in {"REVIEW_CLEAR", "FINDINGS_OPEN"} | TERMINAL_NONBLOCKING_STATES:
+                return existing
+            terminal = _completed_codex_terminal(
+                pr_number, head_sha, digest, generation_id, int(existing.trigger_id or 0), existing.started_at
+            )
+            publish_cycle(repository, token, head_sha, cycle=terminal)
+            return terminal
+        run_id = current_run_id()
+        if run_id is None:
+            raise RuntimeError("trusted orchestration requires GITHUB_RUN_ID")
+        terminal = _completed_codex_terminal(
+            pr_number,
+            head_sha,
+            digest,
+            generation_id,
+            run_id,
+            datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        publish_cycle(repository, token, head_sha, cycle=terminal)
+        return terminal
     if state == "present" and existing is not None and existing.config_digest == digest:
         if existing.generation_id == generation_id:
             # The same generation is idempotent: whatever happened to this head's
