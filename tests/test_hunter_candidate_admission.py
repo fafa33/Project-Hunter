@@ -212,6 +212,8 @@ def test_candidate_admission_workflow_is_trusted_and_reconciles_after_preflight(
 
     assert "pull_request_target:" not in workflow
     assert "workflow_run:" in workflow
+    assert "schedule:" in workflow
+    assert 'cron: "9,19,29,39,49,59 * * * *"' in workflow
     assert "Hunter / Pre-PR Preflight" in workflow
     assert "completed" in workflow
     assert "ready_for_review" not in workflow
@@ -233,15 +235,20 @@ def test_pull_request_target_does_not_run_admission_before_trusted_preflight_com
     workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text())
     condition = workflow["jobs"]["candidate-admission"]["if"]
     assert "github.event_name == 'workflow_run'" in condition
+    assert "github.event_name == 'schedule'" in condition
     assert "github.event_name == 'pull_request_target'" not in condition
 
 
-def test_draft_success_waits_for_owner_ready_without_mutation(monkeypatch, capsys):
-    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: _pr(draft=True))
+def test_draft_success_promotes_ready_after_exact_head_recheck(monkeypatch, capsys):
+    monkeypatch.setattr(admission, "ready_checks", lambda *_: ("success", "security/evidence checks pass"))
+    states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
     monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
-    monkeypatch.setattr(admission, "mark_ready", lambda *_: (_ for _ in ()).throw(AssertionError("owner-only Ready")))
+    called = []
+    monkeypatch.setattr(admission, "mark_ready", lambda _token, node: (called.append(node), True)[1])
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, HEAD) == 0
-    assert "awaiting owner Draft-to-Ready" in capsys.readouterr().out
+    assert called == ["PR_test_node"]
+    assert "promoted Ready on exact head" in capsys.readouterr().out
 
 
 def test_draft_stale_head_blocks_transition(monkeypatch):
@@ -271,11 +278,12 @@ def test_draft_fork_blocks_transition(monkeypatch):
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1
 
 
-def test_draft_owner_control_does_not_require_mutation_permission(monkeypatch):
-    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: _pr(draft=True))
+def test_draft_ready_requires_confirmed_mutation_result(monkeypatch):
+    states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=True)])
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
     monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
     monkeypatch.setattr(admission, "mark_ready", lambda *_: False)
-    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 0
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1
 
 
 def test_duplicate_ready_event_does_not_mark_again(monkeypatch):
@@ -312,6 +320,7 @@ def test_mark_ready_requires_graphql_confirmation(monkeypatch):
 
 
 def test_temporary_owner_ready_does_not_require_owner_comment(monkeypatch):
+    monkeypatch.setattr(admission, "ready_checks", lambda *_: ("success", "security/evidence checks pass"))
     """Canonical exact-head proof, not a per-HEAD owner comment, authorizes Ready."""
     states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
     monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
@@ -324,7 +333,7 @@ def test_temporary_owner_ready_does_not_require_owner_comment(monkeypatch):
     called = []
     monkeypatch.setattr(admission, "mark_ready", lambda _token, node: (called.append(node), True)[1])
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, HEAD) == 0
-    assert called == []
+    assert called == ["PR_test_node"]
 
 
 def test_agents_policy_separates_ready_from_merge_approval():
@@ -335,6 +344,7 @@ def test_agents_policy_separates_ready_from_merge_approval():
 
 
 def test_ambiguous_mutation_with_confirmed_ready_is_success(monkeypatch):
+    monkeypatch.setattr(admission, "ready_checks", lambda *_: ("success", "security/evidence checks pass"))
     states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
     monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
     monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
@@ -342,11 +352,12 @@ def test_ambiguous_mutation_with_confirmed_ready_is_success(monkeypatch):
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 0
 
 
-def test_draft_success_without_mutation_remains_draft(monkeypatch):
-    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: _pr(draft=True))
+def test_draft_success_without_confirmed_mutation_remains_blocked(monkeypatch):
+    states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=True)])
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
     monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
     monkeypatch.setattr(admission, "mark_ready", lambda *_: False)
-    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 0
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616) == 1
 
 
 def test_workflow_mints_app_token_with_exact_ready_mutation_scopes() -> None:
@@ -376,6 +387,7 @@ def test_workflow_routes_reads_to_github_token_and_mutations_to_app_token() -> N
 
 
 def test_reads_use_primary_token_mutations_use_app_token(monkeypatch) -> None:
+    monkeypatch.setattr(admission, "ready_checks", lambda *_: ("success", "security/evidence checks pass"))
     """enforce_candidate_admission must route reads/mutations to distinct supplied tokens."""
     read_calls: list[str] = []
     mutation_calls: list[str] = []
@@ -404,10 +416,11 @@ def test_reads_use_primary_token_mutations_use_app_token(monkeypatch) -> None:
         == 0
     )
     assert read_calls and all(token == "read-token" for token in read_calls)
-    assert mutation_calls == []
+    assert mutation_calls == ["app-mutation-token"]
 
 
 def test_missing_mutation_token_falls_back_to_primary_token(monkeypatch) -> None:
+    monkeypatch.setattr(admission, "ready_checks", lambda *_: ("success", "security/evidence checks pass"))
     """An unset/empty mutation token must still allow mutations via the primary token (no silent skip)."""
     mutation_calls: list[str] = []
     states = iter([_pr(draft=True), _pr(draft=True), _pr(draft=False)])
@@ -431,7 +444,7 @@ def test_missing_mutation_token_falls_back_to_primary_token(monkeypatch) -> None
         )
         == 0
     )
-    assert mutation_calls == []
+    assert mutation_calls == ["only-token"]
 
 
 def test_main_sources_mutation_token_from_dedicated_env_var(monkeypatch) -> None:
@@ -482,6 +495,11 @@ def test_main_without_app_mutation_token_falls_back(monkeypatch) -> None:
 
 
 def test_ready_checks_is_success_with_a_trusted_knowledge_receipt_status(monkeypatch) -> None:
+    monkeypatch.setattr(
+        admission.governance,
+        "issue_acceptance_state",
+        lambda *_: ("success", "not governed"),
+    )
     receipt_status = {
         "id": 1,
         "context": "Hunter Knowledge Receipt / PR #371",
@@ -517,6 +535,11 @@ def test_ready_checks_is_success_with_a_trusted_knowledge_receipt_status(monkeyp
 
 
 def test_ready_checks_is_not_success_with_no_knowledge_receipt_status(monkeypatch) -> None:
+    monkeypatch.setattr(
+        admission.governance,
+        "issue_acceptance_state",
+        lambda *_: ("success", "not governed"),
+    )
     """The gap Copilot found: StaticReadinessObservation no longer defaults this to success, so an
 
     absent Knowledge Receipt status must leave ready_checks pending, never silently success.
@@ -540,6 +563,11 @@ def test_ready_checks_is_not_success_with_no_knowledge_receipt_status(monkeypatc
 
 
 def test_ready_checks_rejects_duplicate_receipts_hidden_by_default_latest_filter(monkeypatch) -> None:
+    monkeypatch.setattr(
+        admission.governance,
+        "issue_acceptance_state",
+        lambda *_: ("success", "not governed"),
+    )
     """Candidate admission must inspect every check run, including older same-name receipts."""
     import hunter_merge_readiness_v2 as readiness
 
@@ -572,3 +600,146 @@ def test_ready_checks_rejects_duplicate_receipts_hidden_by_default_latest_filter
     state, _description = admission.ready_checks("fafa33/Project-Hunter", "token", HEAD, True, 371)
     assert state != "success"
     assert any("check-runs?filter=all&per_page=100&page=1" in path for path in paths)
+
+
+def test_draft_pre_ready_pending_does_not_promote(monkeypatch):
+    states = iter([_pr(draft=True), _pr(draft=True)])
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "ready_checks", lambda *_: ("pending", "CodeQL still running"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: (_ for _ in ()).throw(AssertionError("must stay Draft")))
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, HEAD) == 0
+
+
+def test_draft_pre_ready_failure_does_not_promote(monkeypatch):
+    states = iter([_pr(draft=True), _pr(draft=True)])
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "ready_checks", lambda *_: ("failure", "dependency-review failed"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: (_ for _ in ()).throw(AssertionError("must stay Draft")))
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "token", 616, HEAD) == 1
+
+
+def test_post_ready_head_race_restores_draft(monkeypatch):
+    initial = _pr(draft=True)
+    latest = _pr(draft=True)
+    raced = _pr(draft=False)
+    raced["head"]["sha"] = "c" * 40
+    states = iter([initial, latest, raced])
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "ready_checks", lambda *_: ("success", "checks pass"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: True)
+    rolled_back = []
+    monkeypatch.setattr(admission, "convert_to_draft", lambda token, node: rolled_back.append((token, node)) or True)
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "read-token", 616, HEAD, "app-token") == 1
+    assert rolled_back == [("app-token", "PR_test_node")]
+
+
+def test_post_ready_base_race_restores_draft(monkeypatch):
+    initial = _pr(draft=True)
+    latest = _pr(draft=True)
+    raced = _pr(draft=False)
+    raced["base"]["sha"] = "c" * 40
+    states = iter([initial, latest, raced])
+    monkeypatch.setattr(admission.governance, "read_mergeability", lambda *_: next(states))
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "ready_checks", lambda *_: ("success", "checks pass"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: True)
+    rolled_back = []
+    monkeypatch.setattr(admission, "convert_to_draft", lambda token, node: rolled_back.append((token, node)) or True)
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "read-token", 616, HEAD, "app-token") == 1
+    assert rolled_back == [("app-token", "PR_test_node")]
+
+
+def test_candidate_admission_schedule_reconciles_late_pre_ready_evidence() -> None:
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text())
+    assert workflow[True]["schedule"] == [{"cron": "9,19,29,39,49,59 * * * *"}]
+    script = workflow["jobs"]["candidate-admission"]["steps"][-1]["run"]
+    assert 'if [[ -n "${EVENT_HEAD_SHA}" ]]' in script
+    assert '--head-sha "${EVENT_HEAD_SHA}"' in script
+    assert "readiness.candidate_prs()" in script
+
+
+def test_scheduled_reconciliation_continues_after_individual_candidate_failure() -> None:
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text())
+    script = workflow["jobs"]["candidate-admission"]["steps"][-1]["run"]
+    assert "ADMISSION_FAILURES=0" in script
+    assert script.count('if ! python "${BRIDGE}" candidate') == 2
+    assert "ADMISSION_FAILURES=1" in script
+    assert 'if [[ "${ADMISSION_FAILURES}" -ne 0 ]]' in script
+    assert "all candidates were still reconciled" in script
+
+
+def test_ready_checks_enforces_registered_issue_acceptance(monkeypatch):
+    import hunter_merge_readiness_v2 as readiness
+
+    receipt = {
+        "name": "Hunter Knowledge Receipt / PR #371",
+        "external_id": f"knowledge-receipt:v1:371:{HEAD}",
+        "head_sha": HEAD,
+        "app": {"slug": "github-actions"},
+        "status": "completed",
+        "conclusion": "success",
+        "completed_at": "2026-11-15T13:00:00Z",
+        "output": {"summary": "verified [rt:44136fa355b3678a]"},
+    }
+
+    def fake_request(_repo: str, _token: str, _method: str, path: str):
+        if "check-runs" in path:
+            return {
+                "check_runs": [
+                    {"id": n, "name": name, "status": "completed", "conclusion": "success"}
+                    for n, name in enumerate(("Quality Gates", "dependency-review", "CodeQL"), 1)
+                ]
+                + [receipt]
+            }
+        return [{"id": 1, "context": "Hunter Governance Review", "state": "success"}]
+
+    monkeypatch.setattr(admission.governance, "request_json", fake_request)
+    monkeypatch.setattr(readiness, "_status_age_seconds", lambda _status: 1.0)
+    monkeypatch.setattr(readiness, "knowledge_receipt_check_bound", lambda *_: ("success", "receipt verified"))
+    monkeypatch.setattr(
+        admission.governance, "issue_acceptance_state", lambda *_: ("pending", "acceptance evidence pending")
+    )
+    state, detail = admission.ready_checks("fafa33/Project-Hunter", "token", HEAD, True, 371)
+    assert state == "pending"
+    assert "acceptance" in detail.lower()
+
+    monkeypatch.setattr(admission.governance, "issue_acceptance_state", lambda *_: ("failure", "acceptance failed"))
+    state, detail = admission.ready_checks("fafa33/Project-Hunter", "token", HEAD, True, 371)
+    assert state == "failure"
+    assert "acceptance" in detail.lower()
+
+
+def test_post_ready_confirmation_read_failure_restores_draft(monkeypatch):
+    initial = _pr(draft=True)
+    latest = _pr(draft=True)
+    calls = {"read": 0}
+
+    def read_mergeability(*_args):
+        calls["read"] += 1
+        if calls["read"] == 1:
+            return initial
+        if calls["read"] == 2:
+            return latest
+        raise RuntimeError("GitHub API unavailable")
+
+    monkeypatch.setattr(admission.governance, "read_mergeability", read_mergeability)
+    monkeypatch.setattr(admission.governance, "candidate_admission", lambda *_: ("success", "proof"))
+    monkeypatch.setattr(admission, "ready_checks", lambda *_: ("success", "checks pass"))
+    monkeypatch.setattr(admission, "mark_ready", lambda *_: True)
+    rolled_back: list[tuple[str, str]] = []
+
+    def rollback(token: str, node: str) -> bool:
+        rolled_back.append((token, node))
+        return True
+
+    monkeypatch.setattr(admission, "convert_to_draft", rollback)
+
+    assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "read-token", 616, HEAD, "app-token") == 1
+    assert rolled_back == [("app-token", "PR_test_node")]

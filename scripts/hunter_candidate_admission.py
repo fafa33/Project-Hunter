@@ -109,6 +109,7 @@ def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | N
         # a fingerprinted verdict against live review-thread state before this privileged Draft
         # Promotion path trusts it (ADR 0039 L11 hardening, Copilot F1/F3, PR #737; Issue #586).
         knowledge_receipt = readiness.knowledge_receipt_check_bound(checks, pr_number, head_sha)
+        issue_acceptance = governance.issue_acceptance_state(repository, token, head_sha, pr_number)
         decision = readiness.evaluate(
             readiness.StaticReadinessObservation(
                 draft=False,
@@ -117,6 +118,7 @@ def ready_checks(repository: str, token: str, head_sha: str, mergeable: bool | N
                 check_runs=tuple(checks),
                 governance_status=latest,
                 knowledge_receipt=knowledge_receipt,
+                issue_acceptance=issue_acceptance,
             )
         )
         return decision.state, decision.description
@@ -179,9 +181,57 @@ def enforce_candidate_admission(
         ):
             print(f"PR #{pr_number} stale before Ready transition")
             return 1
-        # Temporary owner-controlled Ready transition. The verified proof and
-        # exact-head/base/fork safety checks above remain mandatory.
-        print(f"PR #{pr_number} admission passed on {head_sha}; awaiting owner Draft-to-Ready transition")
+        pre_ready_state, pre_ready_description = ready_checks(
+            repository, token, head_sha, latest.get("mergeable"), pr_number
+        )
+        if pre_ready_state == "pending":
+            print(f"PR #{pr_number} remains Draft: pre-Ready checks are pending: {pre_ready_description}")
+            return 0
+        if pre_ready_state != "success":
+            print(f"PR #{pr_number} remains Draft: pre-Ready checks failed: {pre_ready_description}")
+            return 1
+
+        pull_request_node_id = str(latest.get("node_id") or "").strip()
+        if not pull_request_node_id:
+            print(f"PR #{pr_number} remains Draft: pull-request node id is unavailable")
+            return 1
+        # The trusted admission controller owns only the Draft -> Ready transition.
+        # Exact-head/base/fork and current security/evidence checks above are
+        # mandatory; merge remains separately owner-authorized. Treat the mutation
+        # response as advisory and confirm the resulting state through a fresh
+        # primary-token read to handle ambiguous GraphQL outcomes without forging
+        # readiness.
+        mark_ready(mutation_token, pull_request_node_id)
+        try:
+            confirmed = governance.read_mergeability(repository, token, pr_number)
+        except Exception as exc:
+            # The Ready mutation may have succeeded even if the confirmation
+            # read is unavailable. Restore Draft with the already-verified node
+            # id so an API outage cannot leave an unconfirmed candidate Ready.
+            rolled_back = convert_to_draft(mutation_token, pull_request_node_id)
+            outcome = "restored Draft" if rolled_back else "Draft rollback was not confirmed"
+            print(f"PR #{pr_number} Ready confirmation read failed " f"({type(exc).__name__}: {exc}); {outcome}.")
+            return 1
+        if (
+            confirmed.get("state") != "open"
+            or confirmed.get("draft") is not False
+            or (confirmed.get("head") or {}).get("sha") != head_sha
+            or (confirmed.get("base") or {}).get("sha") != (pr.get("base") or {}).get("sha")
+            or confirmed.get("node_id") != pr.get("node_id")
+        ):
+            # The privileged mutation may already have taken effect even though the
+            # candidate changed before confirmation. Restore Draft on the still-open
+            # PR so a HEAD/base/node race cannot leave an unadmitted candidate Ready.
+            if confirmed.get("state") == "open" and confirmed.get("draft") is False:
+                rollback_node_id = str(confirmed.get("node_id") or pull_request_node_id).strip()
+                if not convert_to_draft(mutation_token, rollback_node_id):
+                    print(f"PR #{pr_number} Ready confirmation raced and Draft rollback was not confirmed")
+                else:
+                    print(f"PR #{pr_number} Ready confirmation raced; restored Draft fail-closed")
+            else:
+                print(f"PR #{pr_number} Ready transition was not confirmed on the exact admitted candidate")
+            return 1
+        print(f"PR #{pr_number} admitted and promoted Ready on exact head {head_sha}")
         return 0
     if admission_state == "success":
         admission_state, description = ready_checks(repository, token, head_sha, pr.get("mergeable"), pr_number)

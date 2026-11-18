@@ -7,6 +7,8 @@ on:
       - Hunter / Trusted Preflight Upgrade
     types:
       - completed
+  schedule:
+    - cron: "9,19,29,39,49,59 * * * *"
 
 permissions:
   checks: read
@@ -25,9 +27,10 @@ jobs:
     # proof-producing workflow completes, then re-reads exact-head state and
     # fails closed if that proof is missing, stale, or failed.
     if: >-
-      github.event_name == 'workflow_run' &&
-      (github.event.workflow_run.event == 'push' ||
-       github.event.workflow_run.event == 'pull_request_target')
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_run' &&
+       (github.event.workflow_run.event == 'push' ||
+        github.event.workflow_run.event == 'pull_request_target'))
     name: Hunter Candidate Admission
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -83,10 +86,25 @@ jobs:
           # Legacy invariant marker retained for migration-contract tests: hunter_candidate_admission.py
           B=boot
           BRIDGE="${GITHUB_WORKSPACE}/engine/scripts/hunter_governance_review/${B}strap_external_review_469.py"
+          ADMISSION_FAILURES=0
           while IFS= read -r PR_NUMBER; do
             [[ -n "${PR_NUMBER}" ]] || continue
-            python "${BRIDGE}" candidate \
-              --pr "${PR_NUMBER}" \
-              --repository "${GH_REPO}" \
-              --head-sha "${EVENT_HEAD_SHA}"
+            if [[ -n "${EVENT_HEAD_SHA}" ]]; then
+              if ! python "${BRIDGE}" candidate \
+                --pr "${PR_NUMBER}" \
+                --repository "${GH_REPO}" \
+                --head-sha "${EVENT_HEAD_SHA}"; then
+                ADMISSION_FAILURES=1
+              fi
+            else
+              if ! python "${BRIDGE}" candidate \
+                --pr "${PR_NUMBER}" \
+                --repository "${GH_REPO}"; then
+                ADMISSION_FAILURES=1
+              fi
+            fi
           done <<< "${PR_NUMBERS}"
+          if [[ "${ADMISSION_FAILURES}" -ne 0 ]]; then
+            echo "::error::One or more candidate admissions failed; all candidates were still reconciled."
+            exit 1
+          fi

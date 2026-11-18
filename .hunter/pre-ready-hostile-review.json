@@ -2,74 +2,215 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "After owner-approved ruleset cutover, a real PR must be governed by Quality Gates, dependency-review, CodeQL and Hunter Merge Readiness; Pre-PR remains internal proof producer and bypass actors remain empty.",
-        "evidence": "Live ruleset 20523851 read-back shows the target required checks and zero bypass actors; PR #757 shadow evidence recorded parity=true, false_ready=false, missed_blocker=false; 27 cutover tests and cutover preflight pass.",
-        "id": "M7-post-cutover-canary",
+        "criterion": "Draft\u2192Ready promotion must consume the live PR/head-bound Issue acceptance verdict; pending or failed registered-Issue acceptance must not promote.",
+        "evidence": "ready_checks now supplies governance.issue_acceptance_state(...) to StaticReadinessObservation; dedicated pending/failure regression passes.",
+        "id": "ISSUE-736-acceptance-gate",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "If mark_ready may have succeeded but the post-mutation confirmation read fails, the controller must attempt fail-closed Draft restoration using the already-verified node id and mutation token.",
+        "evidence": "Confirmation read is caught; convert_to_draft is attempted before returning failure; dedicated API-outage rollback regression passes.",
+        "id": "ISSUE-736-confirmation-read-rollback",
         "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
+      "ambiguous-ready-mutation",
       "authorization",
       "caller-controlled-time-state",
-      "ci-fixture-isolation",
-      "codex-author-and-head-binding",
-      "codex-null-finding-summary",
       "cutoff-history",
+      "draft-base-race",
+      "draft-head-race",
+      "duplicate-ready-idempotency",
       "fail-closed",
-      "graphql-pagination",
-      "launchd-restricted-path",
+      "fail-closed-admission-and-receipt",
+      "fail-closed-draft-rollback",
+      "fork-ready-block",
+      "late-codeql-evidence",
+      "late-knowledge-receipt",
       "malformed-unknown-authority",
-      "missing-executable",
       "monotonicity",
-      "non-authoritative-rollout",
-      "pending-cycle-terminalization",
+      "mutation-token-routing",
+      "no-stale-event-head-on-schedule",
       "persistence-restrictions",
-      "pre-dispatch-provider-completion-dedup",
-      "provider-completion-not-authority",
-      "provider-summary-not-approval",
+      "post-ready-confirmation-read-outage",
+      "registered-issue-acceptance-failure",
+      "registered-issue-acceptance-pending",
       "replay",
-      "repository-binding",
       "restart-crash-retry",
-      "shadow-false-ready",
-      "shadow-head-drift",
-      "shadow-missed-blocker",
+      "scheduled-current-head-reconcile",
       "stale-head-and-check-evidence",
-      "standalone-issue-comment",
       "tamper-resistance",
-      "terminal-authority-preservation",
       "transaction-snapshot-consistency",
-      "trusted-dispatch-only",
       "unresolved-findings-and-reviewer-unavailability"
     ],
     "base_ref": "main",
-    "base_sha": "ddb9fe12802976afb4aec3f69105861f0a0ecc27",
+    "base_sha": "3efbb03f91cff753097559dea47afd15572317ea",
     "defect_families": [
       {
-        "evidence": "M7 post-cutover canary records already verified live ruleset/parity facts; no authority code changed.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-007",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-008",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-009",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-010",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-011",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-012",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 post-cutover canary records already verified live ruleset/parity facts; no authority code changed.",
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-014",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-015",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-016",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-019",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-020",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-021",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-023",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-025",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-026",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-028",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-029",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
         "family": "DFF-033",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-035",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-036",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-038",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-046",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-052",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "family": "DFF-057",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "588",
+    "issue": "736",
     "review_target": [
       {
-        "blob_sha": "c657c3fb3809a19fc8a0189b84e9385f8175a292",
-        "path": "docs/ARCHITECTURE_AUDITS/HUNTER_FAST_MERGE_M7_CUTOVER.md",
+        "blob_sha": "6196144a95ce6c7e69a0340a1746f74a66829aec",
+        "path": ".github/workflows/hunter-candidate-admission.yml",
         "previous_path": "",
-        "status": "added"
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a033b16e60b0f42bbe341996cf9cfccb946b1888",
+        "path": "scripts/hunter_candidate_admission.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "2c54c1b098a901c0b693428793f045079b87a0b0",
+        "path": "tests/test_hunter_candidate_admission.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "4d836b09696379e4f6fd129114f0e7f3cf85a882",
+        "path": "tests/test_issue_496_candidate_contract.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "b95ec46dc82522077bd72c86a24310eea32af47df2d4aa6e347f5e0c77b89d99"
+    "review_target_digest": "361cfafab7d00329c084e0ad1e309ec2e133421d443e25c72d8e78a0402e6321"
   },
-  "review_id": "280ee4271fe1a919eaaffce85ea2ec22199c7f329a546ed3983239eb0464a4af",
+  "review_id": "4078f0268221d9a1807ebdeb1c33cede75fd8ea56ce85e7663351b28b0760973",
   "review_request": {
-    "claims_id": "280ee4271fe1a919eaaffce85ea2ec22199c7f329a546ed3983239eb0464a4af",
+    "claims_id": "4078f0268221d9a1807ebdeb1c33cede75fd8ea56ce85e7663351b28b0760973",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
