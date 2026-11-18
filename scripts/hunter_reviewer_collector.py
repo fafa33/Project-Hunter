@@ -1532,12 +1532,20 @@ class GitHubBackend:
                     return verdict if verdict != "unknown" else "blocking"
                 if governance._substantive_review_body(body):
                     return "blocking"
+        summary_completed = False
         for item in _pages(self.repository, self.token, f"issues/{self.pr}/comments"):
             if (item.get("user") or {}).get("login", "").lower() != login:
                 continue
+            body = str(item.get("body") or "")
+            # A native Codex completion summary is genuine provider activity,
+            # but NOT the claims-bound review/approval required for clear.
+            # Stop waiting once the exact-head provider completed; report
+            # unavailability and let independent review authority remain separate.
+            # A later actionable review takes precedence (handled above).
+            if agent.get("id") == "codex" and governance.native_codex_summary_clear(body, self.expected_head):
+                summary_completed = True
             if str(item.get("created_at") or "") < created:
                 continue
-            body = str(item.get("body") or "")
             ack = governance.review_acknowledgement(body)
             if (
                 ack is not None
@@ -1553,7 +1561,7 @@ class GitHubBackend:
                 return "unavailable"
             if governance._substantive_review_body(body):
                 return "blocking"
-        return "waiting"
+        return "unavailable" if summary_completed else "waiting"
 
     def responded(self, agent: dict[str, Any], trigger: dict[str, Any]) -> bool:
         return self.response_state(agent, trigger) in {"clear", "blocking"}

@@ -2,15 +2,15 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "M1 bounded decision inventory and initial fail-closed regression coverage (partial milestone, not full Issue #588 acceptance)",
-        "evidence": "Partial M1-only inventory and ten new adversarial parameterized cases; no behavior change, 105 tests pass. Remaining M1 adversarial cases and M2-M7 are not claimed complete.",
-        "id": "M1",
+        "criterion": "M4 partial: reject PR HEAD drift between current-head check verification and final owner merge decision; full M4 acceptance remains open",
+        "evidence": "Signed commit 134a9c1 adds a second authenticated live PR HEAD read after decide_completion, rejects mismatch with HEAD_DIVERGENCE; 106 focused tests passed including matching/mismatching final HEAD; hosted checks success on PR #753.",
+        "id": "M4-head-drift",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Codex native authenticated completed exact-head issue-comment envelope is accepted as provider completion by the existing collector without impersonating a formal GitHub Review, weakening findings or owner merge gates",
-        "evidence": "Authenticated author and strict completed/no-findings/exact-head envelope parsing; negative tamper cases; collector response and acknowledgement tests; 258 focused tests passed.",
-        "id": "736-collector-parity",
+        "criterion": "An authenticated exact-head Codex completion summary stops redundant reviewer waiting but never becomes a review approval or clear verdict",
+        "evidence": "test_codex_exact_head_summary_ends_wait_without_forging_review_authority: authentic matching summary returns unavailable; wrong author or stale HEAD remains waiting; 260 focused collector/governance tests passed.",
+        "id": "codex-summary-boundary",
         "verdict": "satisfied"
       }
     ],
@@ -19,10 +19,10 @@
       "caller-controlled-time-state",
       "cutoff-history",
       "fail-closed",
-      "fail-closed-admission-and-receipt",
       "malformed-unknown-authority",
       "monotonicity",
       "persistence-restrictions",
+      "provider-summary-not-approval",
       "replay",
       "restart-crash-retry",
       "stale-head-and-check-evidence",
@@ -31,141 +31,156 @@
       "unresolved-findings-and-reviewer-unavailability"
     ],
     "base_ref": "main",
-    "base_sha": "72c711aee2ccc7bb0fdf706de391563cac5aa469",
+    "base_sha": "c96996e8e32d1a2c3c5fb3fa9f94c31403384905",
     "defect_families": [
       {
-        "evidence": "Review-request contract remains content-bound and non-authoritative; only documentation and regression tests change. No merge authority bypass. Focused test suite 105 passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Review-request contract remains content-bound and non-authoritative; only documentation and regression tests change. No merge authority bypass. Focused test suite 105 passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Review-request contract remains content-bound and non-authoritative; only documentation and regression tests change. No merge authority bypass. Focused test suite 105 passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against writer-identity-not-authorization-bound: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against stranded-intermediate-commit-evidence: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Review-request contract remains content-bound and non-authoritative; only documentation and regression tests change. No merge authority bypass. Focused test suite 105 passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Inspected ready-without-complete-hostile-review against M1 docs/tests only: A candidate is admitted for review only when exact-head-bound repository-owned state proves the complete base->HEAD range was hostile-reviewed against the governing Issue acceptance criteria and every applicable recurring-defect family, with no unresolved blocking finding. Collector-only provider evidence acceptance added; 258 focused tests passed; governance/merge authority unchanged.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against pending-prerequisite-reported-as-failure: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against overclaimed-prevention-state: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against validation-proof-reused-without-immutable-identity: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against runtime-bootstrap-not-volume-aware-before-issuer-composition: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against live-instance-execution-ownership-isolation: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against accepted-execution-shutdown-drain-safety: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against merge-readiness-without-current-head-review-authority: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against preflight-not-enforced-before-ledger-claim-on-every-execution-entry-point: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against exhausted-exact-head-review-cycle-has-no-review-after-remediation-transition: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against governance-authority-cutover-dependency-cycle: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against external-reviewer-availability-cannot-deadlock-merge-authority: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Inspected candidate-must-pass-canonical-preflight-before-pr-publication against M1 docs/tests only: A candidate may be pushed only through the repository pre-push safety boundary; the full canonical pytest proof runs exactly once in the hosted exact-HEAD Pre-PR stage, and a Draft PR may be opened only after that hosted proof succeeds. Focused tests are diagnostic evidence and never substitute for the hosted canonical proof. Collector-only provider evidence acceptance added; 258 focused tests passed; governance/merge authority unchanged.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Inspected tracked-governance-asset-not-loadable-at-its-path against M1 docs/tests only: Every tracked governance asset resolves to a path its declared consumer can actually load, and no tracked path carries characters that the consumer's own path grammar rejects. A tracked asset its consumer cannot load contributes no enforcement, and its absence must be a machine-detected condition rather than a silent one. Collector-only provider evidence acceptance added; 258 focused tests passed; governance/merge authority unchanged.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Inspected external-precondition-asserted-inside-deterministic-test-lane against M1 docs/tests only: The deterministic validation lane asserts only on repository-owned state. A precondition owned outside the repository -- an Issue body, a remote API response, a live network endpoint -- is validated on the runtime path that actually consumes it and reported as its own attributable signal, never as a deterministic-lane assertion whose failure is indistinguishable from a defect in the change under test. Collector-only provider evidence acceptance added; 258 focused tests passed; governance/merge authority unchanged.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against governance-verdict-not-machine-readable: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against required-governance-capability-degraded-best-effort-silently: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
-        "family": "DFF-038",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Targeted diff review against global-rest-endpoint-addressed-through-repository-scoped-seam: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
-        "family": "DFF-039",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Targeted diff review against trusted-controller-logic-candidate-cannot-self-validate-across-a-load-bearing-trust-boundary: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Targeted diff review against trusted-preflight-success-masks-unresolved-review-threads: this change only reads authenticated provider-authored exact-head completion evidence in the trusted collector, with no new execution, mutation, receipt, merge or approval authority; negative cases tested and 258 focused tests passed.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "family": "DFF-043",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "family": "DFF-046",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "family": "DFF-050",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "family": "DFF-051",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-053",
         "outcome": "clear"
       },
       {
-        "evidence": "Inspected stale-exact-head-review-request-reconcile-terminal-error-loop against M1 docs/tests only: A pre-ready hostile-review request binds the reviewed candidate content and exact PR HEAD. Mutation invalidates prior review evidence and blocks Ready/merge. The trusted GitHub-native reconcile must represent missing/stale review as a durable, actionable blocked/waiting state, distinguish it from execution/security failures, and recover after a new authenticated exact-head request without rerun loops, forged approvals or unbounded polling. Collector-only provider evidence acceptance added; 258 focused tests passed; governance/merge authority unchanged.",
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
         "family": "DFF-055",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Reviewed staged M4 merge guard and Codex collector completion-boundary diff; 260 focused tests passed; no change to review approval authority, proof minting, or security gate.",
+        "family": "DFF-057",
         "outcome": "clear"
       }
     ],
@@ -173,35 +188,35 @@
     "issue": "588",
     "review_target": [
       {
-        "blob_sha": "f0b417b129ddd26c9a82493f2c77565d956b187f",
-        "path": "docs/HUNTER_MERGE_READINESS_CONTROLLER.md",
+        "blob_sha": "d9df4b0cc90961c02b8b8cd7ab00a1dad57c9812",
+        "path": "scripts/hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d05810c700b9e5559f1cde1d5ee075f41a17b49e",
-        "path": "scripts/hunter_governance_review_v2.py",
+        "blob_sha": "a60cdaa7bfed70553bf3f9320c28c2e5fc30217d",
+        "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "c671fea9ef83578e2b1bec04eb43764aaea8941f",
+        "blob_sha": "66c2c2cd791e92533cb20615e54d056710c3a0e4",
         "path": "tests/test_hunter_merge_readiness_v2.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "fa4e75ea6edd2cca9f7cc73bfec7e1314469f999",
+        "blob_sha": "a49fee613def80172a28c87130507d729143cc39",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "9672d143c698bc85ab2a27348014052f4e43f9fc58d02de0bf61e8458c2d5c49"
+    "review_target_digest": "22e31242109f517f0146cd49e823b8dd459600a07d3006e5451fba86b908523f"
   },
-  "review_id": "4fb7f3cf36f47f9143a3e1c5c9adba482b1cda0ca114e3c0c65cd0fd85c0959f",
+  "review_id": "c9201a88f72c7e74b905ad8994a716b194af6f4e73ddf4167a966922c3283999",
   "review_request": {
-    "claims_id": "4fb7f3cf36f47f9143a3e1c5c9adba482b1cda0ca114e3c0c65cd0fd85c0959f",
+    "claims_id": "c9201a88f72c7e74b905ad8994a716b194af6f4e73ddf4167a966922c3283999",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

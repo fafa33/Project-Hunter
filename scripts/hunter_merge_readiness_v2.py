@@ -1193,6 +1193,19 @@ def owner_merge_guard(pr_number: int) -> CompletionVerdict:
         return CompletionVerdict(False, "MERGE_NOT_READY", f"HGCC-1: {checks_reason}")
 
     readiness = decide_completion(pr_number)
+    # M4: completion re-reads the live PR. A successful decision for a newer
+    # head must never authorize merging the earlier local/remote candidate.
+    try:
+        current_pr = request_json("GET", f"pulls/{pr_number}", token=auth_token)
+    except (transport.GitHubUnavailable, transport.GitHubRequestError) as exc:
+        return CompletionVerdict(False, "HEAD_DIVERGENCE", f"final PR head unavailable: {exc}")
+    current_head = (
+        str((current_pr.get("head") or {}).get("sha") or "").strip()
+        if isinstance(current_pr, dict) and current_pr.get("state") == "open"
+        else ""
+    )
+    if current_head != local_head:
+        return CompletionVerdict(False, "HEAD_DIVERGENCE", "PR head changed during live merge decision")
     if readiness is None or not readiness.accepted:
         reason = "merge readiness is unavailable" if readiness is None else readiness.reason
         return CompletionVerdict(False, "MERGE_NOT_READY", reason)

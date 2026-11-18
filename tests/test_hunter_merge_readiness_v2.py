@@ -998,7 +998,8 @@ def test_owner_merge_guard_rejects_dirty_or_unpushed_intended_head(monkeypatch):
     assert verdict.state == "HEAD_DIVERGENCE"
 
 
-def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeypatch):
+@pytest.mark.parametrize("final_head_matches", [True, False])
+def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeypatch, final_head_matches):
     class Result:
         def __init__(self, stdout):
             self.stdout = stdout
@@ -1042,9 +1043,14 @@ def test_owner_merge_guard_accepts_only_clean_identical_merge_ready_head(monkeyp
         lambda _head, **kwargs: [{"id": 1, "name": "Quality Gates", "status": "completed", "conclusion": "success"}],
     )
     monkeypatch.setattr(core, "paged", lambda path, **kwargs: [])
+    monkeypatch.setattr(
+        core,
+        "request_json",
+        lambda *_args, **_kwargs: {"state": "open", "head": {"sha": head if final_head_matches else "b" * 40}},
+    )
     verdict = core.owner_merge_guard(562)
-    assert verdict.accepted
-    assert verdict.state == "OWNER_MERGE_GUARD_ACCEPTED"
+    assert verdict.accepted is final_head_matches
+    assert verdict.state == ("OWNER_MERGE_GUARD_ACCEPTED" if final_head_matches else "HEAD_DIVERGENCE")
 
 
 def _success_description(authority: tuple[str, str]) -> str:

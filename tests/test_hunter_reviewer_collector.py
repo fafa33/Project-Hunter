@@ -3016,6 +3016,48 @@ def test_codex_summary_is_not_adoptable_review_authority(monkeypatch):
         assert backend.response_state(agent, trigger) != "clear"
 
 
+def test_codex_exact_head_summary_ends_wait_without_forging_review_authority(monkeypatch):
+    """Provider completion ends collection, but never satisfies the review gate."""
+    import hunter_governance_review_v2 as governance
+
+    envelope = (
+        "<!-- codex-pull-request-review-summary -->\n"
+        "<!-- codex-review-state:v1 "
+        + json.dumps(
+            {
+                "code_review": {
+                    "commit_sha": HEAD,
+                    "status": "completed",
+                    "has_any_findings": False,
+                    "has_unresolved_findings": False,
+                }
+            }
+        )
+        + " -->\n<details><summary>Codex Review Summary</summary></details>"
+    )
+    trigger = {"id": 42, "created_at": "2026-11-17T01:41:00Z", "collector_run_id": 123}
+    for login, body, expected in (
+        ("chatgpt-codex-connector[bot]", envelope, "unavailable"),
+        ("github-actions[bot]", envelope, "waiting"),
+        ("chatgpt-codex-connector[bot]", envelope.replace(HEAD, "b" * 40), "waiting"),
+    ):
+        backend = _backend(
+            monkeypatch,
+            [RULESET_SUMMARY],
+            comments=[
+                {
+                    "id": 200,
+                    "user": {"login": login},
+                    "created_at": "2026-11-17T01:40:36Z",
+                    "body": body,
+                }
+            ],
+        )
+        assert backend.response_state(dict(CODEX_REQUEST_AGENT), trigger) == expected
+        assert backend.acknowledged(dict(CODEX_REQUEST_AGENT), trigger) is False
+    assert governance.native_codex_summary_clear(envelope, HEAD)
+
+
 def test_newer_blocking_codex_review_supersedes_clean_summary(monkeypatch):
     """A summary cannot mask a later exact-head changes-requested review."""
     import hunter_governance_review_v2 as governance
