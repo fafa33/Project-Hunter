@@ -3014,9 +3014,15 @@ def test_codex_exact_head_summary_ends_wait_without_forging_review_authority(mon
         )
         + " -->\n<details><summary>Codex Review Summary</summary></details>"
     )
+    ambiguous = envelope.replace('"has_any_findings": false', '"has_any_findings": null').replace(
+        '"has_unresolved_findings": false', '"has_unresolved_findings": null'
+    )
+    assert governance.native_codex_summary_completed(ambiguous, HEAD)
+    assert not governance.native_codex_summary_clear(ambiguous, HEAD)
     trigger = {"id": 42, "created_at": "2026-11-17T01:41:00Z", "collector_run_id": 123}
     for login, body, expected in (
         ("chatgpt-codex-connector[bot]", envelope, "unavailable"),
+        ("chatgpt-codex-connector[bot]", ambiguous, "unavailable"),
         ("github-actions[bot]", envelope, "waiting"),
         ("chatgpt-codex-connector[bot]", envelope.replace(HEAD, "b" * 40), "waiting"),
     ):

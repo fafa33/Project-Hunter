@@ -2,16 +2,16 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Live shadow parity must re-read PR HEAD after successor evaluation and refuse comparison if a concurrent push changes the candidate during PR-scoped fact reads.",
-        "evidence": "Codex P1 reproduced and fixed with final HEAD re-read; adversarial concurrent-head regression added; 140 focused shadow/cutover/readiness tests and Ruff pass.",
-        "id": "M7-shadow-head-race",
+        "criterion": "An authenticated exact-head Codex summary with status=completed must end optional reviewer waiting even when finding-summary fields are null; it must not create review/merge authority, while unresolved threads and CHANGES_REQUESTED remain fail-closed.",
+        "evidence": "Added separate completed-vs-clear parser semantics; collector uses completed only to terminalize unavailability. 646 focused tests + Defect Prevention Guard + Ruff pass.",
+        "id": "M7-codex-completion-terminal",
         "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
       "authorization",
       "caller-controlled-time-state",
-      "concurrent-head-after-live-evaluation",
+      "codex-null-finding-summary",
       "cutoff-history",
       "fail-closed",
       "graphql-pagination",
@@ -21,6 +21,7 @@
       "monotonicity",
       "non-authoritative-rollout",
       "persistence-restrictions",
+      "provider-completion-not-authority",
       "provider-summary-not-approval",
       "replay",
       "restart-crash-retry",
@@ -38,92 +39,152 @@
     "base_sha": "6938aacc7496ec37eacce7f2d90d70f852fe7108",
     "defect_families": [
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "family": "DFF-022",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "family": "DFF-024",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "family": "DFF-025",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "family": "DFF-026",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "family": "DFF-037",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "family": "DFF-038",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "family": "DFF-039",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "family": "DFF-040",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "family": "DFF-043",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "family": "DFF-050",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "family": "DFF-053",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
+        "family": "DFF-055",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fix separates provider completion from clean-review authority and preserves canonical blocking findings paths; 646 focused tests pass.",
         "family": "DFF-057",
         "outcome": "clear"
       }
@@ -132,8 +193,20 @@
     "issue": "588",
     "review_target": [
       {
+        "blob_sha": "005012422e7dc704084d0597d7abd3412d12c506",
+        "path": "scripts/hunter_governance_review_v2.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "aa771f44b3f0f7c18a583fd7cc1102e82f440ea8",
         "path": "scripts/hunter_governance_shadow.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "e32ea1e4c824361eb80108fe2bc0eff80c0adfcf",
+        "path": "scripts/hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -142,13 +215,19 @@
         "path": "tests/test_hunter_governance_shadow.py",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "35ac0f74331f0679a660a97a3b21e076b8876177",
+        "path": "tests/test_hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "f1309d3bcc08c19201fa043c9aa10cccd50c00adf7a59d53ffa060ea16670ef2"
+    "review_target_digest": "96b36a01faa4495fa3385bf7942c5bc6b77ded11255c248586cd9d1f0c77e4cd"
   },
-  "review_id": "7b81eff0a25f204f970b2904e82c343c9b31d82ab68677ec3032064c0b6a05b4",
+  "review_id": "5d7de449933c883d03f4380b708ad528133e2c712b783e3596af75eaa6bff493",
   "review_request": {
-    "claims_id": "7b81eff0a25f204f970b2904e82c343c9b31d82ab68677ec3032064c0b6a05b4",
+    "claims_id": "5d7de449933c883d03f4380b708ad528133e2c712b783e3596af75eaa6bff493",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

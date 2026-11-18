@@ -1542,7 +1542,7 @@ class GitHubBackend:
             # Stop waiting once the exact-head provider completed; report
             # unavailability and let independent review authority remain separate.
             # A later actionable review takes precedence (handled above).
-            if agent.get("id") == "codex" and governance.native_codex_summary_clear(body, self.expected_head):
+            if agent.get("id") == "codex" and governance.native_codex_summary_completed(body, self.expected_head):
                 summary_completed = True
             if str(item.get("created_at") or "") < created:
                 continue
