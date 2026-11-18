@@ -2,9 +2,9 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Only Codex is enabled in canonical reviewer pool; unavailable external reviewers cannot hold orchestration open",
-        "evidence": "Pool retains Codex only; secrets removed from collector workflow; 409 focused tests pass.",
-        "id": "M5-codex-only",
+        "criterion": "Codex-only policy tests and durable defect-registry selectors must match the canonical test names",
+        "evidence": "Both stale policy tests updated and DFF-022/DFF-029 selectors repointed; focused suites and prevention guard pass.",
+        "id": "PR755-Codex-P1",
         "verdict": "satisfied"
       }
     ],
@@ -33,157 +33,162 @@
     "base_sha": "f7418b97946dafa64899dc77d1ae6309c46bd10c",
     "defect_families": [
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-017",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "family": "DFF-045",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex-only reviewer policy, retired local reviewer guard adapted, 388 targeted tests and prevention guard pass.",
+        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
         "family": "DFF-052",
         "outcome": "clear"
       }
@@ -204,6 +209,12 @@
         "status": "modified"
       },
       {
+        "blob_sha": "416654500802b3664182146c0f33999feb6c098b",
+        "path": "docs/DEFECT_REGISTRY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "3a0ab2bf5ff4f0766d736015d0cd685a54e5d8be",
         "path": "scripts/hunter_defect_prevention_preflight.py",
         "previous_path": "",
@@ -212,6 +223,12 @@
       {
         "blob_sha": "03617ec12cb790d6ade9f92abc5de32a8446d4f7",
         "path": "scripts/hunter_review_wakeup_poll.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "59d7e6c7ada9efedade789629a53d96dde24d7ea",
+        "path": "tests/test_code_write_policy.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -234,11 +251,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "dfb5ab4326ec3241d184f7662553c9d0b110422cc614948fe6e20ee933c998c0"
+    "review_target_digest": "e1908c010b96f1d56c2e65a2525bb6db32220209f6bafcc8a10e45df099155cf"
   },
-  "review_id": "5e0bfd1b2cd1c5c1297c4834288e824ff7969b436d830183743f3dfa36cbacb3",
+  "review_id": "c85056b0d85816f474c4666950c480a8fb8ec9cb81427edcaab85dad862ffd5d",
   "review_request": {
-    "claims_id": "5e0bfd1b2cd1c5c1297c4834288e824ff7969b436d830183743f3dfa36cbacb3",
+    "claims_id": "c85056b0d85816f474c4666950c480a8fb8ec9cb81427edcaab85dad862ffd5d",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

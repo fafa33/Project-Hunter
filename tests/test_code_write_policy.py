@@ -79,8 +79,8 @@ def test_code_write_policy_declares_codex_primary_with_a_recorded_reason_fallbac
     assert expected <= set(authority["fallback_requires_snapshot_gates"])
 
 
-def test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_guard() -> None:
-    """The ordered reviewer pool: local free-first, Codex hosted fallback, guard last resort."""
+def test_code_write_policy_declares_codex_only_reviewer_pool_with_a_last_resort_guard() -> None:
+    """The active reviewer pool is Codex-only; the guard remains a non-review fallback boundary."""
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
 
@@ -88,13 +88,11 @@ def test_code_write_policy_declares_an_ordered_reviewer_pool_with_a_last_resort_
     assert pool["timeout_policy"]["bounded"] is True
     assert pool["timeout_policy"]["default_seconds"] > 0
     assert pool["timeout_policy"]["max_seconds"] >= pool["timeout_policy"]["default_seconds"]
-    by_id = {agent["id"]: agent for agent in pool["agents"]}
-    assert by_id["codex"]["enabled"] is True
-    assert by_id["local-ollama"]["priority"] > by_id["groq"]["priority"]
-    assert by_id["local-ollama"]["enabled"] is False
-    assert by_id["local-ollama"]["authority_eligible"] is False
-    assert by_id["codex"]["priority"] == 1
-    assert by_id["codex"]["exact_head_support"] is True
+    assert [agent["id"] for agent in pool["agents"]] == ["codex"]
+    codex = pool["agents"][0]
+    assert codex["enabled"] is True
+    assert codex["priority"] == 1
+    assert codex["exact_head_support"] is True
 
 
 def test_reviewer_requires_distinct_ack_and_review_budgets() -> None:
@@ -307,18 +305,15 @@ def test_guard_rejects_an_enabled_grant_with_no_bound_writer_identity() -> None:
     assert any("binds no writer identity" in error for error in prevention.validate_connector_write_ingress(policy))
 
 
-def test_local_ollama_is_triage_only_and_disabled_without_health_admission() -> None:
+def test_any_configured_local_reviewer_remains_disabled_and_triage_only() -> None:
     policy = json.loads((ROOT / "docs" / "CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
-    by_id = {agent["id"]: agent for agent in pool["agents"]}
-    local = by_id["local-ollama"]
-    assert local["enabled"] is False
-    assert local["authority_eligible"] is False
-    assert local["retryable"] is False
-    assert local["priority"] > by_id["groq"]["priority"]
-    assert local["trigger_method"] == "github-workflow:hunter-local-reviewer.yml"
-    assert local["ack_timeout_seconds"] == 30
-    assert by_id["codex"]["priority"] == 1
+    local_reviewers = [agent for agent in pool["agents"] if agent["id"] == "local-ollama"]
+    for local in local_reviewers:
+        assert local["enabled"] is False
+        assert local["authority_eligible"] is False
+        assert local["retryable"] is False
+    assert next(agent for agent in pool["agents"] if agent["id"] == "codex")["priority"] == 1
 
 
 def test_codex_hard_review_budget_covers_its_observed_hosted_latency() -> None:
