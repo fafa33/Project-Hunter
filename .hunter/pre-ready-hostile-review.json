@@ -2,9 +2,9 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "One focused local lane; one canonical hosted full proof per immutable head except trusted-definition changes; parallel independent checks; per-stage deadlines and bounded reviewer retry/timeout; unavailable reviewers nonblocking while substantive findings remain blocking.",
-        "evidence": "Existing proof-reuse, parallel-lane, terminal-state and finding-block regressions pass. Reviewer collector old 52-minute envelope reduced to 38 minutes around the current 1920-second active-pool hard bound. 500 focused tests, Defect Prevention Guard and Ruff pass.",
-        "id": "M6-bounded-execution",
+        "criterion": "Shadow rollout compares published readiness with a fresh exact-head successor decision on real non-Draft PRs, records false-ready and missed-blocker signals, and refuses comparison if HEAD moves; no write authority or cutover is granted.",
+        "evidence": "Read-only live parity path added; 139 focused shadow/cutover/readiness tests and Defect Prevention Guard pass.",
+        "id": "M7-shadow-parity",
         "verdict": "satisfied"
       }
     ],
@@ -14,137 +14,116 @@
       "cutoff-history",
       "fail-closed",
       "graphql-pagination",
-      "immutable-head-deduplication",
       "launchd-restricted-path",
       "malformed-unknown-authority",
       "missing-executable",
       "monotonicity",
+      "non-authoritative-rollout",
       "persistence-restrictions",
       "provider-summary-not-approval",
       "replay",
       "restart-crash-retry",
-      "reviewer-timeout-budget",
-      "reviewer-unavailability",
+      "shadow-false-ready",
+      "shadow-head-drift",
+      "shadow-missed-blocker",
       "stale-head-and-check-evidence",
       "standalone-issue-comment",
-      "substantive-finding-blocking",
       "tamper-resistance",
       "transaction-snapshot-consistency",
-      "trusted-definition-full-proof-exception",
       "trusted-dispatch-only",
       "unresolved-findings-and-reviewer-unavailability"
     ],
     "base_ref": "main",
-    "base_sha": "78050cef347b005fe9484b9fe76044c16fde7cce",
+    "base_sha": "6938aacc7496ec37eacce7f2d90d70f852fe7108",
     "defect_families": [
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "family": "DFF-007",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "family": "DFF-008",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-022",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-024",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-025",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-027",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-036",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-040",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-043",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-044",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-046",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "M6 only tightens the bounded reviewer execution envelope and regression guard; canonical proof/reuse/fail-closed authorities are unchanged. 500 focused tests pass.",
-        "family": "DFF-052",
+        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "family": "DFF-057",
         "outcome": "clear"
       }
     ],
@@ -152,23 +131,23 @@
     "issue": "588",
     "review_target": [
       {
-        "blob_sha": "180fbd83434be5d3118b3736d33ce8e1365b812e",
-        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "blob_sha": "00cc1fdc4f7ccf300d8f24a9a95d94f8eda78580",
+        "path": "scripts/hunter_governance_shadow.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "258bbcff7fd13fecc84607a95617e0ec57d70e54",
-        "path": "tests/test_reviewer_collector_deadlines.py",
+        "blob_sha": "e8d5813f2098f4c9a3c9e3cfd9f26b86ecea8fe8",
+        "path": "tests/test_hunter_governance_shadow.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "5aa1f2848da7a1210bde9b8b919a720e0569bcf141248a8c0be4616eab046fcd"
+    "review_target_digest": "f08e3af45dfb87a8b71653db010da566893fad254f3adbc32368456ba2998d7e"
   },
-  "review_id": "d2619711ec8ddbec4a778ba038f26b91bbc78e105907327a429d09e37f1b4c8f",
+  "review_id": "b467f8f8ad344115bbf2077febd4f994d6e7557ec577002e638d45d216ca5edd",
   "review_request": {
-    "claims_id": "d2619711ec8ddbec4a778ba038f26b91bbc78e105907327a429d09e37f1b4c8f",
+    "claims_id": "b467f8f8ad344115bbf2077febd4f994d6e7557ec577002e638d45d216ca5edd",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
