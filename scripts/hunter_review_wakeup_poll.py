@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -22,8 +23,19 @@ MAX_DISPATCHES_PER_HOUR = 60
 STATE_PATH = Path(os.environ.get("HUNTER_REVIEW_WAKEUP_STATE", str(Path.home() / ".hunter-review-wakeup-state.json")))
 
 
+def gh_binary() -> str:
+    """Find the trusted host CLI even under launchd's restricted PATH."""
+    found = shutil.which("gh")
+    if found:
+        return found
+    for candidate in ("/usr/local/opt/gh/bin/gh", "/opt/homebrew/bin/gh"):
+        if Path(candidate).is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    raise RuntimeError("GitHub CLI unavailable: configure launchd PATH or install gh")
+
+
 def gh(*args: str) -> Any:
-    result = subprocess.run(("gh", *args), check=True, text=True, capture_output=True, timeout=12)
+    result = subprocess.run((gh_binary(), *args), check=True, text=True, capture_output=True, timeout=12)
     return json.loads(result.stdout)
 
 
@@ -67,7 +79,7 @@ def review_revision(number: int) -> str:
 def dispatch(number: int) -> None:
     subprocess.run(
         (
-            "gh",
+            gh_binary(),
             "workflow",
             "run",
             "hunter-merge-readiness.yml",
