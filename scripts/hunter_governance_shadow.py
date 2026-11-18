@@ -119,6 +119,18 @@ def compare_live_readiness(repo: str, token: str, pr_number: int, snap: dict[str
             "reason": "head changed during shadow comparison",
             "observed_live_head": live_head,
         }
+    # `decide()` binds its result to the HEAD from its first PR read. Re-read
+    # after every live readiness fact has been evaluated so a concurrent push
+    # cannot mix PR-scoped review facts from a new HEAD with old-head checks.
+    final_pr = get_json(repo, token, f"pulls/{pr_number}")
+    final_head = str((final_pr.get("head") or {}).get("sha") or "").strip() if isinstance(final_pr, dict) else ""
+    if final_head != snap["head_sha"]:
+        return {
+            **base,
+            "semantic_state": "UNKNOWN",
+            "reason": "head changed during shadow comparison",
+            "observed_live_head": final_head,
+        }
     legacy_state = str(legacy.get("state") or "")
     return {
         **base,

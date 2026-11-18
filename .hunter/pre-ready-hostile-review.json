@@ -2,15 +2,16 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Shadow rollout compares published readiness with a fresh exact-head successor decision on real non-Draft PRs, records false-ready and missed-blocker signals, and refuses comparison if HEAD moves; no write authority or cutover is granted.",
-        "evidence": "Read-only live parity path added; 139 focused shadow/cutover/readiness tests and Defect Prevention Guard pass.",
-        "id": "M7-shadow-parity",
+        "criterion": "Live shadow parity must re-read PR HEAD after successor evaluation and refuse comparison if a concurrent push changes the candidate during PR-scoped fact reads.",
+        "evidence": "Codex P1 reproduced and fixed with final HEAD re-read; adversarial concurrent-head regression added; 140 focused shadow/cutover/readiness tests and Ruff pass.",
+        "id": "M7-shadow-head-race",
         "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
       "authorization",
       "caller-controlled-time-state",
+      "concurrent-head-after-live-evaluation",
       "cutoff-history",
       "fail-closed",
       "graphql-pagination",
@@ -37,92 +38,92 @@
     "base_sha": "6938aacc7496ec37eacce7f2d90d70f852fe7108",
     "defect_families": [
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "M7 phase-1 changes are read-only shadow observation plus adversarial tests; no ruleset, publication, merge, or cutover authority is changed.",
+        "evidence": "Codex P1 fixed fail-closed by final exact-head re-read after live successor evaluation; read-only shadow authority unchanged.",
         "family": "DFF-057",
         "outcome": "clear"
       }
@@ -131,23 +132,23 @@
     "issue": "588",
     "review_target": [
       {
-        "blob_sha": "00cc1fdc4f7ccf300d8f24a9a95d94f8eda78580",
+        "blob_sha": "aa771f44b3f0f7c18a583fd7cc1102e82f440ea8",
         "path": "scripts/hunter_governance_shadow.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "e8d5813f2098f4c9a3c9e3cfd9f26b86ecea8fe8",
+        "blob_sha": "66b4d4a16a0b74d9ed5dd3432345815b91ffcfb2",
         "path": "tests/test_hunter_governance_shadow.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "f08e3af45dfb87a8b71653db010da566893fad254f3adbc32368456ba2998d7e"
+    "review_target_digest": "f1309d3bcc08c19201fa043c9aa10cccd50c00adf7a59d53ffa060ea16670ef2"
   },
-  "review_id": "b467f8f8ad344115bbf2077febd4f994d6e7557ec577002e638d45d216ca5edd",
+  "review_id": "7b81eff0a25f204f970b2904e82c343c9b31d82ab68677ec3032064c0b6a05b4",
   "review_request": {
-    "claims_id": "b467f8f8ad344115bbf2077febd4f994d6e7557ec577002e638d45d216ca5edd",
+    "claims_id": "7b81eff0a25f204f970b2904e82c343c9b31d82ab68677ec3032064c0b6a05b4",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
