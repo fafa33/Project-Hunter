@@ -2,8 +2,8 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "After exact-head candidate admission succeeds for a safe same-repository Draft PR, the trusted controller must perform Draft\u2192Ready using the existing narrow mutation token, then confirm open/non-Draft/exact-head/base/node state by fresh read. Ambiguous mutation without confirmed Ready must fail closed. Merge approval remains separate and manual.",
-        "evidence": "31 direct candidate-admission tests + 172 related readiness/review wakeup tests pass; Defect Prevention Guard passes. No PAT/new workflow/new authority introduced.",
+        "criterion": "After exact-head candidate admission succeeds for a safe same-repository Draft PR, the trusted controller must perform Draft\u2192Ready using the existing narrow mutation token, then confirm open/non-Draft/exact-head/base/node state by fresh read. Any historical regression expecting owner-only Ready must be updated to the canonical automatic-admission contract; ambiguous mutation without confirmed Ready fails closed. Merge approval remains separate and manual.",
+        "evidence": "32 direct/legacy candidate-contract tests pass after updating the stale Issue #496 owner-only Ready expectation; related readiness/review-wakeup suites and Defect Prevention Guard previously passed.",
         "id": "ISSUE-736-native-ready",
         "verdict": "satisfied"
       }
@@ -153,13 +153,19 @@
         "path": "tests/test_hunter_candidate_admission.py",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "27ef382ae45a968eaf53dfa70ea1128d8f7da3fb",
+        "path": "tests/test_issue_496_candidate_contract.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "524c58fb42181818d65562a1cf6c51380361c7a0f4eebb106e8a03eacb1f821f"
+    "review_target_digest": "e7e192c2ef8f8319574786858659c93fc76fcddf1b7e61d04be94189bd3c9760"
   },
-  "review_id": "a9497e90028708115a299bb75887cdc0d7d3dae786be57acfc7075814cc2a5cb",
+  "review_id": "439b64028bbd5dc809beb3f3677101e4998a133fa51e3312924aec1a1fea2f0f",
   "review_request": {
-    "claims_id": "a9497e90028708115a299bb75887cdc0d7d3dae786be57acfc7075814cc2a5cb",
+    "claims_id": "439b64028bbd5dc809beb3f3677101e4998a133fa51e3312924aec1a1fea2f0f",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
