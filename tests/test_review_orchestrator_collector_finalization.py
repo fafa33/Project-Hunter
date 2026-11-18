@@ -160,18 +160,23 @@ def test_a_receipt_that_is_not_the_expected_object_is_never_exhaustion(receipt):
 
 def test_a_partial_receipt_is_not_exhaustion():
     attempts = _exhausted_attempts()
-    assert not verdict(make_receipt(attempts=attempts[:-1])).exhausted
-    assert not verdict(make_receipt(attempts=attempts[:1])).exhausted
+    assert attempts
+    assert not verdict(make_receipt(attempts=[])).exhausted
+    if len(attempts) > 1:
+        assert not verdict(make_receipt(attempts=attempts[:-1])).exhausted
 
 
 def test_extra_out_of_order_or_duplicated_records_are_not_exhaustion():
     attempts = _exhausted_attempts()
     extra = [*attempts, copy.deepcopy(attempts[-1])]
-    swapped = [attempts[1], attempts[0], *attempts[2:]]
-    duplicated = copy.deepcopy(attempts)
-    duplicated[1]["trigger_id"] = duplicated[0]["trigger_id"]
-    duplicated[1]["agent_id"] = duplicated[0]["agent_id"]
-    for candidate in (extra, swapped, duplicated):
+    candidates = [extra]
+    if len(attempts) > 1:
+        swapped = [attempts[1], attempts[0], *attempts[2:]]
+        duplicated = copy.deepcopy(attempts)
+        duplicated[1]["trigger_id"] = duplicated[0]["trigger_id"]
+        duplicated[1]["agent_id"] = duplicated[0]["agent_id"]
+        candidates.extend((swapped, duplicated))
+    for candidate in candidates:
         assert not verdict(make_receipt(attempts=candidate)).exhausted
 
 

@@ -2,9 +2,9 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Codex-only policy tests and durable defect-registry selectors must match the canonical test names",
-        "evidence": "Both stale policy tests updated and DFF-022/DFF-029 selectors repointed; focused suites and prevention guard pass.",
-        "id": "PR755-Codex-P1",
+        "criterion": "All reviewer-policy, collector-finalization and benchmark regressions must support canonical Codex-only pool without weakening fail-closed synthetic reviewer admission",
+        "evidence": "78 directly failing tests pass; combined focused suite 580 passed; Defect Prevention Guard passed.",
+        "id": "PR755-hosted-gates",
         "verdict": "satisfied"
       }
     ],
@@ -33,162 +33,162 @@
     "base_sha": "f7418b97946dafa64899dc77d1ae6309c46bd10c",
     "defect_families": [
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-017",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-045",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "Codex PR #755 policy-test finding fixed; renamed canonical selectors updated in defect registry; 93 policy tests, 388 reviewer/orchestrator tests, Defect Prevention Guard, Ruff and Black pass.",
+        "evidence": "Hosted Pre-PR eight Codex-only compatibility failures fixed; 580 focused tests pass and Defect Prevention Guard passes.",
         "family": "DFF-052",
         "outcome": "clear"
       }
@@ -245,17 +245,29 @@
         "status": "modified"
       },
       {
+        "blob_sha": "c9f4bbce9f7493f3f91a8124a71bfd2665fc452f",
+        "path": "tests/test_hunter_reviewer_benchmark.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "c9897b502643715a6941a51e88081da22e04b7c8",
         "path": "tests/test_hunter_reviewer_collector.py",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "08aa81e5dc48dd473735003ec6428184d66b8dcd",
+        "path": "tests/test_review_orchestrator_collector_finalization.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "e1908c010b96f1d56c2e65a2525bb6db32220209f6bafcc8a10e45df099155cf"
+    "review_target_digest": "839be031a396b437e9c0a3329606905bf8e571ffd2014bfc9a3ac3997482a86c"
   },
-  "review_id": "c85056b0d85816f474c4666950c480a8fb8ec9cb81427edcaab85dad862ffd5d",
+  "review_id": "f1543f7476293a32923d1a7097d83e20a04f618b404a7afc2e748527d263e10f",
   "review_request": {
-    "claims_id": "c85056b0d85816f474c4666950c480a8fb8ec9cb81427edcaab85dad862ffd5d",
+    "claims_id": "f1543f7476293a32923d1a7097d83e20a04f618b404a7afc2e748527d263e10f",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
