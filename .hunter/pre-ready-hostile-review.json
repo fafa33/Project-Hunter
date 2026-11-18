@@ -2,9 +2,9 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "The PR #757 orchestration recurrence and CI-context leakage must be captured as durable defect knowledge with canonical selectors before merge.",
-        "evidence": "PRH-134 and DFF-058 added to DEFECT_REGISTRY with production-repository binding, exact-head provider completion semantics, fixture isolation, and regression selectors; Defect Prevention and Artifact guards pass.",
-        "id": "M7-durable-learning",
+        "criterion": "After owner-approved ruleset cutover, a real PR must be governed by Quality Gates, dependency-review, CodeQL and Hunter Merge Readiness; Pre-PR remains internal proof producer and bypass actors remain empty.",
+        "evidence": "Live ruleset 20523851 read-back shows the target required checks and zero bypass actors; PR #757 shadow evidence recorded parity=true, false_ready=false, missed_blocker=false; 27 cutover tests and cutover preflight pass.",
+        "id": "M7-post-cutover-canary",
         "verdict": "satisfied"
       }
     ],
@@ -42,181 +42,16 @@
       "unresolved-findings-and-reviewer-unavailability"
     ],
     "base_ref": "main",
-    "base_sha": "6938aacc7496ec37eacce7f2d90d70f852fe7108",
+    "base_sha": "ddb9fe12802976afb4aec3f69105861f0a0ecc27",
     "defect_families": [
       {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-007",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-008",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-009",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-010",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-011",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-012",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "evidence": "M7 post-cutover canary records already verified live ruleset/parity facts; no authority code changed.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-014",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-015",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-016",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-019",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-020",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-021",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-022",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-023",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-024",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-025",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-026",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-029",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
+        "evidence": "M7 post-cutover canary records already verified live ruleset/parity facts; no authority code changed.",
         "family": "DFF-033",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-035",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-037",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-038",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-039",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-040",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-042",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-043",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-044",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-045",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-046",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-050",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-053",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-055",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-057",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Durable knowledge registration only; canonical DFF-058/PRH-134 capture the new invariant and linked tests.",
-        "family": "DFF-058",
         "outcome": "clear"
       }
     ],
@@ -224,59 +59,17 @@
     "issue": "588",
     "review_target": [
       {
-        "blob_sha": "3419779549d72ca28d912dee9a711e24c423d2ec",
-        "path": "docs/DEFECT_REGISTRY.json",
+        "blob_sha": "c657c3fb3809a19fc8a0189b84e9385f8175a292",
+        "path": "docs/ARCHITECTURE_AUDITS/HUNTER_FAST_MERGE_M7_CUTOVER.md",
         "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "005012422e7dc704084d0597d7abd3412d12c506",
-        "path": "scripts/hunter_governance_review_v2.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "aa771f44b3f0f7c18a583fd7cc1102e82f440ea8",
-        "path": "scripts/hunter_governance_shadow.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "727b0fce6d5df2d2d3a7b616279fc45bfab321a7",
-        "path": "scripts/hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "e32ea1e4c824361eb80108fe2bc0eff80c0adfcf",
-        "path": "scripts/hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "66b4d4a16a0b74d9ed5dd3432345815b91ffcfb2",
-        "path": "tests/test_hunter_governance_shadow.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "595f08cb2a37ed5593a1ff8e50b01794cf499803",
-        "path": "tests/test_hunter_review_orchestrator.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "35ac0f74331f0679a660a97a3b21e076b8876177",
-        "path": "tests/test_hunter_reviewer_collector.py",
-        "previous_path": "",
-        "status": "modified"
+        "status": "added"
       }
     ],
-    "review_target_digest": "1f0673b3543d645272d33bd15f224c5e3f83209fb28550ca914f733b856f8ce7"
+    "review_target_digest": "b95ec46dc82522077bd72c86a24310eea32af47df2d4aa6e347f5e0c77b89d99"
   },
-  "review_id": "92b23720fb6d362c1b8dc9ddf86168d3bab61abbaed2be45d476237b3f5b3602",
+  "review_id": "280ee4271fe1a919eaaffce85ea2ec22199c7f329a546ed3983239eb0464a4af",
   "review_request": {
-    "claims_id": "92b23720fb6d362c1b8dc9ddf86168d3bab61abbaed2be45d476237b3f5b3602",
+    "claims_id": "280ee4271fe1a919eaaffce85ea2ec22199c7f329a546ed3983239eb0464a4af",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
