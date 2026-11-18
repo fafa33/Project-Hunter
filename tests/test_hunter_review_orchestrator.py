@@ -1410,9 +1410,9 @@ def test_failover_target_is_the_pools_hosted_authority_not_a_retired_provider():
     # Disabled triage-only reviewers are not part of the active pool. Until
     # trusted health admission exists, authority progression starts at Codex.
     assert orchestrator.first_pool_provider() == "codex"
-    assert orchestrator.next_authority_provider(after="codex") == "copilot"
-    assert orchestrator.next_authority_provider(after="gemini") == "groq"
-    assert orchestrator.next_authority_provider(after="groq") == str(pool["last_resort"]) == "hunter-guard"
+    assert orchestrator.next_authority_provider(after="codex") == "hunter-guard"
+    assert orchestrator.next_authority_provider(after="gemini") == "codex"
+    assert orchestrator.next_authority_provider(after="groq") == "codex"
 
 
 def test_unreadable_runner_probe_neither_crashes_nor_skips_the_reviewer(monkeypatch):

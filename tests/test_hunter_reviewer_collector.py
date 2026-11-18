@@ -587,20 +587,12 @@ def test_substantive_rate_limit_phrase_is_not_unavailability():
     )
 
 
-def test_policy_enables_server_side_gemini_and_groq_after_codex():
+def test_policy_enables_only_codex():
     pool, error = collector.review.load_reviewer_pool()
     assert not error and pool is not None
-    agents = sorted(collector.review.enabled_pool_reviewers(pool), key=lambda a: a["priority"])
-    assert [(a["id"], a["priority"]) for a in agents] == [
-        ("codex", 1),
-        ("copilot", 2),
-        ("gemini", 3),
-        ("groq", 4),
-    ]
-    assert agents[1]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
-    assert agents[2]["trigger_method"] == "api:gemini"
-    assert agents[3]["trigger_method"] == "api:groq"
-    assert all(a["review_timeout_seconds"] == 300 for a in agents[1:])
+    agents = collector.review.enabled_pool_reviewers(pool)
+    assert [(a["id"], a["priority"]) for a in agents] == [("codex", 1)]
+    assert collector.review.authority_pool_reviewers(pool) == agents
 
 
 def test_collector_workflow_exposes_only_server_reviewer_secrets():
@@ -608,8 +600,8 @@ def test_collector_workflow_exposes_only_server_reviewer_secrets():
 
     workflow = yaml.safe_load((collector.review.ROOT / collector.WORKFLOW).read_text())
     env = workflow["jobs"]["collect"]["steps"][1]["env"]
-    assert env["GEMINI_API_KEY"] == "${{ secrets.GEMINI_API_KEY }}"
-    assert env["GROQ_API_KEY"] == "${{ secrets.GROQ_API_KEY }}"
+    assert "GEMINI_API_KEY" not in env
+    assert "GROQ_API_KEY" not in env
 
 
 @pytest.mark.parametrize(
@@ -1164,28 +1156,20 @@ def test_parse_native_trigger_binds_head_claims_run_and_attempt():
     assert collector.parse_native_trigger(body.replace(HEAD, "b" * 40, 1)) is None
 
 
-def test_canonical_pool_preserves_server_side_fallback_chain():
+def test_canonical_pool_is_codex_only():
     import json
 
     policy = json.loads((collector.review.ROOT / "docs/CODE_WRITE_POLICY.json").read_text(encoding="utf-8"))
     pool = policy["review_progression"]["review_authority"]["reviewer_pool"]
-    agents = sorted(pool["agents"], key=lambda a: a["priority"])
-    assert [a["id"] for a in agents] == ["codex", "copilot", "gemini", "groq", "local-ollama"]
-    assert agents[-1]["enabled"] is False
-    assert agents[-1]["authority_eligible"] is False
-    assert [a["id"] for a in collector.review.authority_pool_reviewers(pool)] == ["codex", "copilot", "gemini", "groq"]
-    assert agents[1]["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
-    assert agents[2]["trigger_method"] == "api:gemini"
-    assert agents[3]["trigger_method"] == "api:groq"
-    assert all(a["retryable"] is False for a in agents[:4])
-    assert all(a["review_timeout_seconds"] == 300 for a in agents[1:4])
+    assert [a["id"] for a in pool["agents"]] == ["codex"]
+    assert [a["id"] for a in collector.review.authority_pool_reviewers(pool)] == ["codex"]
     assert pool["last_resort"] == "hunter-guard"
 
 
-def test_collector_workflow_exposes_server_side_provider_secrets():
+def test_collector_workflow_does_not_expose_retired_provider_secrets():
     workflow = (collector.review.ROOT / ".github/workflows/hunter-reviewer-collector.yml").read_text(encoding="utf-8")
-    assert "GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}" in workflow
-    assert "GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}" in workflow
+    assert "GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}" not in workflow
+    assert "GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}" not in workflow
 
 
 def test_last_resort_recognition_has_no_default_authority_type():
@@ -1746,15 +1730,10 @@ def test_candidate_diff_preserves_legitimate_empty_diff(monkeypatch):
     assert backend._candidate_diff() == ""
 
 
-def test_copilot_policy_uses_authenticated_review_request():
+def test_copilot_is_not_in_live_reviewer_pool():
     pool, error = collector.review.load_reviewer_pool()
     assert not error and pool is not None
-    copilot = next(a for a in collector.review.enabled_pool_reviewers(pool) if a["id"] == "copilot")
-    assert copilot["github_login"] == "copilot-pull-request-reviewer[bot]"
-    assert copilot["trigger_method"] == "github-review-request:copilot-pull-request-reviewer[bot]"
-    assert copilot["ack_timeout_seconds"] == 30
-    assert copilot["review_timeout_seconds"] == 300
-    assert copilot["retryable"] is False
+    assert all(a["id"] != "copilot" for a in pool["agents"])
 
 
 def test_copilot_comment_review_with_findings_is_blocking(monkeypatch):

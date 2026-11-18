@@ -63,8 +63,6 @@ jobs:
         timeout-minutes: 48
         env:
           GITHUB_TOKEN: ${{ github.token }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PR_NUMBER: ${{ inputs.pr_number }}
           CANDIDATE_HEAD: ${{ inputs.head_sha }}
           REMEDIATION_GENERATION: ${{ inputs.generation_id }}

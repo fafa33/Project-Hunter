@@ -2,9 +2,9 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "M5 detects standalone PR issue-comment Codex completion and changes in reviews/threads without granting review authority; pagination must fail closed",
-        "evidence": "Two new regressions failed before fix; GraphQL now queries PR issue comments and checks pagination. 127 focused tests passed, Ruff passed.",
-        "id": "M5-issue-comment-wakeup",
+        "criterion": "Only Codex is enabled in canonical reviewer pool; unavailable external reviewers cannot hold orchestration open",
+        "evidence": "Pool retains Codex only; secrets removed from collector workflow; 409 focused tests pass.",
+        "id": "M5-codex-only",
         "verdict": "satisfied"
       }
     ],
@@ -33,88 +33,153 @@
     "base_sha": "f7418b97946dafa64899dc77d1ae6309c46bd10c",
     "defect_families": [
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "family": "DFF-022",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "family": "DFF-024",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "family": "DFF-025",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "family": "DFF-026",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "family": "DFF-027",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "family": "DFF-028",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Scoped M5 read-only comment wakeup, bounded GraphQL pagination, and targeted regression verification.",
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
         "family": "DFF-035",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "family": "DFF-036",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "family": "DFF-038",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "family": "DFF-040",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "family": "DFF-043",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "family": "DFF-044",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "family": "DFF-046",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Owner-authorized Codex-only pool, no nonworking provider invocations, 409 targeted tests pass.",
+        "family": "DFF-052",
         "outcome": "clear"
       }
     ],
@@ -122,8 +187,26 @@
     "issue": "588",
     "review_target": [
       {
+        "blob_sha": "67f801ad28654aa8f27dfee3b221dd44775dbda7",
+        "path": ".github/workflows/hunter-reviewer-collector.yml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a2cbec3d51a5a94562ec0d2c9eb3a9751ceceaac",
+        "path": "docs/CODE_WRITE_POLICY.json",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "03617ec12cb790d6ade9f92abc5de32a8446d4f7",
         "path": "scripts/hunter_review_wakeup_poll.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "a2a3020fe5a2d452b4e15b5ddbc66b59b2d3ddd8",
+        "path": "tests/test_hunter_review_orchestrator.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -132,13 +215,19 @@
         "path": "tests/test_hunter_review_wakeup_poll.py",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "c9897b502643715a6941a51e88081da22e04b7c8",
+        "path": "tests/test_hunter_reviewer_collector.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "b63c3fded1e039c86f5cd5e51c4be51a7f823bade42378b0d4d63a82912fdc15"
+    "review_target_digest": "b06d5bf7734cafdc3196bf5a97e2700f9cfd3c63d1ac6140aa051d9c8abb1b7b"
   },
-  "review_id": "52ccdd1f27f590bc0052ad70a166922f504060e5d195afd5f780fd28b5a3f4e3",
+  "review_id": "8808c81f931e5765ea8e92e0aebc0c5e67f8f6fc3602f41331a8c68e1dfa8fa2",
   "review_request": {
-    "claims_id": "52ccdd1f27f590bc0052ad70a166922f504060e5d195afd5f780fd28b5a3f4e3",
+    "claims_id": "8808c81f931e5765ea8e92e0aebc0c5e67f8f6fc3602f41331a8c68e1dfa8fa2",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
