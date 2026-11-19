@@ -517,6 +517,22 @@ EDIT_DIRECTIVE: Final = (
     "If the task cannot be implemented within the authorized scope, do not fabricate edits."
 )
 
+
+# Issue #770: Kilo's real #606 run exhausted the broker's bounded broad-discovery
+# budget before editing. This instruction is constant (no untrusted path interpolation)
+# and complements, rather than changes, the signed scope and broker enforcement.
+KILO_TARGETED_START_DIRECTIVE: Final = (
+    EDIT_DIRECTIVE + " Start from the attached signed task's OBJECTIVE and allowed_paths. "
+    "Read the explicitly named target files directly before using any directory listing. "
+    "Do not list the repository root or top-level directories or run unscoped searches; "
+    "use specific file paths and narrow searches only when the task needs them. "
+    "A denied governed-shell command or exhausted discovery budget is a hard boundary: "
+    "do not retry it, seek an alternate shell, or keep surveying. "
+    "Use permitted read/edit tools to make authorized changes promptly; "
+    "if the authorized target cannot be determined, stop without fabricating edits."
+)
+
+
 #: The task contract the model is actually handed, described by structure and counts only. The prompt text is
 #: signed, untrusted-derived and never logged: no section body, path or sentence leaves this function.
 _PROMPT_SECTIONS: Final = ("SYSTEM", "TASK", "OBJECTIVE", "AUTHORITY", "OUTPUT_CONTRACT", "CONTEXT", "MISSINGNESS")
@@ -883,7 +899,7 @@ def kilo_invocation(
             str(workspace),
             "--model",
             model_argv[3],
-            EDIT_DIRECTIVE,
+            KILO_TARGETED_START_DIRECTIVE,
             "--file",
             str(prompt_path),
         ),
