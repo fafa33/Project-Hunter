@@ -1414,6 +1414,26 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
                     recorded_by=writer.recorded_by(),
                     recorded_at=_timestamp(),
                 )[2]
+                # The signed exact-head proof is the receipt authority for governed
+                # Issue Agent remediations; never synthesize an owner disposition.
+                # Persist receipt before replying/resolving the GitHub thread.
+                _head, receipt_view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+                receipt_writes = knowledge.proven_receipt_writes(
+                    receipt_view, finding_id, exact_head=proof.remediated_head_sha
+                )
+                if receipt_view.findings[finding_id].receipt is None and not receipt_writes:
+                    print(f"issue {issue}: {finding_id[:12]} receipt proof not eligible; thread remains open")
+                    continue
+                if receipt_writes:
+                    knowledge.append(
+                        store,
+                        receipt_writes,
+                        trust=configuration.trust,
+                        provenance=provenance,
+                        signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                        recorded_by=writer.recorded_by(),
+                        recorded_at=_timestamp(),
+                    )
                 comment_id = control.resolve_thread(
                     github,
                     configuration,

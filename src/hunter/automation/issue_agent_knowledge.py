@@ -739,6 +739,53 @@ def ingestion_writes(
     return writes, refusals
 
 
+def proven_receipt_writes(view: KnowledgeView, finding_id: str, *, exact_head: str) -> list[Write]:
+    """Issue #765: mint knowledge only from already-verified signed Issue Agent proof.
+
+    This does not interpret bot replies as owner dispositions. The trusted ledger's
+    finding_proven record is the authority; a missing/mismatched proof fails closed.
+    The caller must append this before attempting GitHub thread resolution.
+    """
+    item = view.findings.get(finding_id)
+    if item is None or item.receipt is not None or item.proven is None:
+        return []
+    proof = item.proven
+    classification = item.classifications.get("proven")
+    if (
+        classification is None
+        or proof.get("remediated_head_sha") != exact_head
+        or proof.get("authorization_id") != classification.get("authorization_id")
+        or set(proof.get("regression_tests", [])) != set(classification.get("regression_tests", []))
+    ):
+        return []
+    tests = sorted(set(str(t) for t in proof["regression_tests"]))
+    invariant = f"Exact-head governed remediation of finding {finding_id}"
+    path = item.path
+    if receipt_schema_problems(
+        correction_commit=exact_head,
+        invariant=invariant,
+        affected_path=path,
+        regression_evidence=tests,
+    ):
+        return []
+    family = classification.get("family_id") if classification.get("outcome") == "matched" else None
+    return [
+        Write(
+            "knowledge_receipt",
+            {
+                "finding_id": finding_id,
+                "fingerprint": item.ingested["fingerprint"],
+                "invariant": invariant,
+                "affected_paths": [path],
+                "correction_commit": exact_head,
+                "regression_evidence": tests,
+                "outcome": "matched-family" if family else "pending-adjudication",
+                "family_id": family,
+            },
+        )
+    ]
+
+
 # --- fast-path Knowledge Receipt (ADR 0039 L11, Issue #527) ----------------------------------------------
 
 

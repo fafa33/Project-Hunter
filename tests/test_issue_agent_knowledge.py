@@ -1258,3 +1258,49 @@ def test_knowledge_receipt_requires_the_knowledge_ingest_role(store: state.GitLe
     fingerprint = knowledge.read(store, trust=TRUST, provenance=trusted)[1].findings[identity].ingested["fingerprint"]
     with pytest.raises(knowledge.KnowledgeLedgerError, match="may not write"):
         write(store, knowledge.Write("knowledge_receipt", receipt_evidence(identity, fingerprint)))
+
+
+def test_signed_proven_finding_mints_receipt_without_owner_disposition() -> None:
+    """Issue #765: proof, not bot prose, is the new receipt authority."""
+    finding = knowledge.finding_from_observation(observation(), repository_id=1, trusted_reviewers=REVIEWERS)
+    identity = finding["finding_id"]
+    view = knowledge.KnowledgeView(1)
+    item = knowledge.Finding(ingested=finding)
+    view.findings[identity] = item
+    assert knowledge.proven_receipt_writes(view, identity, exact_head=LATER) == []
+    item.classifications["proven"] = {
+        "outcome": "matched",
+        "family_id": "DFF-049",
+        "authorization_id": AUTH,
+        "regression_tests": [TEST],
+    }
+    assert knowledge.proven_receipt_writes(view, identity, exact_head=LATER) == []
+    item.proven = {
+        "authorization_id": AUTH,
+        "remediated_head_sha": LATER,
+        "regression_tests": [TEST],
+        "receipt_sha256": "d" * 64,
+        "preflight_run_id": 123,
+    }
+    assert knowledge.proven_receipt_writes(view, identity, exact_head=HEAD) == []
+    writes = knowledge.proven_receipt_writes(view, identity, exact_head=LATER)
+    assert len(writes) == 1 and writes[0].kind == "knowledge_receipt"
+    evidence = writes[0].evidence
+    assert evidence["correction_commit"] == LATER
+    assert evidence["regression_evidence"] == [TEST]
+    assert evidence["outcome"] == "matched-family"
+    assert evidence["family_id"] == "DFF-049"
+    assert not knowledge.receipt_schema_problems(
+        correction_commit=evidence["correction_commit"],
+        invariant=evidence["invariant"],
+        affected_path=evidence["affected_paths"][0],
+        regression_evidence=evidence["regression_evidence"],
+    )
+    item.receipt = evidence
+    assert knowledge.proven_receipt_writes(view, identity, exact_head=LATER) == []
+    item.receipt = None
+    item.proven["authorization_id"] = "hunter-issue-agent-authorization:" + "e" * 64
+    assert knowledge.proven_receipt_writes(view, identity, exact_head=LATER) == []
+    item.proven["authorization_id"] = AUTH
+    item.proven["regression_tests"] = []
+    assert knowledge.proven_receipt_writes(view, identity, exact_head=LATER) == []
