@@ -26,6 +26,15 @@ repos = fixture.repos
 _prompt_keys = fixture._prompt_keys
 
 
+def assert_hosted_proof_identity(proof: dict, env: dict[str, str]) -> None:
+    """Enforce event-aware PR identity without weakening exact hosted job binding."""
+    if env.get("GITHUB_ACTIONS") != "true":
+        return
+    main_dispatch = env.get("GITHUB_EVENT_NAME") == "workflow_dispatch" and env.get("GITHUB_REF") == "refs/heads/main"
+    assert proof["head_sha"] and proof["run_id"] and proof["job"], proof
+    assert (proof["pull_request"] is None) if main_dispatch else bool(proof["pull_request"]), proof
+
+
 @pytest.mark.skipif(os.environ.get("HUNTER_RUN_REAL_KILO_E2E") != "1", reason="requires Docker and live Kilo model")
 @pytest.mark.usefixtures("_prompt_keys")
 def test_signed_authorization_real_kilo_sealed_result_independent_validator(
@@ -131,8 +140,13 @@ def test_signed_authorization_real_kilo_sealed_result_independent_validator(
     # owner-controlled PR/head against GitHub before running the isolated agent.
     if os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch":
         assert event.get("inputs", {}).get("canary") == "run"
-        assert os.environ.get("GITHUB_REF") == "refs/heads/fix/718-broker-supervisor-budget"
-        pull_request = {"number": 723, "head": {"sha": os.environ["GITHUB_SHA"]}}
+        dispatch_ref = os.environ.get("GITHUB_REF")
+        assert dispatch_ref in {"refs/heads/main", "refs/heads/fix/718-broker-supervisor-budget"}
+        pull_request = (
+            {"number": 723, "head": {"sha": os.environ["GITHUB_SHA"]}}
+            if dispatch_ref != "refs/heads/main"
+            else {"head": {"sha": os.environ["GITHUB_SHA"]}}
+        )
     proof = {
         "repository": os.environ.get("GITHUB_REPOSITORY"),
         "pull_request": pull_request.get("number"),
@@ -152,8 +166,7 @@ def test_signed_authorization_real_kilo_sealed_result_independent_validator(
         "elapsed_seconds": round(elapsed, 1),
         "deadline_seconds": kilo_port.BROKER_DEADLINE_SECONDS,
     }
-    if os.environ.get("GITHUB_ACTIONS") == "true":
-        assert proof["pull_request"] and proof["head_sha"] and proof["run_id"] and proof["job"], proof
+    assert_hosted_proof_identity(proof, dict(os.environ))
     proof["proof_sha256"] = hashlib.sha256(json.dumps(proof, sort_keys=True).encode()).hexdigest()
     print("HUNTER_682_ACCEPTANCE_PROOF " + json.dumps(proof, sort_keys=True))
     print("SIGNED_KILO_RUNNER_TO_VALIDATOR_PASS", receipt["execution_id"], receipt["unsigned_commit_sha"])

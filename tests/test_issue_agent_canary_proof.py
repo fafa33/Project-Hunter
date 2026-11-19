@@ -213,3 +213,69 @@ def test_dispatch_refuses_missing_pr_or_unauthorized_actor() -> None:
     for env, pr in ((DISPATCH_ENV, None), ({**DISPATCH_ENV, "GITHUB_ACTOR": "stranger"}, DISPATCH_PR)):
         with pytest.raises(verify.ProofRejected):
             verify.canonicalize(proof, run=DISPATCH_RUN, jobs=JOBS, event=DISPATCH_EVENT, env=env, dispatch_pr=pr)
+
+
+MAIN_DISPATCH_ENV = {**DISPATCH_ENV, "GITHUB_REF": "refs/heads/main"}
+MAIN_DISPATCH_RUN = {**DISPATCH_RUN, "head_branch": "main"}
+
+
+def test_owner_main_dispatch_binds_exact_head_without_fabricating_pr() -> None:
+    proof = sealed({**BASE, "pull_request": None})
+    record = verify.canonicalize(
+        proof,
+        run=MAIN_DISPATCH_RUN,
+        jobs=JOBS,
+        event=DISPATCH_EVENT,
+        env=MAIN_DISPATCH_ENV,
+    )
+    assert record["pull_request"] is None
+    assert record["head_sha"] == HEAD and record["job_id"] == 12345
+
+
+@pytest.mark.parametrize(
+    "proof_change,run_change,env_change",
+    [
+        ({"pull_request": 723}, {}, {}),
+        ({"head_sha": "cd" * 20}, {}, {}),
+        ({}, {"head_branch": "other"}, {}),
+        ({}, {}, {"GITHUB_ACTOR": "stranger"}),
+        ({}, {}, {"GITHUB_SHA": "cd" * 20}),
+    ],
+)
+def test_main_dispatch_rejects_forged_pr_stale_head_and_actor(proof_change, run_change, env_change) -> None:
+    with pytest.raises(verify.ProofRejected):
+        verify.canonicalize(
+            sealed({**BASE, "pull_request": None, **proof_change}),
+            run={**MAIN_DISPATCH_RUN, **run_change},
+            jobs=JOBS,
+            event=DISPATCH_EVENT,
+            env={**MAIN_DISPATCH_ENV, **env_change},
+        )
+
+
+def test_main_dispatch_refuses_pr_evidence() -> None:
+    with pytest.raises(verify.ProofRejected, match="impersonate"):
+        verify.canonicalize(
+            sealed({**BASE, "pull_request": None}),
+            run=MAIN_DISPATCH_RUN,
+            jobs=JOBS,
+            event=DISPATCH_EVENT,
+            env=MAIN_DISPATCH_ENV,
+            dispatch_pr=DISPATCH_PR,
+        )
+
+
+def test_hosted_kilo_proof_identity_is_event_aware() -> None:
+    from test_issue_agent_kilo_signed_e2e import assert_hosted_proof_identity
+
+    valid = {"pull_request": None, "head_sha": HEAD, "run_id": "100", "job": "real-kilo"}
+    main = {"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main"}
+    assert_hosted_proof_identity(valid, main)
+    with pytest.raises(AssertionError):
+        assert_hosted_proof_identity({**valid, "head_sha": None}, main)
+    with pytest.raises(AssertionError):
+        assert_hosted_proof_identity({**valid, "pull_request": 723}, main)
+    pr_env = {**main, "GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": "refs/pull/723/merge"}
+    with pytest.raises(AssertionError):
+        assert_hosted_proof_identity(valid, pr_env)
+    assert_hosted_proof_identity({**valid, "pull_request": 723}, pr_env)
