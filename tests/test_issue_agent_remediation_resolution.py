@@ -339,6 +339,13 @@ def world() -> World:
     return value
 
 
+def test_evidence_reply_exposes_replayable_tests_without_owner_disposition() -> None:
+    body = remediation.evidence_reply(FINDING, remediated_head_sha=REMEDIATED, family=FAMILY, tests=[TEST])
+    assert f"- correction commit: `{REMEDIATED}`" in body
+    assert f"[test:{TEST}]" in body
+    assert not body.lower().startswith(("confirmed", "valid", "verified"))
+
+
 def test_an_exactly_proven_head_resolves_the_exact_thread(world: World, store: state.GitLedgerStore) -> None:
     identity, view = proven_view(store)
     proof = proof_for(world, view, identity)

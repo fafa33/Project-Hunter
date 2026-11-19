@@ -1253,8 +1253,117 @@ def test_a_receipt_must_be_internally_consistent(store: state.GitLedgerStore, ch
         )
 
 
-def test_knowledge_receipt_requires_the_knowledge_ingest_role(store: state.GitLedgerStore) -> None:
+def test_knowledge_receipt_rejects_unauthorized_roles(store: state.GitLedgerStore) -> None:
     identity = seeded(store)
     fingerprint = knowledge.read(store, trust=TRUST, provenance=trusted)[1].findings[identity].ingested["fingerprint"]
     with pytest.raises(knowledge.KnowledgeLedgerError, match="may not write"):
-        write(store, knowledge.Write("knowledge_receipt", receipt_evidence(identity, fingerprint)))
+        write(
+            store,
+            knowledge.Write("knowledge_receipt", receipt_evidence(identity, fingerprint)),
+            by={**BY, "role": "authorize"},
+        )
+
+
+def test_resolver_role_can_append_signed_proof_receipt_and_replay(store: state.GitLedgerStore) -> None:
+    """Codex P1 (#766): actual reconcile writer persists a verifiable receipt."""
+    identity = seeded(store)
+    _, view = knowledge.read(store, trust=TRUST, provenance=trusted)
+    fingerprint = view.findings[identity].ingested["fingerprint"]
+    receipt = knowledge.Write("knowledge_receipt", receipt_evidence(identity, fingerprint))
+    _, updated, written = write(store, receipt, by=BY)
+    assert written == 1
+    assert updated.findings[identity].receipt is not None
+    _, replayed = knowledge.read(store, trust=TRUST, provenance=trusted)
+    assert replayed.findings[identity].receipt == updated.findings[identity].receipt
+
+
+def test_resolution_requires_persisted_receipt_matching_exact_head_and_regression() -> None:
+    finding = knowledge.finding_from_observation(observation(), repository_id=1, trusted_reviewers=REVIEWERS)
+    identity = finding["finding_id"]
+    view = knowledge.KnowledgeView(1)
+    item = knowledge.Finding(ingested=finding)
+    view.findings[identity] = item
+    assert not knowledge.verified_receipt_at_head(view, identity, exact_head=LATER)
+    item.proven = {"remediated_head_sha": LATER, "authorization_id": AUTH, "regression_tests": [TEST]}
+    item.classifications["proven"] = {
+        "outcome": "matched",
+        "family_id": "DFF-049",
+        "authorization_id": AUTH,
+        "regression_tests": [TEST],
+    }
+    proposed = knowledge.proven_receipt_writes(view, identity, exact_head=LATER)
+    assert len(proposed) == 1
+    assert not knowledge.verified_receipt_at_head(view, identity, exact_head=LATER)
+    item.receipt = dict(proposed[0].evidence)
+    assert knowledge.verified_receipt_at_head(view, identity, exact_head=LATER)
+    assert not knowledge.verified_receipt_at_head(view, identity, exact_head=HEAD)
+    item.receipt["regression_evidence"] = ["tests/test_unrelated.py::test_unrelated"]
+    assert not knowledge.verified_receipt_at_head(view, identity, exact_head=LATER)
+
+
+def test_knowledge_ingest_plans_only_signed_exact_head_proven_receipts() -> None:
+    finding = knowledge.finding_from_observation(observation(), repository_id=1, trusted_reviewers=REVIEWERS)
+    identity = finding["finding_id"]
+    view = knowledge.KnowledgeView(1)
+    item = knowledge.Finding(ingested=finding)
+    view.findings[identity] = item
+    assert knowledge.proven_receipts_for_head(view, LATER) == []
+    item.classifications["proven"] = {
+        "outcome": "matched",
+        "family_id": "DFF-049",
+        "authorization_id": AUTH,
+        "regression_tests": [TEST],
+    }
+    item.proven = {"remediated_head_sha": LATER, "authorization_id": AUTH, "regression_tests": [TEST]}
+    planned = knowledge.proven_receipts_for_head(view, LATER)
+    assert len(planned) == 1 and planned[0].kind == "knowledge_receipt"
+    assert knowledge.proven_receipts_for_head(view, HEAD) == []
+    assert knowledge.proven_receipts_for_head(view, LATER, planned=planned) == []
+    item.receipt = dict(planned[0].evidence)
+    assert knowledge.proven_receipts_for_head(view, LATER) == []
+
+
+def test_signed_proven_finding_mints_receipt_without_owner_disposition() -> None:
+    """Issue #765: proof, not bot prose, is the new receipt authority."""
+    finding = knowledge.finding_from_observation(observation(), repository_id=1, trusted_reviewers=REVIEWERS)
+    identity = finding["finding_id"]
+    view = knowledge.KnowledgeView(1)
+    item = knowledge.Finding(ingested=finding)
+    view.findings[identity] = item
+    assert knowledge.proven_receipt_writes(view, identity, exact_head=LATER) == []
+    item.classifications["proven"] = {
+        "outcome": "matched",
+        "family_id": "DFF-049",
+        "authorization_id": AUTH,
+        "regression_tests": [TEST],
+    }
+    assert knowledge.proven_receipt_writes(view, identity, exact_head=LATER) == []
+    item.proven = {
+        "authorization_id": AUTH,
+        "remediated_head_sha": LATER,
+        "regression_tests": [TEST],
+        "receipt_sha256": "d" * 64,
+        "preflight_run_id": 123,
+    }
+    assert knowledge.proven_receipt_writes(view, identity, exact_head=HEAD) == []
+    writes = knowledge.proven_receipt_writes(view, identity, exact_head=LATER)
+    assert len(writes) == 1 and writes[0].kind == "knowledge_receipt"
+    evidence = writes[0].evidence
+    assert evidence["correction_commit"] == LATER
+    assert evidence["regression_evidence"] == [TEST]
+    assert evidence["outcome"] == "matched-family"
+    assert evidence["family_id"] == "DFF-049"
+    assert not knowledge.receipt_schema_problems(
+        correction_commit=evidence["correction_commit"],
+        invariant=evidence["invariant"],
+        affected_path=evidence["affected_paths"][0],
+        regression_evidence=evidence["regression_evidence"],
+    )
+    item.receipt = evidence
+    assert knowledge.proven_receipt_writes(view, identity, exact_head=LATER) == []
+    item.receipt = None
+    item.proven["authorization_id"] = "hunter-issue-agent-authorization:" + "e" * 64
+    assert knowledge.proven_receipt_writes(view, identity, exact_head=LATER) == []
+    item.proven["authorization_id"] = AUTH
+    item.proven["regression_tests"] = []
+    assert knowledge.proven_receipt_writes(view, identity, exact_head=LATER) == []

@@ -524,6 +524,7 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
             )
             writes = writes + new_receipt_writes
             refusals = refusals + receipt_refusals
+            writes.extend(knowledge.proven_receipts_for_head(view, head, planned=writes))
             _, view, written = knowledge.append(
                 store,
                 writes,
@@ -1414,6 +1415,34 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
                     recorded_by=writer.recorded_by(),
                     recorded_at=_timestamp(),
                 )[2]
+                # The signed exact-head proof is the receipt authority for governed
+                # Issue Agent remediations; never synthesize an owner disposition.
+                # Persist receipt before replying/resolving the GitHub thread.
+                _head, receipt_view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+                receipt_writes = knowledge.proven_receipt_writes(
+                    receipt_view, finding_id, exact_head=proof.remediated_head_sha
+                )
+                if receipt_view.findings[finding_id].receipt is None and not receipt_writes:
+                    print(f"issue {issue}: {finding_id[:12]} receipt proof not eligible; thread remains open")
+                    continue
+                if receipt_writes:
+                    knowledge.append(
+                        store,
+                        receipt_writes,
+                        trust=configuration.trust,
+                        provenance=provenance,
+                        signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                        recorded_by=writer.recorded_by(),
+                        recorded_at=_timestamp(),
+                    )
+                # Verify the signed append is readable and bound to the same
+                # exact-head proof BEFORE any GitHub reply or thread mutation.
+                _head, verified_view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+                if not knowledge.verified_receipt_at_head(
+                    verified_view, finding_id, exact_head=proof.remediated_head_sha
+                ):
+                    print(f"issue {issue}: {finding_id[:12]} receipt not verified; thread remains open")
+                    continue
                 comment_id = control.resolve_thread(
                     github,
                     configuration,

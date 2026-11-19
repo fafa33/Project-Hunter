@@ -74,7 +74,7 @@ WRITER_ROLES: Final[Mapping[str, frozenset[str]]] = {
     "thread_resolved": frozenset({"reconcile"}),
     "recurrence": frozenset({"reconcile"}),
     "verified_e2e_outcome": frozenset({"knowledge-ingest"}),
-    "knowledge_receipt": frozenset({"knowledge-ingest"}),
+    "knowledge_receipt": frozenset({"knowledge-ingest", "reconcile"}),
 }
 
 _PROVENANCE = _object(
@@ -737,6 +737,93 @@ def ingestion_writes(
             )
         )
     return writes, refusals
+
+
+def proven_receipt_writes(view: KnowledgeView, finding_id: str, *, exact_head: str) -> list[Write]:
+    """Issue #765: mint knowledge only from already-verified signed Issue Agent proof.
+
+    This does not interpret bot replies as owner dispositions. The trusted ledger's
+    finding_proven record is the authority; a missing/mismatched proof fails closed.
+    The caller must append this before attempting GitHub thread resolution.
+    """
+    item = view.findings.get(finding_id)
+    if item is None or item.receipt is not None or item.proven is None:
+        return []
+    proof = item.proven
+    classification = item.classifications.get("proven")
+    if (
+        classification is None
+        or proof.get("remediated_head_sha") != exact_head
+        or proof.get("authorization_id") != classification.get("authorization_id")
+        or set(proof.get("regression_tests", [])) != set(classification.get("regression_tests", []))
+    ):
+        return []
+    tests = sorted(set(str(t) for t in proof["regression_tests"]))
+    invariant = f"Exact-head governed remediation of finding {finding_id}"
+    path = item.path
+    if receipt_schema_problems(
+        correction_commit=exact_head,
+        invariant=invariant,
+        affected_path=path,
+        regression_evidence=tests,
+    ):
+        return []
+    family = classification.get("family_id") if classification.get("outcome") == "matched" else None
+    return [
+        Write(
+            "knowledge_receipt",
+            {
+                "finding_id": finding_id,
+                "fingerprint": item.ingested["fingerprint"],
+                "invariant": invariant,
+                "affected_paths": [path],
+                "correction_commit": exact_head,
+                "regression_evidence": tests,
+                "outcome": "matched-family" if family else "pending-adjudication",
+                "family_id": family,
+            },
+        )
+    ]
+
+
+def verified_receipt_at_head(view: KnowledgeView, finding_id: str, *, exact_head: str) -> bool:
+    """Fail-closed resolution barrier: read back the persisted canonical receipt.
+
+    A proposed write, a resolved GitHub thread or a green preflight alone is not
+    a receipt. Reusing the signed exact-head proof never dispatches CI again.
+    """
+    item = view.findings.get(finding_id)
+    if item is None or item.receipt is None or item.proven is None:
+        return False
+    receipt = item.receipt
+    proof = item.proven
+    return (
+        proof.get("remediated_head_sha") == exact_head
+        and receipt.get("correction_commit") == exact_head
+        and receipt.get("finding_id") == finding_id
+        and receipt.get("fingerprint") == item.ingested.get("fingerprint")
+        and bool(proof.get("regression_tests"))
+        and set(receipt.get("regression_evidence", [])) == set(proof.get("regression_tests", []))
+    )
+
+
+def proven_receipts_for_head(view: KnowledgeView, exact_head: str, *, planned: Sequence[Write] = ()) -> list[Write]:
+    """Ingest already-signed Issue Agent proof via the existing knowledge writer.
+
+    Never promote an ordinary resolved review thread into proof. The exact-head
+    and signed classification checks remain inside proven_receipt_writes().
+    """
+    queued = {write.evidence["finding_id"] for write in planned if write.kind == "knowledge_receipt"}
+    receipts: list[Write] = []
+    for finding_id, finding in view.findings.items():
+        if finding_id in queued or finding.receipt is not None or finding.proven is None:
+            continue
+        if finding.proven.get("remediated_head_sha") != exact_head:
+            continue
+        for receipt in proven_receipt_writes(view, finding_id, exact_head=exact_head):
+            receipts.append(receipt)
+            queued.add(finding_id)
+    return receipts
 
 
 # --- fast-path Knowledge Receipt (ADR 0039 L11, Issue #527) ----------------------------------------------
