@@ -11,9 +11,12 @@ import argparse
 import json
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
@@ -23,23 +26,52 @@ from hunter.automation.engineering_issue_queue_github import select_from_github
 WORKFLOW = "hunter-issue-agent-trigger.yml"
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        raise QueueAuthorityError("GitHub API redirect refused")
+
+
 def _api(path: str, *, paginated: bool = False) -> Any:
-    args = ["gh", "api"]
-    if paginated:
-        args.extend(("--paginate", "--slurp"))
-    args.append(path)
-    result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=30)
-    if result.returncode:
-        raise QueueAuthorityError(f"GitHub evidence unavailable: {path}")
-    try:
-        parsed = json.loads(result.stdout)
-    except ValueError:
-        raise QueueAuthorityError("invalid GitHub API response") from None
-    if paginated:
-        if not isinstance(parsed, list) or any(not isinstance(page, list) for page in parsed):
-            raise QueueAuthorityError("incomplete GitHub paginated response")
-        return [entry for page in parsed for entry in page]
-    return parsed
+    # No user-supplied endpoint is passed as a CLI argument. The only CLI call
+    # retrieves the existing gh credential with a constant argv vector.
+    token_result = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, check=False, timeout=10)
+    if token_result.returncode or not token_result.stdout.strip():
+        raise QueueAuthorityError("authenticated GitHub credential unavailable")
+    if not path.startswith("repos/") or any(c in path for c in ("\r", "\n", "#", "@")):
+        raise QueueAuthorityError("invalid GitHub REST path")
+    url = "https://api.github.com/" + path
+    pages: list[Any] = []
+    opener = urllib.request.build_opener(_NoRedirect)
+    for _ in range(100):
+        parsed_url = urlsplit(url)
+        if parsed_url.scheme != "https" or parsed_url.netloc != "api.github.com":
+            raise QueueAuthorityError("untrusted GitHub pagination URL")
+        request = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": "Bearer " + token_result.stdout.strip(),
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        try:
+            with opener.open(request, timeout=20) as response:
+                data = json.load(response)
+                link = response.headers.get("Link", "")
+        except (urllib.error.URLError, ValueError, TimeoutError) as error:
+            raise QueueAuthorityError("GitHub evidence unavailable") from error
+        if not paginated:
+            return data
+        if not isinstance(data, list):
+            raise QueueAuthorityError("invalid paginated GitHub response")
+        pages.extend(data)
+        next_links = [part.strip().split(";", 1)[0].strip("<>") for part in link.split(",") if 'rel="next"' in part]
+        if len(next_links) > 1:
+            raise QueueAuthorityError("ambiguous GitHub pagination")
+        if not next_links:
+            return pages
+        url = next_links[0]
+    raise QueueAuthorityError("GitHub pagination exceeds bound")
 
 
 def read_selection(repository: str, owner_override: int | None = None) -> dict[str, Any]:
