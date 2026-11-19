@@ -263,3 +263,19 @@ def test_main_dispatch_refuses_pr_evidence() -> None:
             env=MAIN_DISPATCH_ENV,
             dispatch_pr=DISPATCH_PR,
         )
+
+
+def test_hosted_kilo_proof_identity_is_event_aware() -> None:
+    from test_issue_agent_kilo_signed_e2e import assert_hosted_proof_identity
+
+    valid = {"pull_request": None, "head_sha": HEAD, "run_id": "100", "job": "real-kilo"}
+    main = {"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch", "GITHUB_REF": "refs/heads/main"}
+    assert_hosted_proof_identity(valid, main)
+    with pytest.raises(AssertionError):
+        assert_hosted_proof_identity({**valid, "head_sha": None}, main)
+    with pytest.raises(AssertionError):
+        assert_hosted_proof_identity({**valid, "pull_request": 723}, main)
+    pr_env = {**main, "GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": "refs/pull/723/merge"}
+    with pytest.raises(AssertionError):
+        assert_hosted_proof_identity(valid, pr_env)
+    assert_hosted_proof_identity({**valid, "pull_request": 723}, pr_env)
