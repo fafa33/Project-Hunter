@@ -19,3 +19,15 @@ python3 scripts/hunter_engineering_issue_queue.py --repository fafa33/Project-Hu
 ```
 
 Optional --owner-override NUMBER is auditable. Output includes policy version, digest, and dispatch=false. No-selection is a valid outcome. The pure handoff_selected_issue adapter revalidates the trusted snapshot and delegates the verified Issue identity to the existing canonical ingress; it does not compile or dispatch itself.
+
+## Existing signed lifecycle handoff (Issue #437 follow-up)
+
+After the repository owner explicitly approves an Issue via its owner-authored queue policy comment and the Issue has a valid `hunter-task-scope-v1`, the owner can invoke:
+
+```sh
+python3 scripts/hunter_engineering_issue_queue.py --repository fafa33/Project-Hunter --execute
+```
+
+This reselects against fresh GitHub evidence, checks authenticated owner identity, validates canonical Issue scope, refuses duplicate execution labels, and reselects once more before emitting the **existing** `hunter-agent-execute` label. The existing `issues:labeled` workflow, not the queue, remains the only signed authorization, atomic admission, SPM compilation and execution authority. This CLI never directly dispatches an Actions workflow or creates a PR. No selection returns `NO_SELECTION` without mutation. A concurrent change between the final selection and label event is still independently guarded by the existing signed issuer and lifecycle admission; queue checks alone are not atomic authorization.
+
+This handoff is an owner-invoked execution seam, not an unattended scheduler. End-to-end hosted execution requires a separately owner-approved eligible Issue and successful exact-head workflow evidence. Do not infer autonomous readiness from unit tests or label emission alone.
