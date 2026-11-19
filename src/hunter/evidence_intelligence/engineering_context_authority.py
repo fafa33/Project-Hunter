@@ -369,17 +369,23 @@ class EngineeringContextAuthority:
         # rendering decision over the same `rendered_entries`, and a dropped
         # entry's id is still recorded so nothing disappears silently.
         def render(entry: dict[str, Any], full: bool) -> dict[str, object]:
+            representative = alias_representatives.get(str(entry["id"]))
+            if representative is not None:
+                return {"id": entry["id"], "same_prevention_as": representative}
             return entry["full"] if full else entry["compact"]
 
         def blob_bytes(items: list[dict[str, object]]) -> int:
             ordered = sorted(items, key=lambda item: str(item["id"]))
             return len(json.dumps(ordered, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
 
-        included = [
-            entry
-            for entry in rendered_entries
-            if not any(str(entry["id"]) in aliases for aliases in overlay_aliases.values())
-        ]
+        # Preserve the existing public contract: every applicable KF identity
+        # remains discoverable in applicable_defect_families. Aliases carry a
+        # reference to the representative's canonical instruction, not a
+        # second copy of the same prevention prose.
+        alias_representatives = {
+            alias: representative for representative, aliases in overlay_aliases.items() for alias in aliases
+        }
+        included = list(rendered_entries)
         elided: list[str] = []
         full_ids = {entry["id"] for entry in included}
 

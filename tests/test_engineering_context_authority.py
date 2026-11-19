@@ -447,17 +447,19 @@ def test_identical_signed_finding_overlays_share_one_instruction_but_keep_all_id
     }
     overlay = [{"id": f"KF-{i:012d}", **repeated} for i in range(40)]
     authority = EngineeringContextAuthority(registry_path=registry, knowledge_overlay=overlay)
-    first = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("scripts/"), budget_bytes=1_500)
-    assert first == authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("scripts/"), budget_bytes=1_500)
+    first = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("scripts/"), budget_bytes=3_000)
+    assert first == authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("scripts/"), budget_bytes=3_000)
     aliases = cast(dict[str, list[str]], first["identical_finding_aliases"])
     assert len(aliases) == 1
     assert len(next(iter(aliases.values()))) == 39
     rendered = cast(list[dict[str, object]], first["applicable_defect_families"])
-    assert sum(str(entry["id"]).startswith("KF-") for entry in rendered) == 1
+    assert sum(str(entry["id"]).startswith("KF-") for entry in rendered) == 40
+    assert sum("same_prevention_as" in entry for entry in rendered) == 39
+    assert all(entry["same_prevention_as"] == "KF-000000000000" for entry in rendered if "same_prevention_as" in entry)
     changed = [
         {**entry, "invariant": "a different rule"} if entry["id"] == "KF-000000000039" else entry for entry in overlay
     ]
     second = EngineeringContextAuthority(registry_path=registry, knowledge_overlay=changed).compile(
-        ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("scripts/"), budget_bytes=1_500
+        ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("scripts/"), budget_bytes=3_000
     )
     assert second["selected_prevention_rules_sha256"] != first["selected_prevention_rules_sha256"]
