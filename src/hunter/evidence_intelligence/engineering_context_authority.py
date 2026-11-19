@@ -429,6 +429,19 @@ class EngineeringContextAuthority:
                     break
                 full_ids.discard(entry["id"])
                 rendered = rendered_now()
+        # Last bounded tier: compact titles are descriptive metadata, not the
+        # canonical invariant. Preserve every identity and enforcement boundary
+        # while retaining the full canonical content in the signed digest.
+        if blob_bytes(rendered) > budget_bytes:
+            for entry in included:
+                if blob_bytes(rendered) <= budget_bytes:
+                    break
+                if entry["id"] not in full_ids and "title" in entry["compact"]:
+                    entry["compact"] = {
+                        "id": entry["id"],
+                        "prevention_boundary": entry["canonical_rule"]["prevention"]["boundary"],
+                    }
+                    rendered = rendered_now()
         final_bytes = blob_bytes(rendered)
         if final_bytes > budget_bytes:
             overflow = final_bytes - budget_bytes
