@@ -1253,11 +1253,28 @@ def test_a_receipt_must_be_internally_consistent(store: state.GitLedgerStore, ch
         )
 
 
-def test_knowledge_receipt_requires_the_knowledge_ingest_role(store: state.GitLedgerStore) -> None:
+def test_knowledge_receipt_rejects_unauthorized_roles(store: state.GitLedgerStore) -> None:
     identity = seeded(store)
     fingerprint = knowledge.read(store, trust=TRUST, provenance=trusted)[1].findings[identity].ingested["fingerprint"]
     with pytest.raises(knowledge.KnowledgeLedgerError, match="may not write"):
-        write(store, knowledge.Write("knowledge_receipt", receipt_evidence(identity, fingerprint)))
+        write(
+            store,
+            knowledge.Write("knowledge_receipt", receipt_evidence(identity, fingerprint)),
+            by={**BY, "role": "authorize"},
+        )
+
+
+def test_resolver_role_can_append_signed_proof_receipt_and_replay(store: state.GitLedgerStore) -> None:
+    """Codex P1 (#766): actual reconcile writer persists a verifiable receipt."""
+    identity = seeded(store)
+    _, view = knowledge.read(store, trust=TRUST, provenance=trusted)
+    fingerprint = view.findings[identity].ingested["fingerprint"]
+    receipt = knowledge.Write("knowledge_receipt", receipt_evidence(identity, fingerprint))
+    _, updated, written = write(store, receipt, by=BY)
+    assert written == 1
+    assert updated.findings[identity].receipt is not None
+    _, replayed = knowledge.read(store, trust=TRUST, provenance=trusted)
+    assert replayed.findings[identity].receipt == updated.findings[identity].receipt
 
 
 def test_signed_proven_finding_mints_receipt_without_owner_disposition() -> None:

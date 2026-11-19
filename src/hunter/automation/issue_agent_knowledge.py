@@ -74,7 +74,7 @@ WRITER_ROLES: Final[Mapping[str, frozenset[str]]] = {
     "thread_resolved": frozenset({"reconcile"}),
     "recurrence": frozenset({"reconcile"}),
     "verified_e2e_outcome": frozenset({"knowledge-ingest"}),
-    "knowledge_receipt": frozenset({"knowledge-ingest"}),
+    "knowledge_receipt": frozenset({"knowledge-ingest", "reconcile"}),
 }
 
 _PROVENANCE = _object(
