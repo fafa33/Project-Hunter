@@ -327,6 +327,28 @@ class EngineeringContextAuthority:
             rendered_entries.append(max(members, key=priority))
         rendered_entries.sort(key=lambda entry: entry["id"])
 
+        # The ledger may record the same exact path/claim on multiple PRs.
+        # Preserve every signed finding identity in the selected-rule digest,
+        # but render one prevention instruction for an identical invariant,
+        # boundary and path set. This is semantic deduplication, not omission:
+        # all aliases remain explicit and no different claim is coalesced.
+        overlay_groups: dict[tuple[str, str, tuple[str, ...]], list[dict[str, Any]]] = {}
+        for entry in rendered_entries:
+            family = entry["canonical_rule"]
+            if not str(entry["id"]).startswith("KF-"):
+                continue
+            overlay_key = (
+                str(family["invariant"]),
+                str(family["prevention"]["boundary"]),
+                tuple(sorted(str(path) for path in family["applicability"]["changed_paths"])),
+            )
+            overlay_groups.setdefault(overlay_key, []).append(entry)
+        overlay_aliases: dict[str, list[str]] = {}
+        for members in overlay_groups.values():
+            if len(members) > 1:
+                identifiers = sorted(str(member["id"]) for member in members)
+                overlay_aliases[identifiers[0]] = identifiers[1:]
+
         # Bind the COMPLETE applicable prevention set, including rules that
         # bounded rendering may later elide, to the existing compiled build
         # identity. The digest is audit evidence, not a substitute for executing
@@ -347,12 +369,22 @@ class EngineeringContextAuthority:
         # rendering decision over the same `rendered_entries`, and a dropped
         # entry's id is still recorded so nothing disappears silently.
         def render(entry: dict[str, Any], full: bool) -> dict[str, object]:
+            representative = alias_representatives.get(str(entry["id"]))
+            if representative is not None:
+                return {"id": entry["id"], "same_prevention_as": representative}
             return entry["full"] if full else entry["compact"]
 
         def blob_bytes(items: list[dict[str, object]]) -> int:
             ordered = sorted(items, key=lambda item: str(item["id"]))
             return len(json.dumps(ordered, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
 
+        # Preserve the existing public contract: every applicable KF identity
+        # remains discoverable in applicable_defect_families. Aliases carry a
+        # reference to the representative's canonical instruction, not a
+        # second copy of the same prevention prose.
+        alias_representatives = {
+            alias: representative for representative, aliases in overlay_aliases.items() for alias in aliases
+        }
         included = list(rendered_entries)
         elided: list[str] = []
         full_ids = {entry["id"] for entry in included}
@@ -418,6 +450,8 @@ class EngineeringContextAuthority:
             "selected_prevention_rules_sha256": selected_rules_digest,
             "execution_discipline": list(EXECUTION_DISCIPLINE_RULES),
         }
+        if overlay_aliases:
+            result["identical_finding_aliases"] = overlay_aliases
         if elided:
             # Canonical knowledge is never deleted -- these ids are still
             # applicable and still fully described in docs/DEFECT_REGISTRY.json
