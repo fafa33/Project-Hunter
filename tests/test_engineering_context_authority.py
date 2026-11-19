@@ -463,3 +463,19 @@ def test_identical_signed_finding_overlays_share_one_instruction_but_keep_all_id
         ENGINEERING_IMPLEMENT_TASK_KEY, scope=_scope("scripts/"), budget_bytes=3_000
     )
     assert second["selected_prevention_rules_sha256"] != first["selected_prevention_rules_sha256"]
+
+
+def test_issue_496_final_compaction_keeps_exact_file_id_and_boundary(tmp_path: Path) -> None:
+    """A dense exact-file scope must fit without dropping identities or changing the budget."""
+    families = [_family(f"DFF-X{i:03d}", f"scripts/target_{i}.py", invariant=_LONG_INVARIANT) for i in range(80)]
+    authority = EngineeringContextAuthority(registry_path=_registry(tmp_path, families))
+    scope = _scope(*[f"scripts/target_{i}.py" for i in range(80)])
+    first = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope, budget_bytes=4_500)
+    second = authority.compile(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope, budget_bytes=4_500)
+    assert first == second
+    rendered = cast(list[dict[str, object]], first["applicable_defect_families"])
+    assert {str(item["id"]) for item in rendered} == {f"DFF-X{i:03d}" for i in range(80)}
+    assert all(item["prevention_boundary"] == "review" for item in rendered)
+    assert "elided_family_ids" not in first
+    assert any("title" not in item for item in rendered)
+    assert len(json.dumps(rendered, sort_keys=True, separators=(",", ":")).encode()) <= 4_500
