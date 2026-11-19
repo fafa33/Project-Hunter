@@ -1277,6 +1277,28 @@ def test_resolver_role_can_append_signed_proof_receipt_and_replay(store: state.G
     assert replayed.findings[identity].receipt == updated.findings[identity].receipt
 
 
+def test_knowledge_ingest_plans_only_signed_exact_head_proven_receipts() -> None:
+    finding = knowledge.finding_from_observation(observation(), repository_id=1, trusted_reviewers=REVIEWERS)
+    identity = finding["finding_id"]
+    view = knowledge.KnowledgeView(1)
+    item = knowledge.Finding(ingested=finding)
+    view.findings[identity] = item
+    assert knowledge.proven_receipts_for_head(view, LATER) == []
+    item.classifications["proven"] = {
+        "outcome": "matched",
+        "family_id": "DFF-049",
+        "authorization_id": AUTH,
+        "regression_tests": [TEST],
+    }
+    item.proven = {"remediated_head_sha": LATER, "authorization_id": AUTH, "regression_tests": [TEST]}
+    planned = knowledge.proven_receipts_for_head(view, LATER)
+    assert len(planned) == 1 and planned[0].kind == "knowledge_receipt"
+    assert knowledge.proven_receipts_for_head(view, HEAD) == []
+    assert knowledge.proven_receipts_for_head(view, LATER, planned=planned) == []
+    item.receipt = dict(planned[0].evidence)
+    assert knowledge.proven_receipts_for_head(view, LATER) == []
+
+
 def test_signed_proven_finding_mints_receipt_without_owner_disposition() -> None:
     """Issue #765: proof, not bot prose, is the new receipt authority."""
     finding = knowledge.finding_from_observation(observation(), repository_id=1, trusted_reviewers=REVIEWERS)

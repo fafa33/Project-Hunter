@@ -524,6 +524,7 @@ def cmd_knowledge_ingest(configuration: control.Configuration, arguments: argpar
             )
             writes = writes + new_receipt_writes
             refusals = refusals + receipt_refusals
+            writes.extend(knowledge.proven_receipts_for_head(view, head, planned=writes))
             _, view, written = knowledge.append(
                 store,
                 writes,

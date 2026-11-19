@@ -786,6 +786,25 @@ def proven_receipt_writes(view: KnowledgeView, finding_id: str, *, exact_head: s
     ]
 
 
+def proven_receipts_for_head(view: KnowledgeView, exact_head: str, *, planned: Sequence[Write] = ()) -> list[Write]:
+    """Ingest already-signed Issue Agent proof via the existing knowledge writer.
+
+    Never promote an ordinary resolved review thread into proof. The exact-head
+    and signed classification checks remain inside proven_receipt_writes().
+    """
+    queued = {write.evidence["finding_id"] for write in planned if write.kind == "knowledge_receipt"}
+    receipts: list[Write] = []
+    for finding_id, finding in view.findings.items():
+        if finding_id in queued or finding.receipt is not None or finding.proven is None:
+            continue
+        if finding.proven.get("remediated_head_sha") != exact_head:
+            continue
+        for receipt in proven_receipt_writes(view, finding_id, exact_head=exact_head):
+            receipts.append(receipt)
+            queued.add(finding_id)
+    return receipts
+
+
 # --- fast-path Knowledge Receipt (ADR 0039 L11, Issue #527) ----------------------------------------------
 
 
