@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import urllib.error
@@ -24,6 +25,8 @@ from hunter.automation.engineering_issue_queue import QueueAuthorityError
 from hunter.automation.engineering_issue_queue_github import select_from_github
 
 WORKFLOW = "hunter-issue-agent-trigger.yml"
+_EXECUTE_LABEL = "hunter-agent-execute"
+_REPOSITORY = re.compile(r"^[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$")
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -31,14 +34,16 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         raise QueueAuthorityError("GitHub API redirect refused")
 
 
-def _api(path: str, *, paginated: bool = False) -> Any:
+def _api(path: str, *, paginated: bool = False, post: object | None = None) -> Any:
     # No user-supplied endpoint is passed as a CLI argument. The only CLI call
     # retrieves the existing gh credential with a constant argv vector.
     token_result = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, check=False, timeout=10)
     if token_result.returncode or not token_result.stdout.strip():
         raise QueueAuthorityError("authenticated GitHub credential unavailable")
-    if not path.startswith("repos/") or any(c in path for c in ("\r", "\n", "#", "@")):
+    if not (path == "user" or path.startswith("repos/")) or any(c in path for c in ("\r", "\n", "#", "@")):
         raise QueueAuthorityError("invalid GitHub REST path")
+    if post is not None and paginated:
+        raise QueueAuthorityError("cannot paginate a GitHub mutation")
     url = "https://api.github.com/" + path
     pages: list[Any] = []
     opener = urllib.request.build_opener(_NoRedirect)
@@ -48,6 +53,7 @@ def _api(path: str, *, paginated: bool = False) -> Any:
             raise QueueAuthorityError("untrusted GitHub pagination URL")
         request = urllib.request.Request(
             url,
+            data=json.dumps(post).encode("utf-8") if post is not None else None,
             headers={
                 "Authorization": "Bearer " + token_result.stdout.strip(),
                 "Accept": "application/vnd.github+json",
@@ -75,6 +81,8 @@ def _api(path: str, *, paginated: bool = False) -> Any:
 
 
 def read_selection(repository: str, owner_override: int | None = None) -> dict[str, Any]:
+    if not _REPOSITORY.fullmatch(repository):
+        raise QueueAuthorityError("invalid repository identity")
     repo = _api(f"repos/{repository}")
     if not isinstance(repo, Mapping) or repo.get("full_name") != repository:
         raise QueueAuthorityError("repository identity mismatch")
@@ -139,13 +147,67 @@ def read_selection(repository: str, owner_override: int | None = None) -> dict[s
     }
 
 
+def execute_selection(repository: str, owner_override: int | None = None) -> dict[str, Any]:
+    """Owner-authorized handoff via the existing issues:labeled issuer; never dispatch directly.
+
+    The owner policy is selection authority only. GitHub's owner-authored label
+    event, canonical scope admission, signed issuer and atomic lifecycle remain
+    independent mandatory authorities. No event is emitted for an absent selection.
+    """
+    from hunter_issue_agent_trigger import IssueAgentTriggerError, implementation_scope_from_issue_body
+
+    if not _REPOSITORY.fullmatch(repository):
+        raise QueueAuthorityError("invalid repository identity")
+    repo = _api(f"repos/{repository}")
+    owner = repo.get("owner") if isinstance(repo, Mapping) else None
+    if not isinstance(owner, Mapping) or owner.get("login") != repository.split("/", 1)[0]:
+        raise QueueAuthorityError("repository owner identity mismatch")
+    actor = _api("user")
+    if not isinstance(actor, Mapping) or actor.get("login") != owner["login"] or actor.get("type") != "User":
+        raise QueueAuthorityError("execution requires authenticated repository owner")
+    selected = read_selection(repository, owner_override)
+    number = selected["issue_number"]
+    if number is None:
+        return {"status": "NO_SELECTION", **selected}
+    issue = _api(f"repos/{repository}/issues/{number}")
+    if not isinstance(issue, Mapping) or issue.get("number") != number or issue.get("state") != "open":
+        raise QueueAuthorityError("selected Issue identity/state changed")
+    try:
+        implementation_scope_from_issue_body(issue.get("body") or "", task_id=f"issue-{number}")
+    except (IssueAgentTriggerError, TypeError, ValueError) as error:
+        raise QueueAuthorityError("selected Issue lacks canonical execution scope") from error
+    labels = issue.get("labels")
+    if not isinstance(labels, list) or any(not isinstance(label, Mapping) for label in labels):
+        raise QueueAuthorityError("selected Issue labels unavailable")
+    if any(label.get("name") == _EXECUTE_LABEL for label in labels):
+        raise QueueAuthorityError("execution label already present; refusing duplicate dispatch")
+    current = read_selection(repository, owner_override)
+    if current != selected:
+        raise QueueAuthorityError("stale Issue queue selection; refusing dispatch")
+    # The only mutation: an owner-authored labeled event. The existing issuer
+    # independently verifies scope, signs authority and atomically claims work.
+    response = _api(f"repos/{repository}/issues/{number}/labels", post={"labels": [_EXECUTE_LABEL]})
+    if not isinstance(response, list) or not any(
+        isinstance(label, Mapping) and label.get("name") == _EXECUTE_LABEL for label in response
+    ):
+        raise QueueAuthorityError("GitHub did not confirm execution label")
+    return {"status": "LABEL_EMITTED", **selected, "dispatch": True}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--owner-override", type=int)
+    parser.add_argument(
+        "--execute", action="store_true", help="Owner-only label handoff into existing signed Issue-agent lifecycle"
+    )
     args = parser.parse_args()
     try:
-        result = read_selection(args.repository, args.owner_override)
+        result = (
+            execute_selection(args.repository, args.owner_override)
+            if args.execute
+            else read_selection(args.repository, args.owner_override)
+        )
     except (QueueAuthorityError, subprocess.TimeoutExpired) as error:
         print(json.dumps({"status": "BLOCKED", "reason": str(error)}, sort_keys=True))
         return 2
