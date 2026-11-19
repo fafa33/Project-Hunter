@@ -1277,6 +1277,30 @@ def test_resolver_role_can_append_signed_proof_receipt_and_replay(store: state.G
     assert replayed.findings[identity].receipt == updated.findings[identity].receipt
 
 
+def test_resolution_requires_persisted_receipt_matching_exact_head_and_regression() -> None:
+    finding = knowledge.finding_from_observation(observation(), repository_id=1, trusted_reviewers=REVIEWERS)
+    identity = finding["finding_id"]
+    view = knowledge.KnowledgeView(1)
+    item = knowledge.Finding(ingested=finding)
+    view.findings[identity] = item
+    assert not knowledge.verified_receipt_at_head(view, identity, exact_head=LATER)
+    item.proven = {"remediated_head_sha": LATER, "authorization_id": AUTH, "regression_tests": [TEST]}
+    item.classifications["proven"] = {
+        "outcome": "matched",
+        "family_id": "DFF-049",
+        "authorization_id": AUTH,
+        "regression_tests": [TEST],
+    }
+    proposed = knowledge.proven_receipt_writes(view, identity, exact_head=LATER)
+    assert len(proposed) == 1
+    assert not knowledge.verified_receipt_at_head(view, identity, exact_head=LATER)
+    item.receipt = dict(proposed[0].evidence)
+    assert knowledge.verified_receipt_at_head(view, identity, exact_head=LATER)
+    assert not knowledge.verified_receipt_at_head(view, identity, exact_head=HEAD)
+    item.receipt["regression_evidence"] = ["tests/test_unrelated.py::test_unrelated"]
+    assert not knowledge.verified_receipt_at_head(view, identity, exact_head=LATER)
+
+
 def test_knowledge_ingest_plans_only_signed_exact_head_proven_receipts() -> None:
     finding = knowledge.finding_from_observation(observation(), repository_id=1, trusted_reviewers=REVIEWERS)
     identity = finding["finding_id"]

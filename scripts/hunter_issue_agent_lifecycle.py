@@ -1435,6 +1435,14 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
                         recorded_by=writer.recorded_by(),
                         recorded_at=_timestamp(),
                     )
+                # Verify the signed append is readable and bound to the same
+                # exact-head proof BEFORE any GitHub reply or thread mutation.
+                _head, verified_view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+                if not knowledge.verified_receipt_at_head(
+                    verified_view, finding_id, exact_head=proof.remediated_head_sha
+                ):
+                    print(f"issue {issue}: {finding_id[:12]} receipt not verified; thread remains open")
+                    continue
                 comment_id = control.resolve_thread(
                     github,
                     configuration,

@@ -786,6 +786,27 @@ def proven_receipt_writes(view: KnowledgeView, finding_id: str, *, exact_head: s
     ]
 
 
+def verified_receipt_at_head(view: KnowledgeView, finding_id: str, *, exact_head: str) -> bool:
+    """Fail-closed resolution barrier: read back the persisted canonical receipt.
+
+    A proposed write, a resolved GitHub thread or a green preflight alone is not
+    a receipt. Reusing the signed exact-head proof never dispatches CI again.
+    """
+    item = view.findings.get(finding_id)
+    if item is None or item.receipt is None or item.proven is None:
+        return False
+    receipt = item.receipt
+    proof = item.proven
+    return (
+        proof.get("remediated_head_sha") == exact_head
+        and receipt.get("correction_commit") == exact_head
+        and receipt.get("finding_id") == finding_id
+        and receipt.get("fingerprint") == item.ingested.get("fingerprint")
+        and bool(proof.get("regression_tests"))
+        and set(receipt.get("regression_evidence", [])) == set(proof.get("regression_tests", []))
+    )
+
+
 def proven_receipts_for_head(view: KnowledgeView, exact_head: str, *, planned: Sequence[Write] = ()) -> list[Write]:
     """Ingest already-signed Issue Agent proof via the existing knowledge writer.
 
