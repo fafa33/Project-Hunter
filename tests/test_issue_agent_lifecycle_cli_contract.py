@@ -296,6 +296,7 @@ def test_execute_advisory_is_visible_without_a_result(
     [
         "kilo/nvidia/nemotron-3-ultra-550b-a55b:free",
         "kilo/cohere/north-mini-code:free",
+        "kilo/kilo-auto/free",
     ],
 )
 def test_free_kilo_models_do_not_require_a_provider_secret(model: str, monkeypatch: pytest.MonkeyPatch) -> None:

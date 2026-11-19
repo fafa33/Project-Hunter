@@ -2008,7 +2008,7 @@ def _executor_model_secrets(model_argv: Sequence[str], model_key_name: str) -> d
         and Path(model_argv[0]).name == "kilo"
         and model_argv[1:3] == ("run", "--model")
         and model_argv[3].startswith("kilo/")
-        and model_argv[3].endswith(":free")
+        and (model_argv[3].endswith(":free") or model_argv[3] == "kilo/kilo-auto/free")
     ):
         return {}
     if not model_key_name:
