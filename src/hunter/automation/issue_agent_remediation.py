@@ -591,6 +591,11 @@ def evidence_reply(finding_id: str, *, remediated_head_sha: str, family: str, te
             f"- remediated head: `{remediated_head_sha}`",
             f"- proven family: `{family}`",
             f"- regression evidence: {', '.join(f'`{item}`' for item in tests)}",
+            # Replayable evidence for the existing collector. This is deliberately
+            # NOT an owner disposition: the signed proof is separately persisted
+            # and verified before this advisory reply is posted.
+            f"- correction commit: `{remediated_head_sha}`",
+            *(f"- [test:{item}]" for item in tests),
             "- proof: the named regression fails on the reviewed head and passes on the full result "
             "(ADR 0039 L3.2), and the promotion is in this same commit (ADR 0039 L6).",
         ]
