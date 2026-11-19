@@ -55,19 +55,27 @@ def canonicalize(
 
     dispatch = env.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
     if dispatch:
-        if dispatch_pr is None:
-            raise ProofRejected("dispatch PR API evidence required")
         require(run.get("event") == "workflow_dispatch", "unexpected run event")
         require(event.get("inputs", {}).get("canary") == "run", "dispatch authorization missing")
         require(env.get("GITHUB_ACTOR") == env.get("GITHUB_REPOSITORY_OWNER"), "owner authorization missing")
-        require(env.get("GITHUB_REF") == "refs/heads/fix/718-broker-supervisor-budget", "unexpected dispatch ref")
-        require(run.get("head_branch") == "fix/718-broker-supervisor-budget", "unexpected run branch")
-        require(dispatch_pr.get("number") == 723 and dispatch_pr.get("state") == "open", "invalid dispatch PR")
-        require((dispatch_pr.get("base") or {}).get("ref") == "main", "invalid dispatch base")
-        pr_head = dispatch_pr.get("head") or {}
-        require((pr_head.get("repo") or {}).get("full_name") == env.get("GITHUB_REPOSITORY"), "fork refused")
-        require(pr_head.get("ref") == "fix/718-broker-supervisor-budget", "invalid dispatch PR branch")
-        pull = {"number": dispatch_pr["number"], "head": {"sha": pr_head.get("sha")}}
+        dispatch_ref = env.get("GITHUB_REF")
+        require(
+            dispatch_ref in {"refs/heads/main", "refs/heads/fix/718-broker-supervisor-budget"},
+            "unexpected dispatch ref",
+        )
+        require(run.get("head_branch") == dispatch_ref.removeprefix("refs/heads/"), "unexpected run branch")
+        if dispatch_ref == "refs/heads/main":
+            require(dispatch_pr is None, "main dispatch must not impersonate a PR")
+            pull = {"head": {"sha": env.get("GITHUB_SHA")}}
+        else:
+            if dispatch_pr is None:
+                raise ProofRejected("dispatch PR API evidence required")
+            require(dispatch_pr.get("number") == 723 and dispatch_pr.get("state") == "open", "invalid dispatch PR")
+            require((dispatch_pr.get("base") or {}).get("ref") == "main", "invalid dispatch base")
+            pr_head = dispatch_pr.get("head") or {}
+            require((pr_head.get("repo") or {}).get("full_name") == env.get("GITHUB_REPOSITORY"), "fork refused")
+            require(pr_head.get("ref") == "fix/718-broker-supervisor-budget", "invalid dispatch PR branch")
+            pull = {"number": dispatch_pr["number"], "head": {"sha": pr_head.get("sha")}}
     else:
         require(env.get("GITHUB_EVENT_NAME", "pull_request") == "pull_request", "unsupported event")
         pull = event.get("pull_request") or {}
@@ -86,6 +94,8 @@ def canonicalize(
     require(proof.get("pull_request") == pull.get("number"), "pull request mismatch")
     if dispatch:
         require(head == env.get("GITHUB_SHA"), "dispatch SHA mismatch")
+        if env.get("GITHUB_REF") == "refs/heads/main":
+            require(proof.get("pull_request") is None, "main dispatch must not claim a PR")
     else:
         require(
             proof.get("pull_request") in {p.get("number") for p in run.get("pull_requests", [])},
@@ -137,6 +147,7 @@ def main(stdin: TextIO, fetch: Callable[[str, str], dict[str, Any]] = _get) -> i
             dispatch_pr=(
                 fetch(f"https://api.github.com/repos/{repository}/pulls/723", env["GITHUB_TOKEN"])
                 if env.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+                and env.get("GITHUB_REF") == "refs/heads/fix/718-broker-supervisor-budget"
                 else None
             ),
         )
