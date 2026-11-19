@@ -89,6 +89,13 @@ jobs:
           ADMISSION_FAILURES=0
           while IFS= read -r PR_NUMBER; do
             [[ -n "${PR_NUMBER}" ]] || continue
+            # Owner-controlled Codex trigger: admission must not promote Draft PRs.
+            # The trusted workflow may still reconcile already-Ready candidates.
+            # A failed/missing GitHub read fails closed rather than mutating Draft.
+            if [[ "$(GH_TOKEN="${GITHUB_TOKEN}" gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq .draft)" == "true" ]]; then
+              echo "PR #${PR_NUMBER} remains Draft; only the owner may mark it Ready for Codex review."
+              continue
+            fi
             if [[ -n "${EVENT_HEAD_SHA}" ]]; then
               if ! python "${BRIDGE}" candidate \
                 --pr "${PR_NUMBER}" \

@@ -743,3 +743,12 @@ def test_post_ready_confirmation_read_failure_restores_draft(monkeypatch):
 
     assert admission.enforce_candidate_admission("fafa33/Project-Hunter", "read-token", 616, HEAD, "app-token") == 1
     assert rolled_back == [("app-token", "PR_test_node")]
+
+
+def test_hosted_candidate_admission_never_promotes_draft_without_owner() -> None:
+    """The trusted scheduled/workflow_run path must not call legacy auto-Ready on Draft."""
+    workflow = (ROOT / ".github" / "workflows" / "hunter-candidate-admission.yml").read_text()
+    assert 'gh api "repos/${GH_REPO}/pulls/${PR_NUMBER}" --jq .draft' in workflow
+    assert 'if [[ "$(GH_TOKEN="${GITHUB_TOKEN}" gh api' in workflow
+    assert "only the owner may mark it Ready" in workflow
+    assert workflow.index('if [[ "$(GH_TOKEN=') < workflow.index('python "${BRIDGE}" candidate')
