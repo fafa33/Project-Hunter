@@ -20,6 +20,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1864,7 +1865,15 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
 
 
 def _uploaded(configuration: control.Configuration, github: Any, artifact_id: int) -> authorize.UploadedArtifact:
-    item = control.definitive(github.get(f"/repos/{configuration.repository}/actions/artifacts/{artifact_id}"))
+    # GitHub may briefly return 404 for a just-finalized Actions artifact.
+    # Retry only a definitive absence, never an indefinite API read or a malformed response.
+    path = f"/repos/{configuration.repository}/actions/artifacts/{artifact_id}"
+    for attempt in range(3):
+        item = control.definitive(github.get(path))
+        if item is not None:
+            break
+        if attempt < 2:
+            time.sleep(1 + attempt)
     if not isinstance(item, Mapping):
         raise LifecycleRefused("TRANSPORT_INTEGRITY_FAILED", "the uploaded handoff artifact is not readable back")
     return authorize.UploadedArtifact(
