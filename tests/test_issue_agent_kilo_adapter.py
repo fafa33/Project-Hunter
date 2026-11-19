@@ -29,6 +29,14 @@ def test_kilo_private_task_and_workspace(tmp_path: Path) -> None:
     assert result.argv.count("--auto") == 1
     assert result.argv[3:5] == ("--dir", str(workspace))
     assert result.argv[5:7] == ("--model", MODEL)
+    directive = result.argv[-3]
+    assert directive == roles.KILO_TARGETED_START_DIRECTIVE
+    assert "allowed_paths" in directive
+    assert "Do not list the repository root" in directive
+    assert "exhausted discovery budget is a hard boundary" in directive
+    assert "do not retry it" in directive
+    assert "stop without fabricating edits" in directive
+    assert secret.decode() not in directive
     assert result.argv[-2] == "--file"
     attachment = Path(result.argv[-1])
     assert attachment.parent == home
