@@ -590,3 +590,52 @@ def test_knowledge_receipt_recent_unchanged_verdict_does_not_churn(monkeypatch: 
         _FakeCollector(combined, calls), "fafa33/Project-Hunter", "token", "a" * 40, 747, "success", "ok"
     )
     assert [method for method, _, _ in calls] == ["GET"]
+
+
+def test_uploaded_handoff_eventual_visibility_is_bounded(monkeypatch):
+    from types import SimpleNamespace
+
+    from hunter.automation.issue_agent_control import Read
+
+    responses = iter(
+        [
+            Read("absent"),
+            Read("absent"),
+            Read(
+                "ok",
+                {
+                    "id": 123,
+                    "name": "sealed",
+                    "digest": "sha256:" + "a" * 64,
+                    "workflow_run": {"id": 456},
+                    "expired": False,
+                },
+            ),
+        ]
+    )
+    paths = []
+    github = SimpleNamespace(get=lambda path: (paths.append(path), next(responses))[1])
+    delays = []
+    monkeypatch.setattr(lifecycle.time, "sleep", delays.append)
+    artifact = lifecycle._uploaded(SimpleNamespace(repository="fafa33/Project-Hunter"), github, 123)
+    assert (artifact.artifact_id, artifact.run_id) == (123, 456)
+    assert delays == [1, 2]
+    assert len(paths) == 3
+
+
+@pytest.mark.parametrize("status", ["absent", "unknown", "malformed"])
+def test_uploaded_handoff_refuses_unavailable_or_malformed_metadata(monkeypatch, status):
+    from types import SimpleNamespace
+
+    from hunter.automation.issue_agent_control import FactsUnavailable, Read
+
+    reads = []
+    value = None if status == "absent" else ("not-a-mapping" if status == "malformed" else None)
+    github = SimpleNamespace(
+        get=lambda path: (reads.append(path), Read(status if status != "malformed" else "ok", value))[1]
+    )
+    monkeypatch.setattr(lifecycle.time, "sleep", lambda seconds: None)
+    error = FactsUnavailable if status == "unknown" else lifecycle.LifecycleRefused
+    with pytest.raises(error):
+        lifecycle._uploaded(SimpleNamespace(repository="fafa33/Project-Hunter"), github, 123)
+    assert len(reads) == (3 if status == "absent" else 1)
