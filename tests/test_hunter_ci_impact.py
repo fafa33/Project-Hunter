@@ -110,3 +110,20 @@ def test_review_request_only_classification_is_advisory():
     assert not classify_review_metadata_only([".hunter/pre-ready-hostile-review.json", "pyproject.toml"])
     assert not classify_review_metadata_only([".hunter/pre-ready-hostile-review.json.bak"])
     assert select_tests([".hunter/pre-ready-hostile-review.json"], set())[0]
+
+
+def test_cross_head_equivalence_candidate_never_accepts_unknown_inputs():
+    from hunter_ci_impact import classify_cross_head_equivalence_candidate as eligible
+
+    metadata = [".hunter/pre-ready-hostile-review.json"]
+    assert eligible(changed=metadata, base_unchanged=True, definitions_unchanged=True, toolchain_unchanged=True)
+    for overrides in (
+        {"base_unchanged": False},
+        {"definitions_unchanged": False},
+        {"toolchain_unchanged": False},
+        {"changed": [".hunter/pre-ready-hostile-review.json", "pyproject.toml"]},
+        {"changed": []},
+    ):
+        inputs = dict(changed=metadata, base_unchanged=True, definitions_unchanged=True, toolchain_unchanged=True)
+        inputs.update(overrides)
+        assert not eligible(**inputs)
