@@ -314,3 +314,45 @@ def test_missing_base_identity_refuses_reuse_before_proof(monkeypatch: pytest.Mo
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
     assert not reusable
     assert "base identity" in reason
+
+
+def test_review_metadata_only_still_requires_exact_head_hosted_proof(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        decision.governance,
+        "read_pr_changed_paths",
+        lambda *_a, **_k: (True, (".hunter/pre-ready-hostile-review.json",), None),
+    )
+    _resolve_spy(monkeypatch, reuse.ReuseDecision(False, "exact-head proof is unavailable"))
+    reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
+    assert not reusable
+    assert "unavailable" in reason
+
+
+def test_review_metadata_only_may_reuse_only_verified_exact_head_proof(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        decision.governance,
+        "read_pr_changed_paths",
+        lambda *_a, **_k: (True, (".hunter/pre-ready-hostile-review.json",), None),
+    )
+    _resolve_spy(monkeypatch, reuse.ReuseDecision(True, "verified immutable exact-head receipt"))
+    reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
+    assert reusable
+    assert "verified" in reason
+
+
+def test_review_metadata_with_workflow_change_requires_fresh_trusted_validation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        decision.governance,
+        "read_pr_changed_paths",
+        lambda *_a, **_k: (True, (".hunter/pre-ready-hostile-review.json", ".github/workflows/ci.yml"), None),
+    )
+    _failing_resolve_spy(monkeypatch)
+    reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
+    assert not reusable
+    assert "trusted validation definition" in reason
