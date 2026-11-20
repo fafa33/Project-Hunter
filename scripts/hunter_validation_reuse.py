@@ -39,6 +39,8 @@ import argparse
 import hashlib
 import json
 import os
+import re
+import subprocess
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -404,3 +406,515 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+# --- Issue #606: cross-HEAD proof equivalence -------------------------------
+
+#: All identities that must agree for cross-HEAD proof equivalence.
+#: The old HEAD's success is never copied; a new decision is issued bound
+#: to the current HEAD and referencing the original immutable proof.
+EQUIVALENCE_IDENTITIES: tuple[str, ...] = (
+    "repository",
+    "pr",
+    "current_head",
+    "source_proof_head",
+    "base_sha",
+    "tested_tree_digest",
+    "dependency_identity",
+    "workflow_definition_identity",
+    "toolchain_identity",
+    "environment_identity",
+    "trusted_workflow",
+    "run_attempt",
+    "job_identity",
+    "proof_digest",
+    "provenance",
+)
+
+#: Paths whose content is lifecycle metadata, not validated application code or
+#: definitions. A metadata-only HEAD change alters these files but not the
+#: tested inputs, so the tested subtree digest excludes them. Excluding them is
+#: what lets a metadata-only candidate be proven equivalent to its source proof.
+REVIEW_METADATA_PATHS: frozenset[str] = frozenset(
+    {
+        ".hunter/pre-ready-hostile-review.json",
+    }
+)
+
+
+@dataclass(frozen=True)
+class EquivalenceBinding:
+    """All identities that must match for cross-HEAD proof equivalence."""
+
+    repository: str
+    pr_number: int
+    current_head: str
+    source_proof_head: str
+    base_sha: str
+    tested_tree_digest: str
+    dependency_identity: str
+    workflow_definition_identity: str
+    toolchain_identity: str
+    environment_identity: str
+    trusted_workflow: str
+    run_attempt: int
+    job_identity: str
+    proof_digest: str
+    provenance: str
+
+
+@dataclass(frozen=True)
+class EquivalenceDecision:
+    equivalent: bool
+    reason: str
+    binding: EquivalenceBinding | None = None
+
+
+_HEX_SHA = re.compile(r"\A[0-9a-f]{40}\Z")
+
+
+def compute_tested_tree_digest(root: Path, head_sha: str) -> tuple[str | None, str]:
+    """Content-addressed digest of the *tested* subtree at ``head_sha``.
+
+    Review-request lifecycle metadata is excluded: it is not an input to the
+    heavy validation suite, so a metadata-only HEAD change leaves this digest
+    unchanged. Every other path -- application code, tests, dependencies,
+    workflows, trust roots, security definitions -- is included, so any change
+    to a validated input changes the digest and equivalence fails closed.
+
+    The digest is derived from Git's own blob object IDs (``git ls-tree``), so
+    it is cryptographically bound to exact content rather than to a file name
+    or a caller-supplied label. Any Git/parse failure fails closed.
+    """
+    try:
+        completed = subprocess.run(
+            ("git", "ls-tree", "-r", "-z", head_sha),
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or "git ls-tree failed"
+            return None, f"tested tree digest unavailable ({detail})"
+        entries: list[tuple[bytes, bytes]] = []
+        for record in completed.stdout.split("\0"):
+            if not record:
+                continue
+            if "\t" not in record:
+                return None, "tested tree digest unavailable (malformed ls-tree record)"
+            meta, path = record.split("\t", 1)
+            if path in REVIEW_METADATA_PATHS:
+                continue
+            entries.append((path.encode("utf-8"), meta.encode("utf-8")))
+        if not entries:
+            return None, "tested tree digest unavailable (empty tested subtree)"
+        entries.sort()
+        hasher = hashlib.sha256()
+        for path, meta in entries:
+            hasher.update(path)
+            hasher.update(b"\0")
+            hasher.update(meta)
+            hasher.update(b"\n")
+        return f"sha256:{hasher.hexdigest()}", ""
+    except (OSError, ValueError) as exc:
+        return None, f"tested tree digest unavailable ({type(exc).__name__}: {exc})"
+
+
+def compute_dependency_identity(root: Path) -> tuple[str | None, str]:
+    """The dependency/lockfile identity: pinned CI constraints file."""
+    try:
+        constraints = root / "requirements" / "ci-constraints.txt"
+        if not constraints.is_file():
+            return None, "dependency lockfile unavailable"
+        payload = constraints.read_bytes()
+        return hashlib.sha256(payload).hexdigest(), ""
+    except OSError as exc:
+        return None, f"dependency identity unavailable ({exc})"
+
+
+def compute_workflow_definition_identity(root: Path) -> tuple[str | None, str]:
+    """The workflow and validation-definition identity."""
+    try:
+        import hunter_pr_preflight as preflight
+
+        parts: list[str] = []
+        for relative in (
+            PRE_PR_WORKFLOW_PATH,
+            ".github/workflows/hunter-trusted-preflight-upgrade.yml",
+            ".github/workflows/ci.yml",
+        ):
+            path = root / relative
+            payload = path.read_bytes()
+            parts.append(f"file:{relative}:{hashlib.sha256(payload).hexdigest()}")
+        parts.append(f"gate-chain:{hashlib.sha256(repr(preflight.NORMAL_QUALITY_GATES).encode()).hexdigest()}")
+        return hashlib.sha256("|".join(parts).encode()).hexdigest(), ""
+    except (OSError, ImportError) as exc:
+        return None, f"workflow definition identity unavailable ({exc})"
+
+
+def compute_environment_identity(root: Path) -> tuple[str | None, str]:
+    """The relevant environment identity: Python version and workflow pins."""
+    try:
+        import sys
+
+        parts: list[str] = [f"python:{'.'.join(str(p) for p in sys.version_info[:3])}"]
+        for workflow in (".github/workflows/ci.yml", PRE_PR_WORKFLOW_PATH):
+            path = root / workflow
+            try:
+                content = path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+            for line in content.splitlines():
+                if "python-version" in line:
+                    parts.append(f"workflow:{workflow}:{line.strip()}")
+        return hashlib.sha256("|".join(parts).encode()).hexdigest(), ""
+    except Exception as exc:  # noqa: BLE001 - environment identity is best-effort but must exist
+        return None, f"environment identity unavailable ({exc})"
+
+
+def compute_provenance(root: Path, head_sha: str) -> tuple[str | None, str]:
+    """Provenance: the exact commit SHA and its tree object."""
+    try:
+        tree_sha = receipts.commit_tree_identity(root, head_sha)
+        return f"commit:{head_sha}:tree:{tree_sha}", ""
+    except receipts.ValidationEvidenceUnavailable as exc:
+        return None, f"provenance unavailable ({exc})"
+
+
+def find_previous_proven_head(repository: str, token: str, current_head: str) -> tuple[str | None, str]:
+    """Find a previous HEAD with a successful exact-head preflight proof.
+
+    Searches the Actions API for successful Hunter / Pre-PR Preflight runs
+    on push events. Returns the most recent proven head SHA other than the
+    current head, or None if none exists.
+
+    The old HEAD's success is never copied as the new HEAD's proof; this
+    only locates the immutable source proof to reference in a new decision.
+    """
+    try:
+        payload = _fetch(repository, token, "actions/runs?event=push&per_page=100")
+        if not isinstance(payload, dict):
+            return None, "run evidence is malformed"
+        runs = payload.get("workflow_runs")
+        if not isinstance(runs, list):
+            return None, "workflow_runs payload is malformed"
+
+        proven_heads: list[tuple[int, str]] = []
+        for run in runs:
+            if not isinstance(run, dict):
+                continue
+            name = str(run.get("name") or "")
+            if name != "Hunter / Pre-PR Preflight":
+                continue
+            path = str(run.get("path") or "")
+            if path != PRE_PR_WORKFLOW_PATH:
+                continue
+            event = str(run.get("event") or "")
+            if event != "push":
+                continue
+            status = str(run.get("status") or "")
+            conclusion = str(run.get("conclusion") or "")
+            head_sha = str(run.get("head_sha") or "")
+            if status != "completed" or conclusion != "success" or not head_sha:
+                continue
+            if head_sha == current_head:
+                continue
+            if not _HEX_SHA.fullmatch(head_sha):
+                continue
+            proven_heads.append((int(run.get("id", 0)), head_sha))
+
+        if not proven_heads:
+            return None, "no previous successful exact-head proof found"
+
+        # Return the most recent proven head by run ID (latest first).
+        proven_heads.sort(reverse=True)
+        return proven_heads[0][1], ""
+    except Exception as exc:  # noqa: BLE001 - any failure fails closed
+        return None, f"previous proof search failed ({type(exc).__name__}: {exc})"
+
+
+def verify_equivalence(
+    root: Path,
+    *,
+    repository: str,
+    pr_number: int,
+    current_head: str,
+    source_proof_head: str,
+    base_sha: str,
+    token: str,
+    run_attempt: int,
+    job_id: int,
+    proof_digest: str,
+) -> EquivalenceDecision:
+    """Verify all cross-HEAD equivalence bindings and issue a new decision.
+
+    The old HEAD's success is never copied as the new HEAD's proof. A new
+    current-HEAD-bound decision is issued that references the original
+    immutable proof.
+    """
+    bindings: dict[str, str] = {}
+
+    # 1. Repository identity.
+    bindings["repository"] = repository
+
+    # 2. PR identity.
+    bindings["pr"] = str(pr_number)
+
+    # 3. Current exact HEAD.
+    bindings["current_head"] = current_head
+
+    # 4. Immutable source proof HEAD.
+    bindings["source_proof_head"] = source_proof_head
+
+    # 5. Base SHA.
+    bindings["base_sha"] = base_sha
+
+    # 6. Tested tree/subtree digest - must match between source and current.
+    current_tree, problem = compute_tested_tree_digest(root, current_head)
+    if problem:
+        return EquivalenceDecision(False, f"current tested tree: {problem}")
+    bindings["tested_tree_digest"] = current_tree
+
+    source_tree, problem = compute_tested_tree_digest(root, source_proof_head)
+    if problem:
+        return EquivalenceDecision(False, f"source tested tree: {problem}")
+    bindings["source_tested_tree_digest"] = source_tree
+
+    if current_tree != source_tree:
+        return EquivalenceDecision(
+            False,
+            f"tested tree differs between source proof head {source_proof_head[:10]} "
+            f"and current head {current_head[:10]}",
+        )
+
+    # 7. Dependency/lockfile identity.
+    dep_identity, problem = compute_dependency_identity(root)
+    if problem:
+        return EquivalenceDecision(False, f"dependency identity: {problem}")
+    bindings["dependency_identity"] = dep_identity
+
+    # 8. Workflow and validation-definition identity.
+    wf_identity, problem = compute_workflow_definition_identity(root)
+    if problem:
+        return EquivalenceDecision(False, f"workflow definition: {problem}")
+    bindings["workflow_definition_identity"] = wf_identity
+
+    # 9. Toolchain identity - runner must match pinned toolchain.
+    try:
+        toolchain = receipts.toolchain_identity(receipts.measured_toolchain())
+        pinned = receipts.toolchain_identity(receipts.pinned_toolchain(root))
+        if toolchain != pinned:
+            return EquivalenceDecision(False, "runner toolchain does not match pinned toolchain")
+        bindings["toolchain_identity"] = toolchain
+    except receipts.ValidationEvidenceUnavailable as exc:
+        return EquivalenceDecision(False, f"toolchain identity: {exc}")
+
+    # 10. Environment identity.
+    env_identity, problem = compute_environment_identity(root)
+    if problem:
+        return EquivalenceDecision(False, f"environment identity: {problem}")
+    bindings["environment_identity"] = env_identity
+
+    # 11. Trusted workflow path.
+    bindings["trusted_workflow"] = PRE_PR_WORKFLOW_PATH
+
+    # 12. Run/attempt - must be positive.
+    if run_attempt <= 0:
+        return EquivalenceDecision(False, "run_attempt must be positive")
+    bindings["run_attempt"] = str(run_attempt)
+
+    # 13. Job identity - must be positive.
+    if job_id <= 0:
+        return EquivalenceDecision(False, "job_id must be positive")
+    bindings["job_identity"] = f"job:{job_id}"
+
+    # 14. Proof digest - references the original immutable proof.
+    if not proof_digest:
+        return EquivalenceDecision(False, "proof digest is required for equivalence")
+    bindings["proof_digest"] = proof_digest
+
+    # 15. Provenance - current head commit and tree.
+    provenance, problem = compute_provenance(root, current_head)
+    if problem:
+        return EquivalenceDecision(False, f"provenance: {problem}")
+    bindings["provenance"] = provenance
+
+    # Issue a new current-HEAD-bound decision referencing the original proof.
+    binding = EquivalenceBinding(
+        repository=bindings["repository"],
+        pr_number=pr_number,
+        current_head=current_head,
+        source_proof_head=source_proof_head,
+        base_sha=base_sha,
+        tested_tree_digest=bindings["tested_tree_digest"],
+        dependency_identity=bindings["dependency_identity"],
+        workflow_definition_identity=bindings["workflow_definition_identity"],
+        toolchain_identity=bindings["toolchain_identity"],
+        environment_identity=bindings["environment_identity"],
+        trusted_workflow=bindings["trusted_workflow"],
+        run_attempt=run_attempt,
+        job_identity=bindings["job_identity"],
+        proof_digest=bindings["proof_digest"],
+        provenance=bindings["provenance"],
+    )
+
+    return EquivalenceDecision(
+        True,
+        f"cross-HEAD proof equivalence verified: current head {current_head[:10]} bound to "
+        f"source proof head {source_proof_head[:10]}",
+        binding=binding,
+    )
+
+
+def decide(
+    root: Path,
+    *,
+    repository: str,
+    pr_number: int,
+    current_head: str,
+    base_sha: str,
+    source_proof_head: str | None = None,
+    token: str,
+    run_attempt: int = 1,
+    job_id: int = 0,
+    proof_digest: str = "",
+) -> EquivalenceDecision:
+    """Decide cross-HEAD proof equivalence for the current candidate HEAD.
+
+    Uses the caller's immutable source proof head when supplied; otherwise
+    searches for the most recent previous proven head with identical tested
+    inputs. A new current-HEAD-bound decision is issued referencing the
+    original immutable proof. The old HEAD's success is never copied.
+    """
+    # Validate inputs before any work.
+    if not _HEX_SHA.fullmatch(current_head):
+        return EquivalenceDecision(False, "current head is not an exact 40-hex commit SHA")
+    if not _HEX_SHA.fullmatch(base_sha):
+        return EquivalenceDecision(False, "base SHA is not an exact 40-hex commit SHA")
+    if pr_number <= 0:
+        return EquivalenceDecision(False, "PR number must be positive")
+    if run_attempt <= 0:
+        return EquivalenceDecision(False, "run_attempt must be positive")
+    if job_id <= 0:
+        return EquivalenceDecision(False, "job_id must be positive")
+    if not proof_digest:
+        return EquivalenceDecision(False, "proof digest is required")
+
+    # Use the caller's immutable source proof when supplied; otherwise locate
+    # the most recent previous proven head. Neither path copies an old success.
+    if source_proof_head is None:
+        source_proof_head, problem = find_previous_proven_head(repository, token, current_head)
+        if problem:
+            return EquivalenceDecision(False, f"no source proof: {problem}")
+    elif not _HEX_SHA.fullmatch(source_proof_head):
+        return EquivalenceDecision(False, "source proof head is not an exact 40-hex commit SHA")
+
+    # Verify all equivalence bindings.
+    return verify_equivalence(
+        root,
+        repository=repository,
+        pr_number=pr_number,
+        current_head=current_head,
+        source_proof_head=source_proof_head,
+        base_sha=base_sha,
+        token=token,
+        run_attempt=run_attempt,
+        job_id=job_id,
+        proof_digest=proof_digest,
+    )
+
+
+def _source_proof_bindings(
+    repository: str,
+    token: str,
+    source_head: str,
+) -> tuple[int, int, str, str]:
+    """Derive the authoritative run/attempt, job and proof digest for the source proof.
+
+    The digest is produced by the existing Canonical Proof Outcome Authority
+    (``hunter_validation_reuse._canonical_job_proof``); this module never mints
+    its own proof. Any missing, ambiguous or invalid hosted job evidence fails
+    closed.
+    """
+    if not _HEX_SHA.fullmatch(source_head):
+        return 0, 0, "", "source proof head is not an exact 40-hex commit SHA"
+    try:
+        payload = _fetch(
+            repository, token, f"actions/runs?head_sha={quote(source_head, safe='')}&event=push&per_page=100"
+        )
+        if not isinstance(payload, dict) or not isinstance(payload.get("workflow_runs"), list):
+            return 0, 0, "", "source proof run evidence is malformed"
+        run, problem = trusted_branch_preflight_run(payload["workflow_runs"], source_head)
+        if run is None or problem:
+            return 0, 0, "", f"source proof run is not authoritative ({problem})"
+        attempt = int(run.get("run_attempt", 1))
+        run_id = int(run["id"])
+        digest, blocker = _canonical_job_proof(repository, token, run, source_head, None)
+        if not digest:
+            return 0, 0, "", f"canonical proof outcome digest unavailable ({blocker})"
+        jobs_payload = _fetch(repository, token, f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")
+        if not isinstance(jobs_payload, dict) or not isinstance(jobs_payload.get("jobs"), list):
+            return 0, 0, "", "source proof job evidence is malformed"
+        authoritative_jobs = [
+            job
+            for job in jobs_payload["jobs"]
+            if isinstance(job, dict) and job.get("name") == "Hunter Pre-PR Preflight"
+        ]
+        if len(authoritative_jobs) != 1:
+            return 0, 0, "", "source proof must have exactly one authoritative preflight job"
+        job_id = int(authoritative_jobs[0]["id"])
+        if job_id <= 0 or authoritative_jobs[0].get("run_id") != run_id:
+            return 0, 0, "", "source proof job/run binding is invalid"
+        return attempt, job_id, digest, ""
+    except (KeyError, TypeError, ValueError, OverflowError, Exception) as exc:  # noqa: BLE001 - fail closed
+        return 0, 0, "", f"source proof bindings unavailable ({type(exc).__name__}: {exc})"
+
+
+def verify_for_candidate(
+    root: Path,
+    *,
+    repository: str,
+    pr_number: int,
+    current_head: str,
+    base_sha: str,
+    token: str,
+    source_proof_head: str | None = None,
+) -> EquivalenceDecision:
+    """Verify cross-HEAD equivalence for a metadata-only candidate HEAD.
+
+    This is the enforcement entry point used by the trusted reuse decision. It
+    locates (or is given) the immutable source proof HEAD, derives that proof's
+    authoritative run/attempt/job/digest from the *existing* canonical proof
+    authority, and verifies every equivalence identity against the current
+    HEAD. A successful result is a NEW current-HEAD-bound decision referencing
+    the original proof -- never a copied old-HEAD success.
+    """
+    if not _HEX_SHA.fullmatch(current_head):
+        return EquivalenceDecision(False, "current head is not an exact 40-hex commit SHA")
+    if not _HEX_SHA.fullmatch(base_sha):
+        return EquivalenceDecision(False, "base SHA is not an exact 40-hex commit SHA")
+    if pr_number <= 0:
+        return EquivalenceDecision(False, "PR number must be positive")
+
+    if source_proof_head is None:
+        source_proof_head, problem = find_previous_proven_head(repository, token, current_head)
+        if problem:
+            return EquivalenceDecision(False, f"no source proof: {problem}")
+
+    attempt, job_id, digest, problem = _source_proof_bindings(repository, token, source_proof_head)
+    if problem:
+        return EquivalenceDecision(False, problem)
+
+    return verify_equivalence(
+        root,
+        repository=repository,
+        pr_number=pr_number,
+        current_head=current_head,
+        source_proof_head=source_proof_head,
+        base_sha=base_sha,
+        token=token,
+        run_attempt=attempt,
+        job_id=job_id,
+        proof_digest=digest,
+    )

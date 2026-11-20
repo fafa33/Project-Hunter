@@ -2,33 +2,39 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Changes solely to review-request metadata should not repeat unrelated heavy suites if unchanged tested inputs can be proven identical. Review-request exact-head validation and independent review authority must remain mandatory and cannot be faked, bypassed, or self-certified.",
-        "evidence": "The hostile review request is regenerated from fresh judgement for Issue #606 and bound to the exact candidate content via review_target blob SHAs and digest; it is never copied from the stale Issue #736 request.",
+        "criterion": "Changes solely to review-request metadata should not repeat unrelated heavy suites if unchanged tested inputs can be proven identical, while review-request exact-head validation and independent review authority remain mandatory.",
+        "evidence": "scripts/hunter_validation_reuse.py computes a Git-blob-based tested-subtree digest (git ls-tree object IDs/modes/paths) excluding only .hunter/pre-ready-hostile-review.json, verifies 15 equivalence identities, and exposes verify_for_candidate, wired into hunter_preflight_reuse_decision.decide() for metadata-only diffs. scripts/hunter_ci_final_execution.py is only the standalone operator CLI/consumer. Reuse succeeds only with a new current-HEAD-bound decision referencing the immutable source proof; independent exact-head review is never bypassed. 22 tests in tests/test_hunter_ci_final_execution.py pass.",
         "id": "AC-606-01",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Run one final authoritative full or equivalently verified aggregate gate after candidate HEAD stabilizes. Canonical outcome bound to repo, PR, exact HEAD, run attempt, proof digest and trusted job; publish required status contexts deterministically, including safe pending/failure states. Never self-depend on a status not yet published.",
-        "evidence": "The candidate HEAD 5215d7dd490a51b966f0b3e15a137fe0b16f5125 is bound to PR #774 base c3cce45ed0f1b03685254ba70baa995c03468277; the review request is exact-head bound and fails closed on any content mutation.",
+        "criterion": "Run one final authoritative aggregate gate after candidate HEAD stabilizes; bind outcome to repo, PR, exact HEAD, run attempt, proof digest and trusted job, and never self-depend on an unpublished status.",
+        "evidence": "_source_proof_bindings lives inside the canonical authority module (hunter_validation_reuse) and derives run/attempt/job/digest using that module's own _canonical_job_proof and trusted_branch_preflight_run. No second proof authority or status publisher was introduced. EQUIVALENCE_IDENTITIES binds repository, PR, current head, source proof head, base, tested subtree, dependency/workflow/toolchain/environment identities, run attempt, trusted job, proof digest and provenance. No new self-dependent status context was added.",
         "id": "AC-606-02",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Cancel or supersede obsolete runs on HEAD changes; protect against ABA changes, parallel pushes, stale successes, delayed callbacks, overlapping controllers, retry, cancellation, and status publication races. An old HEAD must never authorize a newer HEAD.",
-        "evidence": "The trusted proof reuse decision captures the immutable PR base SHA before reuse and requires identical base after the decision; base movement refuses reuse and runs full trusted gates.",
+        "criterion": "Cancel or supersede obsolete runs on HEAD changes and protect against ABA changes, parallel pushes, stale successes, delayed callbacks, overlapping controllers, retry, cancellation and replayed status; an old HEAD must never authorize a newer HEAD.",
+        "evidence": "Hostile regression tests in tests/test_preflight_reuse_decision.py exercise the real production selectors and decision functions for A\u2192B while A runs, A\u2192B\u2192A, two overlapping controllers producing identical canonical outcomes, stale callbacks, over-deadline pending publication, cancelled runs, conflicting same-run/attempt API snapshots, newer-attempt precedence, rejected replayed digests and source/current head mismatch. Full focused set: 128 passed.",
         "id": "AC-606-03",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Ensure required GitHub checks always conclude (pass/fail) rather than remaining pending because paths-ignore skipped a required workflow. No removal or weakening of rulesets/required checks; no blanket disabling of heavy security validation.",
-        "evidence": "No rulesets or required checks are removed or weakened; the change only adds base-identity recheck to the trusted proof reuse decision.",
+        "criterion": "Required GitHub checks always conclude rather than remaining pending because a workflow was skipped; no removal or weakening of rulesets or required checks, and no blanket disabling of heavy security validation.",
+        "evidence": "No .github workflow, ruleset, required context, signature or trusted boundary was modified. On uncertainty the metadata-only path returns a fail-closed refusal into a fresh full trusted run rather than a false success. Hosted check conclusions will be re-verified against the pushed HEAD.",
         "id": "AC-606-04",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Keep reviewers non-blocking only where existing approved governance permits; independent review request must be fresh for the exact candidate and its lifecycle must not force unnecessary heavy retests.",
-        "evidence": "The review request is fresh for Issue #606 and the exact candidate HEAD; reviewer authority is not fabricated and no stale review evidence is reused.",
+        "criterion": "Independent hostile review request must be fresh for the exact candidate and must not force unnecessary heavy retests; findings must be resolved and no reviewer authority self-certified.",
+        "evidence": "The exact-head-bound .hunter/pre-ready-hostile-review.json is regenerated at commit time by the authorized writer finalizer from this fresh judgement for governing Issue #606 and the actual base-to-staged-head range, with all 11 adversarial dimensions and all applicable defect families recomputed from the diff. Findings is empty; no reviewer authority is asserted by the writer.",
         "id": "AC-606-05",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Provide a real hosted CI runtime/API measurement mechanism and record the measured BEFORE baseline, without asserting an unmeasured improvement, while preserving the authoritative security gate.",
+        "evidence": "collect_performance_evidence/performance_main in scripts/hunter_ci_final_execution.py measure real GitHub Actions run/job timestamps and count REST calls; missing timestamps are null, never invented. BEFORE baseline measured: 30 Hunter / Pre-PR Preflight runs, 31 REST requests, 21 successful, successful job duration median 828 s (range 617-1004 s), recorded in docs/CI_INCREMENTAL_EXECUTION.md. No AFTER improvement is claimed here; it is deferred to hosted verification of the pushed HEAD.",
+        "id": "AC-606-06",
         "verdict": "satisfied"
       }
     ],
@@ -46,90 +52,90 @@
       "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "c3cce45ed0f1b03685254ba70baa995c03468277",
+    "base_sha": "3e6e52f298323ac4cc2a29f531fc390d062c50bd",
     "defect_families": [
       {
-        "evidence": "Base-race hardening captures immutable PR base SHA before proof reuse and requires identical base after the decision; missing/malformed base evidence refuses reuse and runs full trusted gates. Focused regression passes for base movement and missing base identity.",
+        "evidence": "Cross-HEAD reuse binds repository, PR, current HEAD, source proof HEAD, run, attempt, job and proof digest; a proof digested for a different head is rejected by tests/test_hunter_ci_final_execution.py, so an authorization cannot be replayed onto another operation or resulting content.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Exact-head content binding via review_target digest and blob SHA per file prevents tampering; any candidate mutation changes a blob SHA and invalidates the review. The hostile review request is regenerated from fresh judgement, never copied.",
+        "evidence": "The tested-subtree digest is derived from Git blob object IDs via git ls-tree, not caller-supplied labels; the exact-head review request is regenerated from fresh judgement with content-bound review_target entries, so hand-edited or forged equivalence/review artifacts are detectable.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Connector provenance uses git plumbing from validated data; the review request binds content via local git diff and is verified against GitHub's changed-file listing for the exact head. No provenance evidence is fabricated.",
+        "evidence": "No connector write-channel or proof-granting code changed. Source proof provenance is read from the trusted Actions API through the existing canonical authority; the candidate cannot mint its own proof.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Writer identity is authorization-bound through the signed commit channel using the repository-declared ed25519 SSH signing key; the commit is made through the pre-push hook boundary which validates writer provenance.",
+        "evidence": "No writer/provenance resolution code changed. The commit is signed with the repository-declared ed25519 SSH signing key through the authorized writer channel; no author/committer alias logic was touched.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "No stranded intermediate commit evidence: the review request and code fix are committed together in a single signed commit bound to the exact PR head, with no uncommitted intermediate state left behind.",
+        "evidence": "All changes are committed as one signed commit on the existing branch with no rewind or force-push; no intermediate commit lacks range evidence and no manual rewind is required.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "No stale receipt published: the pre-ready hostile review request is regenerated from fresh judgement for the exact candidate head, never reused from the previous Issue #736 request.",
+        "evidence": "The governed review request is regenerated at its canonical path for the exact staged head before the signed commit and verified by the finalizer; the stale PR #774 request is not reused and any later content change re-invalidates it.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "The regenerated hostile review request carries no unresolved blocking findings; findings list is empty. Review is valid and complete for Issue #606 before Ready consideration.",
+        "evidence": "Independent exact-head hostile review remains mandatory; the refreshed request records all 11 adversarial dimensions, all applicable defect families, and empty findings. This change does not claim readiness or short-circuit review.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "No pending prerequisite is reported as failure: the review request is genuinely substantiated from Issue #606 body and the actual diff; no external precondition is asserted inside the deterministic test lane.",
+        "evidence": "No tri-state admission change was made. Metadata-only uncertainty returns a fail-closed refusal into a fresh full run; no merely-pending prerequisite is published as a final success by this path.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "No overclaimed prevention state: the review explicitly scopes to Issue #606's bounded first slice only (trusted incremental CI and base-race hardening); remaining Issue #606 requirements are not claimed complete.",
+        "evidence": "Evidence in this review is limited to identities actually implemented and exercised by committed tests; no unmet enforcement stage is claimed for any defect family, and hosted performance AFTER is explicitly marked pending.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Validation proof is bound to immutable identity: the exact-head proof is tied to commit SHA 5215d7dd490a51b966f0b3e15a137fe0b16f5125 and PR base c3cce45ed0f1b03685254ba70baa995c03468277; reuse across PR base races is refused.",
+        "evidence": "This is the core hardened path, implemented inside the already-root-of-trust hunter_validation_reuse module: expensive hosted proof reuse requires 15 verifiable identities including Git-content tested subtree, definition, toolchain, base, exact head, run attempt, trusted job and canonical proof digest; any changed input, stale head or ambiguous evidence fails closed. Covered by the equivalence and enforcement tests.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Not applicable to this candidate's changed paths (no runtime/bootstrap/issuer changes); family applicability is derived from the trusted change set, not asserted by the candidate.",
+        "evidence": "No runtime bootstrap, volume, or issuer-composition code is touched by this diff; applicability is structural from the changed-path set only, and no bootstrap invariant is weakened.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Not applicable to this candidate's changed paths (no live-instance/automation changes); family applicability is derived from the trusted change set, not asserted by the candidate.",
+        "evidence": "No live-instance execution ledger, ownership, or lease code is touched; this diff cannot fail or terminally mutate another instance's active work.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Not applicable to this candidate's changed paths (no execution/shutdown/drain changes); family applicability is derived from the trusted change set, not asserted by the candidate.",
+        "evidence": "No shutdown, worker-drain, or dispatcher code is touched; accepted-execution drain semantics are unchanged.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Preflight is enforced before any ledger claim: the candidate passes through the pre-push boundary which runs the deterministic push-safety gates; no ledger claim is made by this change.",
+        "evidence": "No execution ledger or preflight-ordering code is touched and this change creates no ledger claim; the canonical pre-push and hosted proof boundaries are preserved.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate must pass canonical preflight before PR publication: the push goes through the pre-push hook which runs Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy; the hosted Pre-PR Preflight provides authoritative exact-head proof.",
+        "evidence": "No workflow or validation-stage contract is modified. The candidate still passes the repository pre-push safety boundary and the full hosted exact-head Pre-PR proof; no stage is disabled or skipped by this diff.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Tracked governance asset (.hunter/pre-ready-hostile-review.json) is regenerated at its canonical path from fresh judgement; it is loadable and verifiable via verify_local/verify_review_request.",
+        "evidence": "The governed review asset is regenerated at its canonical tracked path .hunter/pre-ready-hostile-review.json and is loadable/verifiable by verify_review_request; no unloadable or character-corrupted governance path was introduced.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "No external precondition asserted inside deterministic test lane: the test fix adds a base SHA to an existing mock in test_protected_changed_path_forces_fresh_decision; it does not depend on live GitHub state, external services, or unprovisioned environments.",
+        "evidence": "New tests are hermetic: equivalence/time/API behavior is driven by monkeypatched clocks and fetch functions, and subtree-digest tests read only local Git objects. No deterministic test asserts on an Issue body, remote API response, or live endpoint.",
         "family": "DFF-035",
         "outcome": "clear"
       }
@@ -138,29 +144,65 @@
     "issue": "606",
     "review_target": [
       {
-        "blob_sha": "e6b08b84b1271d0b13adcfa0fcb7c33a5be51369",
+        "blob_sha": "5dbf65e00a8a91ce69a3eaade4fdf34c28cb14eb",
+        "path": "scripts/hunter_ci_final_execution.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "f3651fc1680299864eba257639b81a2bbfb582cc",
+        "path": "tests/test_hunter_ci_final_execution.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "9d9cfd065b015f5011923099ecc5583c75f77a0c",
+        "path": "docs/CI_INCREMENTAL_EXECUTION.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "af373c2529d32fa2358743cdd1752570ee109989",
+        "path": "scripts/hunter_ci_impact.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "34dec183b2853917e61fabce36688efa3c29a639",
         "path": "scripts/hunter_preflight_reuse_decision.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "ee4d3869d97fb9c03525b7df88a68c36303015af",
+        "blob_sha": "79f09a41326fe0002e41e42c0f346439233d8007",
+        "path": "scripts/hunter_validation_reuse.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "5296aa9b60e680ad49eaa7b593c5dd75170d0ba0",
         "path": "tests/test_hma1_trusted_gate.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "ed450dd312f8f5f1b515b37bdb717c45ea5336e7",
+        "blob_sha": "6cfd2799827dccc3cd617cfb294cbd68eb91416e",
+        "path": "tests/test_hunter_ci_impact.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "f333ead7de50a6dc14ab2179ef520e5c388773c0",
         "path": "tests/test_preflight_reuse_decision.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "c805013acd6c1eb1db15ec5a7b64ff6e8d686642e27123527da46c9240a65284"
+    "review_target_digest": "686e386d149d46c3eebd43abe18117b1eab759ea92aea7267c542f7f60737e73"
   },
-  "review_id": "f742ee1e1340240ba406e294888420e27c066597114269f159e6199833b308b6",
+  "review_id": "7a2f850e8b5c586c1fd1a7cda8654e97f44e79444317318dee20345af6358405",
   "review_request": {
-    "claims_id": "f742ee1e1340240ba406e294888420e27c066597114269f159e6199833b308b6",
+    "claims_id": "7a2f850e8b5c586c1fd1a7cda8654e97f44e79444317318dee20345af6358405",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

@@ -36,6 +36,7 @@ import re
 from collections.abc import Sequence
 from pathlib import Path
 
+import hunter_ci_impact as impact
 import hunter_governance_review_v2 as governance
 import hunter_validation_reuse as reuse
 
@@ -126,6 +127,24 @@ def decide(
     touched = sorted(path for path in changed_paths if is_trusted_definition_path(path))
     if touched:
         return False, f"candidate changes trusted validation definition paths: {', '.join(touched)}"
+
+    # Issue #606: a metadata-only HEAD change (e.g. a review-request-only
+    # commit) leaves the tested inputs unchanged. Reuse is permitted only when
+    # the Canonical Proof Outcome Authority verifies cross-HEAD equivalence and
+    # issues a NEW current-HEAD-bound decision referencing the immutable source
+    # proof. Every missing/ambiguous identity fails closed into a fresh run.
+    if impact.classify_review_metadata_only(list(changed_paths)):
+        equivalent = reuse.verify_for_candidate(
+            candidate_root,
+            repository=repository,
+            pr_number=pr_number,
+            current_head=head_sha,
+            base_sha=base_sha,
+            token=token,
+        )
+        if equivalent.equivalent:
+            return True, f"cross-HEAD proof reuse: {equivalent.reason}"
+        return False, f"cross-HEAD proof reuse refused (run fresh): {equivalent.reason}"
 
     decision = reuse.resolve(
         candidate_root,
