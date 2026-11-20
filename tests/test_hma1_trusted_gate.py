@@ -330,7 +330,7 @@ def test_protected_changed_path_forces_fresh_decision(monkeypatch, tmp_path):
     monkeypatch.setattr(
         governance,
         "request_json",
-        lambda *_args, **_kwargs: {"head": {"sha": sha}},
+        lambda *_args, **_kwargs: {"head": {"sha": sha}, "base": {"sha": "b" * 40}},
     )
     monkeypatch.setattr(
         governance,
