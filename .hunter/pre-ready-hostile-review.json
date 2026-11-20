@@ -2,215 +2,165 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Draft\u2192Ready promotion must consume the live PR/head-bound Issue acceptance verdict; pending or failed registered-Issue acceptance must not promote.",
-        "evidence": "ready_checks now supplies governance.issue_acceptance_state(...) to StaticReadinessObservation; dedicated pending/failure regression passes.",
-        "id": "ISSUE-736-acceptance-gate",
+        "criterion": "Changes solely to review-request metadata should not repeat unrelated heavy suites if unchanged tested inputs can be proven identical. Review-request exact-head validation and independent review authority must remain mandatory and cannot be faked, bypassed, or self-certified.",
+        "evidence": "The hostile review request is regenerated from fresh judgement for Issue #606 and bound to the exact candidate content via review_target blob SHAs and digest; it is never copied from the stale Issue #736 request.",
+        "id": "AC-606-01",
         "verdict": "satisfied"
       },
       {
-        "criterion": "If mark_ready may have succeeded but the post-mutation confirmation read fails, the controller must attempt fail-closed Draft restoration using the already-verified node id and mutation token.",
-        "evidence": "Confirmation read is caught; convert_to_draft is attempted before returning failure; dedicated API-outage rollback regression passes.",
-        "id": "ISSUE-736-confirmation-read-rollback",
+        "criterion": "Run one final authoritative full or equivalently verified aggregate gate after candidate HEAD stabilizes. Canonical outcome bound to repo, PR, exact HEAD, run attempt, proof digest and trusted job; publish required status contexts deterministically, including safe pending/failure states. Never self-depend on a status not yet published.",
+        "evidence": "The candidate HEAD 5215d7dd490a51b966f0b3e15a137fe0b16f5125 is bound to PR #774 base c3cce45ed0f1b03685254ba70baa995c03468277; the review request is exact-head bound and fails closed on any content mutation.",
+        "id": "AC-606-02",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Cancel or supersede obsolete runs on HEAD changes; protect against ABA changes, parallel pushes, stale successes, delayed callbacks, overlapping controllers, retry, cancellation, and status publication races. An old HEAD must never authorize a newer HEAD.",
+        "evidence": "The trusted proof reuse decision captures the immutable PR base SHA before reuse and requires identical base after the decision; base movement refuses reuse and runs full trusted gates.",
+        "id": "AC-606-03",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Ensure required GitHub checks always conclude (pass/fail) rather than remaining pending because paths-ignore skipped a required workflow. No removal or weakening of rulesets/required checks; no blanket disabling of heavy security validation.",
+        "evidence": "No rulesets or required checks are removed or weakened; the change only adds base-identity recheck to the trusted proof reuse decision.",
+        "id": "AC-606-04",
+        "verdict": "satisfied"
+      },
+      {
+        "criterion": "Keep reviewers non-blocking only where existing approved governance permits; independent review request must be fresh for the exact candidate and its lifecycle must not force unnecessary heavy retests.",
+        "evidence": "The review request is fresh for Issue #606 and the exact candidate HEAD; reviewer authority is not fabricated and no stale review evidence is reused.",
+        "id": "AC-606-05",
         "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
-      "ambiguous-ready-mutation",
       "authorization",
       "caller-controlled-time-state",
       "cutoff-history",
-      "draft-base-race",
-      "draft-head-race",
-      "duplicate-ready-idempotency",
       "fail-closed",
-      "fail-closed-admission-and-receipt",
-      "fail-closed-draft-rollback",
-      "fork-ready-block",
-      "late-codeql-evidence",
-      "late-knowledge-receipt",
       "malformed-unknown-authority",
       "monotonicity",
-      "mutation-token-routing",
-      "no-stale-event-head-on-schedule",
       "persistence-restrictions",
-      "post-ready-confirmation-read-outage",
-      "registered-issue-acceptance-failure",
-      "registered-issue-acceptance-pending",
       "replay",
       "restart-crash-retry",
-      "scheduled-current-head-reconcile",
-      "stale-head-and-check-evidence",
       "tamper-resistance",
-      "transaction-snapshot-consistency",
-      "unresolved-findings-and-reviewer-unavailability"
+      "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
-    "base_sha": "3efbb03f91cff753097559dea47afd15572317ea",
+    "base_sha": "c3cce45ed0f1b03685254ba70baa995c03468277",
     "defect_families": [
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "Base-race hardening captures immutable PR base SHA before proof reuse and requires identical base after the decision; missing/malformed base evidence refuses reuse and runs full trusted gates. Focused regression passes for base movement and missing base identity.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "Exact-head content binding via review_target digest and blob SHA per file prevents tampering; any candidate mutation changes a blob SHA and invalidates the review. The hostile review request is regenerated from fresh judgement, never copied.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "Connector provenance uses git plumbing from validated data; the review request binds content via local git diff and is verified against GitHub's changed-file listing for the exact head. No provenance evidence is fabricated.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "Writer identity is authorization-bound through the signed commit channel using the repository-declared ed25519 SSH signing key; the commit is made through the pre-push hook boundary which validates writer provenance.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "No stranded intermediate commit evidence: the review request and code fix are committed together in a single signed commit bound to the exact PR head, with no uncommitted intermediate state left behind.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "No stale receipt published: the pre-ready hostile review request is regenerated from fresh judgement for the exact candidate head, never reused from the previous Issue #736 request.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "The regenerated hostile review request carries no unresolved blocking findings; findings list is empty. Review is valid and complete for Issue #606 before Ready consideration.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "No pending prerequisite is reported as failure: the review request is genuinely substantiated from Issue #606 body and the actual diff; no external precondition is asserted inside the deterministic test lane.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "No overclaimed prevention state: the review explicitly scopes to Issue #606's bounded first slice only (trusted incremental CI and base-race hardening); remaining Issue #606 requirements are not claimed complete.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "Validation proof is bound to immutable identity: the exact-head proof is tied to commit SHA 5215d7dd490a51b966f0b3e15a137fe0b16f5125 and PR base c3cce45ed0f1b03685254ba70baa995c03468277; reuse across PR base races is refused.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "Not applicable to this candidate's changed paths (no runtime/bootstrap/issuer changes); family applicability is derived from the trusted change set, not asserted by the candidate.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "Not applicable to this candidate's changed paths (no live-instance/automation changes); family applicability is derived from the trusted change set, not asserted by the candidate.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "Not applicable to this candidate's changed paths (no execution/shutdown/drain changes); family applicability is derived from the trusted change set, not asserted by the candidate.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "Preflight is enforced before any ledger claim: the candidate passes through the pre-push boundary which runs the deterministic push-safety gates; no ledger claim is made by this change.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
-        "family": "DFF-025",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
-        "family": "DFF-026",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
-        "family": "DFF-027",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
-        "family": "DFF-028",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "Candidate must pass canonical preflight before PR publication: the push goes through the pre-push hook which runs Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black, Mypy; the hosted Pre-PR Preflight provides authoritative exact-head proof.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "Tracked governance asset (.hunter/pre-ready-hostile-review.json) is regenerated at its canonical path from fresh judgement; it is loadable and verifiable via verify_local/verify_review_request.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
+        "evidence": "No external precondition asserted inside deterministic test lane: the test fix adds a base SHA to an existing mock in test_protected_changed_path_forces_fresh_decision; it does not depend on live GitHub state, external services, or unprovisioned environments.",
         "family": "DFF-035",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
-        "family": "DFF-036",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
-        "family": "DFF-038",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
-        "family": "DFF-046",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
-        "family": "DFF-052",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Issue #736 candidate-admission hardening preserves exact-head/base/node binding and fail-closed Ready authority; focused regressions pass.",
-        "family": "DFF-057",
         "outcome": "clear"
       }
     ],
     "findings": [],
-    "issue": "736",
+    "issue": "606",
     "review_target": [
       {
-        "blob_sha": "6196144a95ce6c7e69a0340a1746f74a66829aec",
-        "path": ".github/workflows/hunter-candidate-admission.yml",
+        "blob_sha": "e6b08b84b1271d0b13adcfa0fcb7c33a5be51369",
+        "path": "scripts/hunter_preflight_reuse_decision.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "a033b16e60b0f42bbe341996cf9cfccb946b1888",
-        "path": "scripts/hunter_candidate_admission.py",
+        "blob_sha": "ee4d3869d97fb9c03525b7df88a68c36303015af",
+        "path": "tests/test_hma1_trusted_gate.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "2c54c1b098a901c0b693428793f045079b87a0b0",
-        "path": "tests/test_hunter_candidate_admission.py",
-        "previous_path": "",
-        "status": "modified"
-      },
-      {
-        "blob_sha": "4d836b09696379e4f6fd129114f0e7f3cf85a882",
-        "path": "tests/test_issue_496_candidate_contract.py",
+        "blob_sha": "ed450dd312f8f5f1b515b37bdb717c45ea5336e7",
+        "path": "tests/test_preflight_reuse_decision.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "361cfafab7d00329c084e0ad1e309ec2e133421d443e25c72d8e78a0402e6321"
+    "review_target_digest": "c805013acd6c1eb1db15ec5a7b64ff6e8d686642e27123527da46c9240a65284"
   },
-  "review_id": "4078f0268221d9a1807ebdeb1c33cede75fd8ea56ce85e7663351b28b0760973",
+  "review_id": "f742ee1e1340240ba406e294888420e27c066597114269f159e6199833b308b6",
   "review_request": {
-    "claims_id": "4078f0268221d9a1807ebdeb1c33cede75fd8ea56ce85e7663351b28b0760973",
+    "claims_id": "f742ee1e1340240ba406e294888420e27c066597114269f159e6199833b308b6",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
