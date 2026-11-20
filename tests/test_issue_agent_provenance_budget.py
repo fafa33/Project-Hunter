@@ -288,29 +288,23 @@ def test_execute_consumes_read_token_before_model_boundary(monkeypatch: pytest.M
     seen: list[str] = []
     monkeypatch.setenv(lifecycle.PROVENANCE_TOKEN_ENV, TOKEN)
     monkeypatch.setattr(lifecycle, "_run_context", lambda: (123, 1, "a" * 40))
-    monkeypatch.setattr(
-        lifecycle,
-        "_ledger_access",
-        lambda configuration: (seen.append("authenticated"), lifecycle._provenance_github(configuration))[1],
-    )
+
+    def authenticated_access(configuration: Any) -> Any:
+        seen.append("authenticated")
+        return lifecycle._provenance_github(configuration)
+
+    def isolated_executor(**kwargs: Any) -> Any:
+        seen.append("isolated")
+        assert lifecycle.PROVENANCE_TOKEN_ENV not in lifecycle.os.environ
+        return SimpleNamespace(
+            sealed_result=None, advisory_code=None, stderr_category=None, probe_category=None, canary_refusal=None
+        )
+
+    monkeypatch.setattr(lifecycle, "_ledger_access", authenticated_access)
     monkeypatch.setattr(lifecycle, "_executor_model_secrets", lambda *_a: {})
     monkeypatch.setattr(lifecycle, "_x25519", lambda *_a: object())
     monkeypatch.setattr(lifecycle, "_output", lambda **_k: None)
-    monkeypatch.setattr(
-        lifecycle.roles,
-        "run_executor",
-        lambda **kwargs: (
-            seen.append("isolated"),
-            (
-                pytest.fail("provenance token leaked into model boundary")
-                if lifecycle.PROVENANCE_TOKEN_ENV in lifecycle.os.environ
-                else None
-            ),
-            SimpleNamespace(
-                sealed_result=None, advisory_code=None, stderr_category=None, probe_category=None, canary_refusal=None
-            ),
-        )[-1],
-    )
+    monkeypatch.setattr(lifecycle.roles, "run_executor", isolated_executor)
     handoff = tmp_path / "handoff.sealed"
     handoff.write_bytes(b"fixture")
     args = SimpleNamespace(
