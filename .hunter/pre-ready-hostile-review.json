@@ -21,7 +21,7 @@
       },
       {
         "criterion": "Required GitHub checks always conclude rather than remaining pending because a workflow was skipped; no removal or weakening of rulesets or required checks, and no blanket disabling of heavy security validation.",
-        "evidence": "No .github workflow, ruleset, required context, signature or trusted boundary was modified. On uncertainty the metadata-only path returns a fail-closed refusal into a fresh full trusted run rather than a false success. Hosted check conclusions will be re-verified against the pushed HEAD.",
+        "evidence": "No .github workflow, ruleset, required context, signature or trusted boundary was modified. On uncertainty the metadata-only path returns a fail-closed refusal into a fresh full trusted run rather than a false success. The candidate's hosted rerun concluded successfully for every applicable required and security lane (including SonarCloud Quality Gate Passed with 0 new issues and 0 security hotspots); Main Validation is skipped by its existing path filter and that skip does not suppress any required context.",
         "id": "AC-606-04",
         "verdict": "satisfied"
       },
@@ -33,7 +33,7 @@
       },
       {
         "criterion": "Provide a real hosted CI runtime/API measurement mechanism and record the measured BEFORE baseline, without asserting an unmeasured improvement, while preserving the authoritative security gate.",
-        "evidence": "collect_performance_evidence/performance_main in scripts/hunter_ci_final_execution.py measure real GitHub Actions run/job timestamps and count REST calls; missing timestamps are null, never invented. The measurement lane is read-only: it emits JSON to stdout and exposes no --output flag, so caller-supplied CLI arguments cannot reach a filesystem write target. BEFORE baseline measured: 30 Hunter / Pre-PR Preflight runs, 31 REST requests, 21 successful, successful job duration median 828 s (range 617-1004 s), recorded in docs/CI_INCREMENTAL_EXECUTION.md. No AFTER improvement is claimed here; it is deferred to hosted verification of the pushed HEAD.",
+        "evidence": "collect_performance_evidence/performance_main in scripts/hunter_ci_final_execution.py measure real GitHub Actions run/job timestamps and count REST calls; missing timestamps are null, never invented. The measurement lane is read-only: it emits JSON to stdout and exposes no --output flag, so caller-supplied CLI arguments cannot reach a filesystem write target. BEFORE: 30 runs, 31 REST requests, 21 successful, successful job median 828 s (617-1004 s). AFTER: 30 runs, 31 REST requests, 23 successful, successful job median 803 s (617-1004 s), recorded in docs/CI_INCREMENTAL_EXECUTION.md with the candidate's own successful run 44803026391. The samples cover partially different head sets and the shift is within run-to-run variance; no causal improvement or target attainment is claimed.",
         "id": "AC-606-06",
         "verdict": "satisfied"
       }
@@ -95,7 +95,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Evidence in this review is limited to identities actually implemented and exercised by committed tests; no unmet enforcement stage is claimed for any defect family, and hosted performance AFTER is explicitly marked pending.",
+        "evidence": "Evidence in this review is limited to identities actually implemented and exercised by committed tests; no unmet enforcement stage is claimed for any defect family, and the hosted BEFORE/AFTER measurements are reported as observed samples with no causal improvement claimed.",
         "family": "DFF-015",
         "outcome": "clear"
       },
@@ -135,7 +135,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "New tests are hermetic: equivalence/time/API behavior is driven by monkeypatched clocks and fetch functions, and subtree-digest tests read only a temporary local Git repository. No deterministic test asserts on an Issue body, remote API response, or live endpoint, and shared helpers remove duplicated fixtures.",
+        "evidence": "New tests are hermetic: equivalence/time/API behavior is driven by monkeypatched clocks and fetch functions, and subtree-digest tests read only a temporary local Git repository. No deterministic test asserts on an Issue body, remote API response, or live endpoint; shared helpers remove duplicated fixtures. The hosted performance figures are recorded as external evidence, not asserted by tests.",
         "family": "DFF-035",
         "outcome": "clear"
       }
@@ -156,7 +156,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "c4730d55f1e158aba572009d4a72af4dd013ee73",
+        "blob_sha": "23688962c6e230c94d49ad3e3b535016c1c15803",
         "path": "docs/CI_INCREMENTAL_EXECUTION.md",
         "previous_path": "",
         "status": "modified"
@@ -198,11 +198,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "aa67ba4bc11a7d59f479111d999e047df6c7171b45d39a5661907bc68decd85c"
+    "review_target_digest": "5fa12c0a143d7ae010237b8a5a923edc470d5bac228ef7f8b6044d2c287c6883"
   },
-  "review_id": "326568cd0181bf7cb4810abecabca735f0aeef0d96681810a77dbe63c8f34274",
+  "review_id": "e83fa44206eaec219dbe4c7f611d45a11524bfb9f3e439c43737b393274adfe7",
   "review_request": {
-    "claims_id": "326568cd0181bf7cb4810abecabca735f0aeef0d96681810a77dbe63c8f34274",
+    "claims_id": "e83fa44206eaec219dbe4c7f611d45a11524bfb9f3e439c43737b393274adfe7",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

@@ -35,15 +35,19 @@
 
 ### Measurement method
 
-`python3 scripts/hunter_ci_final_execution.py measure --repository fafa33/Project-Hunter --token ... --limit 30` reads real GitHub Actions run/job timestamps from the workflow-specific Actions API. Durations come only from GitHub timestamps; missing timestamps are reported as `null` rather than invented. `api_requests` counts the exact REST calls made. The shared transport does not expose rate-limit headers, so that field is reported as unavailable rather than guessed. The measurement lane is read-only: it emits JSON to stdout (redirect with `> path` to persist an artifact) and has no `--output` flag, so no caller-supplied argument can select a filesystem write target. Evidence artifacts: `/private/var/folders/4b/tvf7qwyj4fx67pn_rkjn_9wh0000gn/T/opencode/issue606-perf-before.json` (BEFORE) and `issue606-perf-after.json` (AFTER, once measured).
+`python3 scripts/hunter_ci_final_execution.py measure --repository fafa33/Project-Hunter --token ... --limit 30` reads real GitHub Actions run/job timestamps from the workflow-specific Actions API. Durations come only from GitHub timestamps; missing timestamps are reported as `null` rather than invented. `api_requests` counts the exact REST calls made. The shared transport does not expose rate-limit headers, so that field is reported as unavailable rather than guessed. The measurement lane is read-only: it emits JSON to stdout (redirect with `> path` to persist an artifact) and has no `--output` flag, so no caller-supplied argument can select a filesystem write target. Evidence artifacts: `/private/var/folders/4b/tvf7qwyj4fx67pn_rkjn_9wh0000gn/T/opencode/issue606-perf-before.json` (BEFORE) and `/private/var/folders/4b/tvf7qwyj4fx67pn_rkjn_9wh0000gn/T/opencode/issue606-perf-after.json` (AFTER).
 
 ### BEFORE — repeated full hosted proof (no equivalence reuse)
 
 30 `Hunter / Pre-PR Preflight` runs measured; 31 REST requests (1 runs listing + 30 job listings); 21 successful. Successful-run job duration: min 617 s, median 828 s, max 1004 s (workflow median 831 s). Recent examples: run 44772017274 @ `6449005c` job 980 s; 44736780949 job 759 s; 44733326827 job 828 s; 44729622493 job 635 s; 44644696452 job 905 s; 44636764725 job 1004 s.
 
-### AFTER
+### AFTER — hosted rerun of the pushed candidate
 
-Pending hosted rerun of the pushed HEAD and the controlled metadata-only scenario. No improvement or target claim is made until that evidence exists.
+The pushed candidate HEAD reran all required and security workflows successfully: `Hunter Pre-PR Preflight`, `Trusted Candidate Preflight Validation`, `Quality Gates`, `CodeQL`, `dependency-review`, `Hunter Merge Readiness Controller`, `Hunter Governance Review`, `Publish Exact-Head Trusted Upgrade Proof`, `Independently Verify Candidate Module Digests`, and `SonarCloud Code Analysis` (Quality Gate Passed, 0 new issues, 0 security hotspots). `Main Validation` remains skipped by its existing path filter; that skip does not suppress any required context.
+
+`issue606-perf-after.json` is the read-only 30-run measurement taken from the same GitHub Actions timeline: 30 `Hunter / Pre-PR Preflight` runs, 31 REST requests (1 runs listing + 30 job listings), 23 successful. Successful-run job duration: min 617 s, median 803 s, max 1004 s (all-run workflow median 811 s). It includes the candidate's own successful run 44803026391 (job 704 s / workflow 707 s).
+
+These are point-in-time samples, not a controlled A/B experiment: the BEFORE and AFTER windows cover partially different head sets, and job durations vary 617–1004 s run to run. The median shift (828 s → 803 s) is within that variance and is reported only as observed data; no causal improvement, target attainment, or security-gate relaxation is claimed. The behavior that avoids redundant heavy work is enforced by the cross-HEAD equivalence authority and covered by focused regression tests — it is not inferred from these timings.
 
 ## Required checks and non-weakening
 
