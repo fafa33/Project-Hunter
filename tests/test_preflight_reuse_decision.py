@@ -234,7 +234,9 @@ def test_changed_pr_head_refuses_reuse(monkeypatch: pytest.MonkeyPatch, tmp_path
 
 def test_head_changes_during_adjudication_refuses_reuse(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = iter((HEAD, "b" * 40))
-    monkeypatch.setattr(decision.governance, "request_json", lambda *_a, **_k: {"head": {"sha": next(seen)}, "base": {"sha": BASE}})
+    monkeypatch.setattr(
+        decision.governance, "request_json", lambda *_a, **_k: {"head": {"sha": next(seen)}, "base": {"sha": BASE}}
+    )
     monkeypatch.setattr(decision.governance, "read_pr_changed_paths", _no_changes)
     _resolve_spy(monkeypatch, reuse.ReuseDecision(True, "hosted proof"))
     allowed, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
