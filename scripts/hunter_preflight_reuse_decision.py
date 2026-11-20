@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -112,6 +113,10 @@ def decide(
             or current["head"].get("sha") != head_sha
         ):
             return False, "PR current head differs from event exact head"
+        base = current.get("base")
+        base_sha = base.get("sha") if isinstance(base, dict) else None
+        if not isinstance(base_sha, str) or not re.fullmatch(r"[0-9a-f]{40}", base_sha):
+            return False, "PR base identity unavailable or malformed"
         ok, changed_paths, error = governance.read_pr_changed_paths(repository, token, pr_number)
     except Exception as exc:  # noqa: BLE001 - any failure must run the full trusted gates
         return False, f"changed-file evidence is unavailable ({type(exc).__name__}: {exc})"
@@ -139,6 +144,9 @@ def decide(
                 or latest["head"].get("sha") != head_sha
             ):
                 return False, "PR head changed during proof adjudication"
+            latest_base = latest.get("base")
+            if not isinstance(latest_base, dict) or latest_base.get("sha") != base_sha:
+                return False, "PR base changed during proof adjudication"
         except Exception as exc:  # noqa: BLE001 - fail closed
             return False, f"PR head recheck unavailable ({type(exc).__name__}: {exc})"
     return decision.reusable, decision.reason

@@ -29,10 +29,13 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture(autouse=True)
 def _current_pr_head(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(decision.governance, "request_json", lambda *_a, **_k: {"head": {"sha": HEAD}})
+    monkeypatch.setattr(
+        decision.governance, "request_json", lambda *_a, **_k: {"head": {"sha": HEAD}, "base": {"sha": BASE}}
+    )
 
 
 HEAD = "a" * 40
+BASE = "b" * 40
 PR = 580
 REPO = "fafa33/Project-Hunter"
 
@@ -231,7 +234,7 @@ def test_changed_pr_head_refuses_reuse(monkeypatch: pytest.MonkeyPatch, tmp_path
 
 def test_head_changes_during_adjudication_refuses_reuse(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = iter((HEAD, "b" * 40))
-    monkeypatch.setattr(decision.governance, "request_json", lambda *_a, **_k: {"head": {"sha": next(seen)}})
+    monkeypatch.setattr(decision.governance, "request_json", lambda *_a, **_k: {"head": {"sha": next(seen)}, "base": {"sha": BASE}})
     monkeypatch.setattr(decision.governance, "read_pr_changed_paths", _no_changes)
     _resolve_spy(monkeypatch, reuse.ReuseDecision(True, "hosted proof"))
     allowed, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
@@ -286,3 +289,26 @@ def test_hgcc1_policy_changes_force_trusted_full_gates(
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
     assert reusable is False
     assert path in reason
+
+
+def test_base_change_during_proof_adjudication_refuses_reuse(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    observations = iter(
+        (
+            {"head": {"sha": HEAD}, "base": {"sha": BASE}},
+            {"head": {"sha": HEAD}, "base": {"sha": "c" * 40}},
+        )
+    )
+    monkeypatch.setattr(decision.governance, "request_json", lambda *_a, **_k: next(observations))
+    monkeypatch.setattr(decision.governance, "read_pr_changed_paths", _no_changes)
+    _resolve_spy(monkeypatch, reuse.ReuseDecision(True, "trusted exact-head proof"))
+    reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
+    assert not reusable
+    assert "base changed" in reason
+
+
+def test_missing_base_identity_refuses_reuse_before_proof(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(decision.governance, "request_json", lambda *_a, **_k: {"head": {"sha": HEAD}})
+    _failing_resolve_spy(monkeypatch)
+    reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
+    assert not reusable
+    assert "base identity" in reason
