@@ -41,7 +41,7 @@ from hunter_validation_reuse import (
     _fetch as _fetch,
 )
 from hunter_validation_reuse import (
-    decide as decide,
+    verify_for_candidate as verify_for_candidate,
 )
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -198,7 +198,6 @@ def performance_main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--workflow-path", default=PRE_PR_WORKFLOW_PATH)
     parser.add_argument("--head-sha", action="append", default=[])
     parser.add_argument("--limit", type=int, default=100)
-    parser.add_argument("--output", default="")
     args = parser.parse_args(argv)
     token = args.token or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
     report = collect_performance_evidence(
@@ -208,10 +207,10 @@ def performance_main(argv: Sequence[str] | None = None) -> int:
         head_shas=frozenset(args.head_sha) if args.head_sha else None,
         limit=args.limit,
     )
-    rendered = json.dumps(report, indent=2, sort_keys=True)
-    if args.output:
-        Path(args.output).write_text(rendered + "\n", encoding="utf-8")
-    print(rendered)
+    # The measurement lane is read-only: JSON goes to stdout and the caller
+    # decides where (if anywhere) to redirect it. No CLI argument can select a
+    # filesystem write target, so no caller input can reach a path sink.
+    print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
 
@@ -231,9 +230,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--source-proof-head", default="")
     parser.add_argument("--token", default="")
-    parser.add_argument("--run-attempt", type=int, default=1)
-    parser.add_argument("--job-id", type=int, default=1)
-    parser.add_argument("--proof-digest", required=True)
     args = parser.parse_args(argv)
 
     if not _HEX_SHA.fullmatch(args.current_head):
@@ -248,17 +244,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.pr <= 0:
         print("[Hunter CI Final Execution] FAIL: PR number must be positive", flush=True)
         return 2
-    if args.run_attempt <= 0:
-        print("[Hunter CI Final Execution] FAIL: run-attempt must be positive", flush=True)
-        return 2
-    if args.job_id <= 0:
-        print("[Hunter CI Final Execution] FAIL: job-id must be positive", flush=True)
-        return 2
-    if not args.proof_digest:
-        print("[Hunter CI Final Execution] FAIL: proof-digest is required", flush=True)
-        return 2
 
-    decision = decide(
+    # The operator path uses the same authenticated enforcement entry point as
+    # the trusted lane. Caller-supplied run/attempt/job/digest labels are never
+    # accepted as proof: all of them are derived from immutable hosted evidence.
+    decision = verify_for_candidate(
         ROOT,
         repository=args.repository,
         pr_number=args.pr,
@@ -266,9 +256,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         base_sha=args.base_sha,
         source_proof_head=args.source_proof_head or None,
         token=args.token,
-        run_attempt=args.run_attempt,
-        job_id=args.job_id,
-        proof_digest=args.proof_digest,
     )
     _emit(decision)
     return 0 if decision.equivalent else 1

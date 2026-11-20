@@ -96,6 +96,26 @@ def emit(reusable: bool, reason: str) -> None:
         handle.write(f"reason={reason}\n")
 
 
+def _pr_identity_still_matches(
+    repository: str, token: str, pr_number: int, head_sha: str, base_sha: str
+) -> tuple[bool, str]:
+    """Recheck the live PR after a reuse decision, before the gate can be skipped."""
+    try:
+        latest = governance.request_json(repository, token, "GET", f"pulls/{pr_number}")
+        if (
+            not isinstance(latest, dict)
+            or not isinstance(latest.get("head"), dict)
+            or latest["head"].get("sha") != head_sha
+        ):
+            return False, "PR head changed during proof adjudication"
+        latest_base = latest.get("base")
+        if not isinstance(latest_base, dict) or latest_base.get("sha") != base_sha:
+            return False, "PR base changed during proof adjudication"
+    except Exception as exc:  # noqa: BLE001 - fail closed
+        return False, f"PR head recheck unavailable ({type(exc).__name__}: {exc})"
+    return True, ""
+
+
 def decide(
     candidate_root: Path,
     *,
@@ -133,6 +153,7 @@ def decide(
     # the Canonical Proof Outcome Authority verifies cross-HEAD equivalence and
     # issues a NEW current-HEAD-bound decision referencing the immutable source
     # proof. Every missing/ambiguous identity fails closed into a fresh run.
+    equivalence_refusal = ""
     if impact.classify_review_metadata_only(list(changed_paths)):
         equivalent = reuse.verify_for_candidate(
             candidate_root,
@@ -143,8 +164,16 @@ def decide(
             token=token,
         )
         if equivalent.equivalent:
+            # A successful equivalence skips the trusted gate chain, so it must
+            # pass exactly the same live HEAD/base recheck as ordinary reuse.
+            still_matches, reason = _pr_identity_still_matches(repository, token, pr_number, head_sha, base_sha)
+            if not still_matches:
+                return False, reason
             return True, f"cross-HEAD proof reuse: {equivalent.reason}"
-        return False, f"cross-HEAD proof reuse refused (run fresh): {equivalent.reason}"
+        # Cross-HEAD equivalence is an additional opportunity, not a regression:
+        # a metadata-only HEAD may already have its own valid exact-head proof.
+        # Fall through to the existing exact-head resolver before running fresh.
+        equivalence_refusal = equivalent.reason
 
     decision = reuse.resolve(
         candidate_root,
@@ -155,20 +184,13 @@ def decide(
         fetch=fetch,
     )
     if decision.reusable:
-        try:
-            latest = governance.request_json(repository, token, "GET", f"pulls/{pr_number}")
-            if (
-                not isinstance(latest, dict)
-                or not isinstance(latest.get("head"), dict)
-                or latest["head"].get("sha") != head_sha
-            ):
-                return False, "PR head changed during proof adjudication"
-            latest_base = latest.get("base")
-            if not isinstance(latest_base, dict) or latest_base.get("sha") != base_sha:
-                return False, "PR base changed during proof adjudication"
-        except Exception as exc:  # noqa: BLE001 - fail closed
-            return False, f"PR head recheck unavailable ({type(exc).__name__}: {exc})"
-    return decision.reusable, decision.reason
+        still_matches, reason = _pr_identity_still_matches(repository, token, pr_number, head_sha, base_sha)
+        if not still_matches:
+            return False, reason
+        return True, decision.reason
+    if equivalence_refusal:
+        return False, f"cross-HEAD proof reuse refused (run fresh): {equivalence_refusal}"
+    return False, decision.reason
 
 
 def main(argv: Sequence[str] | None = None) -> int:

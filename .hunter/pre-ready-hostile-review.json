@@ -3,19 +3,19 @@
     "acceptance_criteria": [
       {
         "criterion": "Changes solely to review-request metadata should not repeat unrelated heavy suites if unchanged tested inputs can be proven identical, while review-request exact-head validation and independent review authority remain mandatory.",
-        "evidence": "scripts/hunter_validation_reuse.py computes a Git-blob-based tested-subtree digest (git ls-tree object IDs/modes/paths) excluding only .hunter/pre-ready-hostile-review.json, verifies 15 equivalence identities, and exposes verify_for_candidate, wired into hunter_preflight_reuse_decision.decide() for metadata-only diffs. scripts/hunter_ci_final_execution.py is only the standalone operator CLI/consumer. Reuse succeeds only with a new current-HEAD-bound decision referencing the immutable source proof; independent exact-head review is never bypassed. 22 tests in tests/test_hunter_ci_final_execution.py pass.",
+        "evidence": "scripts/hunter_validation_reuse.py computes a Git-blob-based tested-subtree digest (git ls-tree object IDs/modes/paths) excluding only .hunter/pre-ready-hostile-review.json, verifies 15 equivalence identities, and exposes verify_for_candidate, wired into hunter_preflight_reuse_decision.decide() for metadata-only diffs. scripts/hunter_ci_final_execution.py is only the standalone operator CLI/consumer. Reuse succeeds only with a new current-HEAD-bound decision referencing the immutable source proof; independent exact-head review is never bypassed. The digest regression uses a hermetic temporary Git repository rather than relying on the checked-out HEAD history. Focused suite: 131 passed.",
         "id": "AC-606-01",
         "verdict": "satisfied"
       },
       {
         "criterion": "Run one final authoritative aggregate gate after candidate HEAD stabilizes; bind outcome to repo, PR, exact HEAD, run attempt, proof digest and trusted job, and never self-depend on an unpublished status.",
-        "evidence": "_source_proof_bindings lives inside the canonical authority module (hunter_validation_reuse) and derives run/attempt/job/digest using that module's own _canonical_job_proof and trusted_branch_preflight_run. No second proof authority or status publisher was introduced. EQUIVALENCE_IDENTITIES binds repository, PR, current head, source proof head, base, tested subtree, dependency/workflow/toolchain/environment identities, run attempt, trusted job, proof digest and provenance. No new self-dependent status context was added.",
+        "evidence": "_source_proof_bindings lives inside the canonical authority module (hunter_validation_reuse) and derives run/attempt/job/digest using that module's own _canonical_job_proof and trusted_branch_preflight_run. A single validated jobs API snapshot supplies both the canonical digest and the authoritative job identity, so contradictory successive reads cannot authorize reuse. No second proof authority or status publisher was introduced. EQUIVALENCE_IDENTITIES binds repository, PR, current head, source proof head, base, tested subtree, dependency/workflow/toolchain/environment identities, run attempt, trusted job, proof digest and provenance.",
         "id": "AC-606-02",
         "verdict": "satisfied"
       },
       {
         "criterion": "Cancel or supersede obsolete runs on HEAD changes and protect against ABA changes, parallel pushes, stale successes, delayed callbacks, overlapping controllers, retry, cancellation and replayed status; an old HEAD must never authorize a newer HEAD.",
-        "evidence": "Hostile regression tests in tests/test_preflight_reuse_decision.py exercise the real production selectors and decision functions for A\u2192B while A runs, A\u2192B\u2192A, two overlapping controllers producing identical canonical outcomes, stale callbacks, over-deadline pending publication, cancelled runs, conflicting same-run/attempt API snapshots, newer-attempt precedence, rejected replayed digests and source/current head mismatch. Full focused set: 128 passed.",
+        "evidence": "Hostile regression tests in tests/test_preflight_reuse_decision.py exercise the real production selectors and decision functions for A\u2192B while A runs, A\u2192B\u2192A, two overlapping controllers producing identical canonical outcomes, stale callbacks, over-deadline pending publication, cancelled runs, conflicting same-run/attempt API snapshots, newer-attempt precedence, rejected replayed digests and source/current head mismatch. A successful cross-HEAD equivalence now passes the same live PR HEAD/base recheck as ordinary reuse, and a failed equivalence falls back to the existing exact-head resolver before any fresh run. Full focused set: 131 passed.",
         "id": "AC-606-03",
         "verdict": "satisfied"
       },
@@ -33,7 +33,7 @@
       },
       {
         "criterion": "Provide a real hosted CI runtime/API measurement mechanism and record the measured BEFORE baseline, without asserting an unmeasured improvement, while preserving the authoritative security gate.",
-        "evidence": "collect_performance_evidence/performance_main in scripts/hunter_ci_final_execution.py measure real GitHub Actions run/job timestamps and count REST calls; missing timestamps are null, never invented. BEFORE baseline measured: 30 Hunter / Pre-PR Preflight runs, 31 REST requests, 21 successful, successful job duration median 828 s (range 617-1004 s), recorded in docs/CI_INCREMENTAL_EXECUTION.md. No AFTER improvement is claimed here; it is deferred to hosted verification of the pushed HEAD.",
+        "evidence": "collect_performance_evidence/performance_main in scripts/hunter_ci_final_execution.py measure real GitHub Actions run/job timestamps and count REST calls; missing timestamps are null, never invented. The measurement lane is read-only: it emits JSON to stdout and exposes no --output flag, so caller-supplied CLI arguments cannot reach a filesystem write target. BEFORE baseline measured: 30 Hunter / Pre-PR Preflight runs, 31 REST requests, 21 successful, successful job duration median 828 s (range 617-1004 s), recorded in docs/CI_INCREMENTAL_EXECUTION.md. No AFTER improvement is claimed here; it is deferred to hosted verification of the pushed HEAD.",
         "id": "AC-606-06",
         "verdict": "satisfied"
       }
@@ -55,7 +55,7 @@
     "base_sha": "3e6e52f298323ac4cc2a29f531fc390d062c50bd",
     "defect_families": [
       {
-        "evidence": "Cross-HEAD reuse binds repository, PR, current HEAD, source proof HEAD, run, attempt, job and proof digest; a proof digested for a different head is rejected by tests/test_hunter_ci_final_execution.py, so an authorization cannot be replayed onto another operation or resulting content.",
+        "evidence": "Cross-HEAD reuse binds repository, PR, current HEAD, source proof HEAD, run, attempt, job and proof digest; the CLI no longer accepts caller-supplied attempt/job/digest labels and verifies through the canonical authority, so an authorization cannot be replayed onto another operation or resulting content.",
         "family": "DFF-007",
         "outcome": "clear"
       },
@@ -65,7 +65,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "No connector write-channel or proof-granting code changed. Source proof provenance is read from the trusted Actions API through the existing canonical authority; the candidate cannot mint its own proof.",
+        "evidence": "No connector write-channel or proof-granting code changed. Source proof provenance is read from the trusted Actions API through the existing canonical authority; the candidate cannot mint its own proof. The measurement CLI was hardened to have no caller-selected write target.",
         "family": "DFF-009",
         "outcome": "clear"
       },
@@ -75,7 +75,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "All changes are committed as one signed commit on the existing branch with no rewind or force-push; no intermediate commit lacks range evidence and no manual rewind is required.",
+        "evidence": "All changes are committed through signed commits on the existing branch with no rewind or force-push; every commit has base-to-HEAD range evidence and no manual rewind is required.",
         "family": "DFF-011",
         "outcome": "clear"
       },
@@ -135,7 +135,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "New tests are hermetic: equivalence/time/API behavior is driven by monkeypatched clocks and fetch functions, and subtree-digest tests read only local Git objects. No deterministic test asserts on an Issue body, remote API response, or live endpoint.",
+        "evidence": "New tests are hermetic: equivalence/time/API behavior is driven by monkeypatched clocks and fetch functions, and subtree-digest tests read only a temporary local Git repository. No deterministic test asserts on an Issue body, remote API response, or live endpoint, and shared helpers remove duplicated fixtures.",
         "family": "DFF-035",
         "outcome": "clear"
       }
@@ -144,19 +144,19 @@
     "issue": "606",
     "review_target": [
       {
-        "blob_sha": "5dbf65e00a8a91ce69a3eaade4fdf34c28cb14eb",
+        "blob_sha": "65b47b328ecfbde6bad523d4cfb1a1fe6027a75b",
         "path": "scripts/hunter_ci_final_execution.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "f3651fc1680299864eba257639b81a2bbfb582cc",
+        "blob_sha": "ec2d66d9c697d013c7d474e341e7d7a3aadfb029",
         "path": "tests/test_hunter_ci_final_execution.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "9d9cfd065b015f5011923099ecc5583c75f77a0c",
+        "blob_sha": "c4730d55f1e158aba572009d4a72af4dd013ee73",
         "path": "docs/CI_INCREMENTAL_EXECUTION.md",
         "previous_path": "",
         "status": "modified"
@@ -168,13 +168,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "34dec183b2853917e61fabce36688efa3c29a639",
+        "blob_sha": "2c23c1e5afe6e3130631e98d83a643d4225969bd",
         "path": "scripts/hunter_preflight_reuse_decision.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "79f09a41326fe0002e41e42c0f346439233d8007",
+        "blob_sha": "340c4e6794a460523cb39af19fd55fedd78c12fc",
         "path": "scripts/hunter_validation_reuse.py",
         "previous_path": "",
         "status": "modified"
@@ -192,17 +192,17 @@
         "status": "modified"
       },
       {
-        "blob_sha": "f333ead7de50a6dc14ab2179ef520e5c388773c0",
+        "blob_sha": "a3b9222b01e345de021c2f3b085aee8574931b70",
         "path": "tests/test_preflight_reuse_decision.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "686e386d149d46c3eebd43abe18117b1eab759ea92aea7267c542f7f60737e73"
+    "review_target_digest": "aa67ba4bc11a7d59f479111d999e047df6c7171b45d39a5661907bc68decd85c"
   },
-  "review_id": "7a2f850e8b5c586c1fd1a7cda8654e97f44e79444317318dee20345af6358405",
+  "review_id": "326568cd0181bf7cb4810abecabca735f0aeef0d96681810a77dbe63c8f34274",
   "review_request": {
-    "claims_id": "7a2f850e8b5c586c1fd1a7cda8654e97f44e79444317318dee20345af6358405",
+    "claims_id": "326568cd0181bf7cb4810abecabca735f0aeef0d96681810a77dbe63c8f34274",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

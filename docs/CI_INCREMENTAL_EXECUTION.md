@@ -35,7 +35,7 @@
 
 ### Measurement method
 
-`python3 scripts/hunter_ci_final_execution.py measure --repository fafa33/Project-Hunter --token ... --limit 30` reads real GitHub Actions run/job timestamps from the workflow-specific Actions API. Durations come only from GitHub timestamps; missing timestamps are reported as `null` rather than invented. `api_requests` counts the exact REST calls made. The shared transport does not expose rate-limit headers, so that field is reported as unavailable rather than guessed. Evidence artifacts: `issue606-perf-before.json` (this head) and `issue606-perf-after.json` (pushed head).
+`python3 scripts/hunter_ci_final_execution.py measure --repository fafa33/Project-Hunter --token ... --limit 30` reads real GitHub Actions run/job timestamps from the workflow-specific Actions API. Durations come only from GitHub timestamps; missing timestamps are reported as `null` rather than invented. `api_requests` counts the exact REST calls made. The shared transport does not expose rate-limit headers, so that field is reported as unavailable rather than guessed. The measurement lane is read-only: it emits JSON to stdout (redirect with `> path` to persist an artifact) and has no `--output` flag, so no caller-supplied argument can select a filesystem write target. Evidence artifacts: `/private/var/folders/4b/tvf7qwyj4fx67pn_rkjn_9wh0000gn/T/opencode/issue606-perf-before.json` (BEFORE) and `issue606-perf-after.json` (AFTER, once measured).
 
 ### BEFORE — repeated full hosted proof (no equivalence reuse)
 

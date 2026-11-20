@@ -280,7 +280,12 @@ def decide_from_runs(runs: list[Any], evidence: CandidateEvidence, *, now: datet
 
 
 def _canonical_job_proof(
-    repository: str, token: str, run: dict[str, Any], head_sha: str, fetch: Fetch | None
+    repository: str,
+    token: str,
+    run: dict[str, Any],
+    head_sha: str,
+    fetch: Fetch | None,
+    jobs_payload: dict[str, Any] | None = None,
 ) -> tuple[str | None, str]:
     """Re-derive one immutable outcome from GitHub's trusted run and job records.
 
@@ -292,7 +297,15 @@ def _canonical_job_proof(
         attempt = int(run.get("run_attempt", 1))
         if run_id <= 0 or attempt <= 0:
             raise ValueError("nonpositive run identity")
-        payload = (fetch or _fetch)(repository, token, f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")
+        # One validated snapshot supplies both the digest claims and the job
+        # identity. Callers that already fetched the jobs pass that exact
+        # snapshot here so a second, contradictory API read cannot authorize
+        # reuse.
+        payload = jobs_payload
+        if payload is None:
+            payload = (fetch or _fetch)(
+                repository, token, f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"
+            )
         if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
             return None, "trusted proof job evidence is malformed"
         jobs = [
@@ -767,64 +780,6 @@ def verify_equivalence(
     )
 
 
-def decide(
-    root: Path,
-    *,
-    repository: str,
-    pr_number: int,
-    current_head: str,
-    base_sha: str,
-    source_proof_head: str | None = None,
-    token: str,
-    run_attempt: int = 1,
-    job_id: int = 0,
-    proof_digest: str = "",
-) -> EquivalenceDecision:
-    """Decide cross-HEAD proof equivalence for the current candidate HEAD.
-
-    Uses the caller's immutable source proof head when supplied; otherwise
-    searches for the most recent previous proven head with identical tested
-    inputs. A new current-HEAD-bound decision is issued referencing the
-    original immutable proof. The old HEAD's success is never copied.
-    """
-    # Validate inputs before any work.
-    if not _HEX_SHA.fullmatch(current_head):
-        return EquivalenceDecision(False, "current head is not an exact 40-hex commit SHA")
-    if not _HEX_SHA.fullmatch(base_sha):
-        return EquivalenceDecision(False, "base SHA is not an exact 40-hex commit SHA")
-    if pr_number <= 0:
-        return EquivalenceDecision(False, "PR number must be positive")
-    if run_attempt <= 0:
-        return EquivalenceDecision(False, "run_attempt must be positive")
-    if job_id <= 0:
-        return EquivalenceDecision(False, "job_id must be positive")
-    if not proof_digest:
-        return EquivalenceDecision(False, "proof digest is required")
-
-    # Use the caller's immutable source proof when supplied; otherwise locate
-    # the most recent previous proven head. Neither path copies an old success.
-    if source_proof_head is None:
-        source_proof_head, problem = find_previous_proven_head(repository, token, current_head)
-        if problem:
-            return EquivalenceDecision(False, f"no source proof: {problem}")
-    elif not _HEX_SHA.fullmatch(source_proof_head):
-        return EquivalenceDecision(False, "source proof head is not an exact 40-hex commit SHA")
-
-    # Verify all equivalence bindings.
-    return verify_equivalence(
-        root,
-        repository=repository,
-        pr_number=pr_number,
-        current_head=current_head,
-        source_proof_head=source_proof_head,
-        base_sha=base_sha,
-        token=token,
-        run_attempt=run_attempt,
-        job_id=job_id,
-        proof_digest=proof_digest,
-    )
-
-
 def _source_proof_bindings(
     repository: str,
     token: str,
@@ -850,12 +805,15 @@ def _source_proof_bindings(
             return 0, 0, "", f"source proof run is not authoritative ({problem})"
         attempt = int(run.get("run_attempt", 1))
         run_id = int(run["id"])
-        digest, blocker = _canonical_job_proof(repository, token, run, source_head, None)
-        if not digest:
-            return 0, 0, "", f"canonical proof outcome digest unavailable ({blocker})"
+        # A single jobs snapshot is fetched and reused for both the canonical
+        # digest and the authoritative job identity. Contradictory successive
+        # reads are therefore structurally impossible on this path.
         jobs_payload = _fetch(repository, token, f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100")
         if not isinstance(jobs_payload, dict) or not isinstance(jobs_payload.get("jobs"), list):
             return 0, 0, "", "source proof job evidence is malformed"
+        digest, blocker = _canonical_job_proof(repository, token, run, source_head, None, jobs_payload=jobs_payload)
+        if not digest:
+            return 0, 0, "", f"canonical proof outcome digest unavailable ({blocker})"
         authoritative_jobs = [
             job
             for job in jobs_payload["jobs"]
@@ -867,7 +825,7 @@ def _source_proof_bindings(
         if job_id <= 0 or authoritative_jobs[0].get("run_id") != run_id:
             return 0, 0, "", "source proof job/run binding is invalid"
         return attempt, job_id, digest, ""
-    except (KeyError, TypeError, ValueError, OverflowError, Exception) as exc:  # noqa: BLE001 - fail closed
+    except Exception as exc:  # noqa: BLE001 - any failure fails closed
         return 0, 0, "", f"source proof bindings unavailable ({type(exc).__name__}: {exc})"
 
 
@@ -896,12 +854,16 @@ def verify_for_candidate(
         return EquivalenceDecision(False, "base SHA is not an exact 40-hex commit SHA")
     if pr_number <= 0:
         return EquivalenceDecision(False, "PR number must be positive")
+    if source_proof_head is not None and not _HEX_SHA.fullmatch(source_proof_head):
+        return EquivalenceDecision(False, "source proof head is not an exact 40-hex commit SHA")
 
     if source_proof_head is None:
         source_proof_head, problem = find_previous_proven_head(repository, token, current_head)
         if problem:
             return EquivalenceDecision(False, f"no source proof: {problem}")
 
+    # Caller-supplied labels are never trusted as proof: the canonical authority
+    # derives the source run/attempt/job/digest from immutable hosted evidence.
     attempt, job_id, digest, problem = _source_proof_bindings(repository, token, source_proof_head)
     if problem:
         return EquivalenceDecision(False, problem)

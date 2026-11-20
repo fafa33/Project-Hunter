@@ -317,19 +317,25 @@ def test_missing_base_identity_refuses_reuse_before_proof(monkeypatch: pytest.Mo
     assert "base identity" in reason
 
 
-def test_review_metadata_only_still_requires_exact_head_hosted_proof(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def _metadata_only_changes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Report changed paths as review-request metadata only."""
     monkeypatch.setattr(
         decision.governance,
         "read_pr_changed_paths",
         lambda *_a, **_k: (True, (".hunter/pre-ready-hostile-review.json",), None),
     )
+
+
+def test_review_metadata_only_still_requires_exact_head_hosted_proof(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _metadata_only_changes(monkeypatch)
     monkeypatch.setattr(
         reuse,
         "verify_for_candidate",
         lambda *_a, **_k: reuse.EquivalenceDecision(False, "exact-head proof is unavailable"),
     )
+    _resolve_spy(monkeypatch, reuse.ReuseDecision(False, "exact-head proof is missing"))
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
     assert not reusable
     assert "unavailable" in reason
@@ -338,11 +344,7 @@ def test_review_metadata_only_still_requires_exact_head_hosted_proof(
 def test_review_metadata_only_may_reuse_only_verified_exact_head_proof(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    monkeypatch.setattr(
-        decision.governance,
-        "read_pr_changed_paths",
-        lambda *_a, **_k: (True, (".hunter/pre-ready-hostile-review.json",), None),
-    )
+    _metadata_only_changes(monkeypatch)
     monkeypatch.setattr(
         reuse,
         "verify_for_candidate",
@@ -351,6 +353,40 @@ def test_review_metadata_only_may_reuse_only_verified_exact_head_proof(
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
     assert reusable
     assert "verified" in reason
+
+
+def test_cross_head_equivalence_rechecks_live_head_and_base(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A successful equivalence cannot skip the trusted gate after a HEAD race."""
+    observations = iter(
+        [
+            {"head": {"sha": HEAD}, "base": {"sha": BASE}},
+            {"head": {"sha": "d" * 40}, "base": {"sha": BASE}},
+        ]
+    )
+    monkeypatch.setattr(decision.governance, "request_json", lambda *_a, **_k: next(observations))
+    _metadata_only_changes(monkeypatch)
+    monkeypatch.setattr(
+        reuse,
+        "verify_for_candidate",
+        lambda *_a, **_k: reuse.EquivalenceDecision(True, "verified cross-HEAD equivalence"),
+    )
+    reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
+    assert not reusable
+    assert "head changed" in reason
+
+
+def test_failed_equivalence_falls_back_to_exact_head_proof(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A metadata-only HEAD with its own exact-head proof still reuses it."""
+    _metadata_only_changes(monkeypatch)
+    monkeypatch.setattr(
+        reuse,
+        "verify_for_candidate",
+        lambda *_a, **_k: reuse.EquivalenceDecision(False, "no prior equivalent proof"),
+    )
+    _resolve_spy(monkeypatch, reuse.ReuseDecision(True, "trusted exact-head proof"))
+    reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
+    assert reusable
+    assert "exact-head" in reason
 
 
 def test_review_metadata_with_workflow_change_requires_fresh_trusted_validation(
@@ -442,6 +478,43 @@ def _successful_proof_run_for(
     }
 
 
+def _run(
+    *,
+    head_sha: str = HEAD,
+    run_id: int = 100,
+    attempt: int = 1,
+    conclusion: str | None = "success",
+    status: str = "completed",
+    updated_at: str = "2026-01-01T00:00:00Z",
+) -> dict[str, Any]:
+    """One canonical Actions run record for concurrency regression tests."""
+    return {
+        "id": run_id,
+        "run_attempt": attempt,
+        "head_sha": head_sha,
+        "name": reuse.PRE_PR_WORKFLOW_NAME,
+        "path": reuse.PRE_PR_WORKFLOW_PATH,
+        "event": "push",
+        "status": status,
+        "conclusion": conclusion,
+        "updated_at": updated_at,
+        "run_started_at": updated_at,
+    }
+
+
+def _mock_runs(monkeypatch: pytest.MonkeyPatch, runs: list[dict[str, Any]]) -> None:
+    """Install one authoritative Actions run snapshot and unchanged-path evidence."""
+    import hunter_validation_reuse as reuse_mod
+
+    def fake_fetch(url, method, headers, data, token, what):
+        if "actions/runs" in url:
+            return {"workflow_runs": runs}
+        raise AssertionError(f"unexpected fetch URL: {url}")
+
+    monkeypatch.setattr(reuse_mod.transport, "request_rest_json", fake_fetch)
+    monkeypatch.setattr(decision.governance, "read_pr_changed_paths", _no_changes)
+
+
 def test_head_a_to_b_while_a_running_refuses_stale_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """HEAD A -> B while A validation is running: stale A success must not authorize B."""
     # A's successful run is not a proof for B. The canonical run selector must
@@ -472,46 +545,13 @@ def test_two_simultaneous_pushes_fail_closed_for_uncertain_evidence(
     """Two simultaneous pushes: ambiguous/missing evidence fails closed."""
     # Conflicting snapshots for the same run/attempt are rejected by
     # trusted_branch_preflight_run in hunter_validation_reuse.
-    import hunter_validation_reuse as reuse_mod
-
     _mock_candidate_evidence_passes(monkeypatch)
     _mock_receipt_verify_passes(monkeypatch)
     _mock_canonical_job_proof(monkeypatch)
 
-    runs = [
-        {
-            "id": 100,
-            "run_attempt": 1,
-            "head_sha": HEAD,
-            "name": "Hunter / Pre-PR Preflight",
-            "path": reuse.PRE_PR_WORKFLOW_PATH,
-            "event": "push",
-            "status": "completed",
-            "conclusion": "success",
-        },
-        {
-            "id": 100,
-            "run_attempt": 1,
-            "head_sha": HEAD,
-            "name": "Hunter / Pre-PR Preflight",
-            "path": reuse.PRE_PR_WORKFLOW_PATH,
-            "event": "push",
-            "status": "completed",
-            "conclusion": "failure",
-        },
-    ]
+    runs = [_run(), _run(conclusion="failure")]
 
-    def fake_fetch(url, method, headers, data, token, what):
-        if "actions/runs" in url:
-            return {"workflow_runs": runs}
-        raise AssertionError(f"unexpected fetch URL: {url}")
-
-    monkeypatch.setattr(reuse_mod.transport, "request_rest_json", fake_fetch)
-    monkeypatch.setattr(
-        decision.governance,
-        "read_pr_changed_paths",
-        lambda *_a, **_k: (True, (), None),
-    )
+    _mock_runs(monkeypatch, runs)
 
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
     assert reusable is False
@@ -536,68 +576,13 @@ def test_delayed_status_publication_fails_closed(monkeypatch: pytest.MonkeyPatch
     """Delayed status publication: pending proof beyond bounded deadline fails closed."""
     from datetime import UTC, datetime, timedelta
 
-    import hunter_validation_reuse as reuse_mod
-
     # A run that is still pending and exceeds the deadline.
     old_time = (datetime.now(UTC) - timedelta(seconds=50 * 60)).isoformat()
-    runs = [
-        {
-            "id": 100,
-            "run_attempt": 1,
-            "head_sha": HEAD,
-            "name": "Hunter / Pre-PR Preflight",
-            "path": reuse.PRE_PR_WORKFLOW_PATH,
-            "event": "push",
-            "status": "queued",
-            "conclusion": None,
-            "updated_at": old_time,
-            "run_started_at": old_time,
-        }
-    ]
+    runs = [_run(status="queued", conclusion=None, updated_at=old_time)]
 
-    def fake_fetch(url, method, headers, data, token, what):
-        if "actions/runs" in url:
-            return {"workflow_runs": runs}
-        raise AssertionError(f"unexpected fetch URL: {url}")
+    _mock_runs(monkeypatch, runs)
 
-    monkeypatch.setattr(reuse_mod.transport, "request_rest_json", fake_fetch)
-    monkeypatch.setattr(
-        decision.governance,
-        "read_pr_changed_paths",
-        lambda *_a, **_k: (True, (), None),
-    )
-
-    # Mock candidate evidence to pass.
-    monkeypatch.setattr(
-        decision.reuse.receipts,
-        "content_identity",
-        lambda root: "tree:" + "1" * 40,
-    )
-    monkeypatch.setattr(
-        decision.reuse.receipts,
-        "commit_tree_identity",
-        lambda root, head: "tree:" + "1" * 40,
-    )
-    monkeypatch.setattr(
-        decision.reuse.receipts,
-        "definition_identity",
-        lambda root: "def:abc",
-    )
-    monkeypatch.setattr(
-        decision.reuse.receipts,
-        "measured_toolchain",
-        lambda: {"python": "3.11", "ruff": "0.1", "black": "24", "mypy": "1.0"},
-    )
-    monkeypatch.setattr(
-        decision.reuse.receipts,
-        "pinned_toolchain",
-        lambda root: {"python": "3.11", "ruff": "0.1", "black": "24", "mypy": "1.0"},
-    )
-    monkeypatch.setattr(
-        decision.reuse.receipts,
-        "toolchain_identity",
-        lambda tc: "tc:xyz",
-    )
+    _mock_candidate_evidence_passes(monkeypatch)
 
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
     assert reusable is False
@@ -629,48 +614,16 @@ def test_cancelled_workflow_cannot_authorize_readiness(monkeypatch: pytest.Monke
 
 def test_rerun_with_new_run_attempt_uses_latest_attempt(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Rerun with new run_attempt: latest attempt is selected safely."""
-    import hunter_validation_reuse as reuse_mod
-
     _mock_candidate_evidence_passes(monkeypatch)
     _mock_receipt_verify_passes(monkeypatch)
     _mock_canonical_job_proof(monkeypatch, digest="sha256:attempt2")
 
     runs = [
-        {
-            "id": 100,
-            "run_attempt": 1,
-            "head_sha": HEAD,
-            "name": reuse.PRE_PR_WORKFLOW_NAME,
-            "path": reuse.PRE_PR_WORKFLOW_PATH,
-            "event": "push",
-            "status": "completed",
-            "conclusion": "failure",
-            "updated_at": "2026-01-01T00:00:00Z",
-        },
-        {
-            "id": 100,
-            "run_attempt": 2,
-            "head_sha": HEAD,
-            "name": reuse.PRE_PR_WORKFLOW_NAME,
-            "path": reuse.PRE_PR_WORKFLOW_PATH,
-            "event": "push",
-            "status": "completed",
-            "conclusion": "success",
-            "updated_at": "2026-01-01T00:05:00Z",
-        },
+        _run(conclusion="failure"),
+        _run(attempt=2, updated_at="2026-01-01T00:05:00Z"),
     ]
 
-    def fake_fetch(url, method, headers, data, token, what):
-        if "actions/runs" in url:
-            return {"workflow_runs": runs}
-        raise AssertionError(f"unexpected fetch URL: {url}")
-
-    monkeypatch.setattr(reuse_mod.transport, "request_rest_json", fake_fetch)
-    monkeypatch.setattr(
-        decision.governance,
-        "read_pr_changed_paths",
-        lambda *_a, **_k: (True, (), None),
-    )
+    _mock_runs(monkeypatch, runs)
 
     # With a real clock, the fixed 2026 timestamp is far in the past; verify()
     # is mocked, so recency is not the gate here -- attempt selection is.
@@ -683,44 +636,11 @@ def test_old_successful_attempt_followed_by_failed_attempt_refuses(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Old successful attempt followed by failed attempt: latest attempt wins, fails closed."""
-    import hunter_validation_reuse as reuse_mod
-
     _mock_candidate_evidence_passes(monkeypatch)
 
-    runs = [
-        {
-            "id": 100,
-            "run_attempt": 1,
-            "head_sha": HEAD,
-            "name": "Hunter / Pre-PR Preflight",
-            "path": reuse.PRE_PR_WORKFLOW_PATH,
-            "event": "push",
-            "status": "completed",
-            "conclusion": "success",
-        },
-        {
-            "id": 100,
-            "run_attempt": 2,
-            "head_sha": HEAD,
-            "name": "Hunter / Pre-PR Preflight",
-            "path": reuse.PRE_PR_WORKFLOW_PATH,
-            "event": "push",
-            "status": "completed",
-            "conclusion": "failure",
-        },
-    ]
+    runs = [_run(), _run(attempt=2, conclusion="failure")]
 
-    def fake_fetch(url, method, headers, data, token, what):
-        if "actions/runs" in url:
-            return {"workflow_runs": runs}
-        raise AssertionError(f"unexpected fetch URL: {url}")
-
-    monkeypatch.setattr(reuse_mod.transport, "request_rest_json", fake_fetch)
-    monkeypatch.setattr(
-        decision.governance,
-        "read_pr_changed_paths",
-        lambda *_a, **_k: (True, (), None),
-    )
+    _mock_runs(monkeypatch, runs)
 
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
     assert reusable is False
@@ -729,44 +649,11 @@ def test_old_successful_attempt_followed_by_failed_attempt_refuses(
 
 def test_conflicting_api_snapshots_same_run_attempt_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Conflicting API snapshots for the same run/attempt are rejected."""
-    import hunter_validation_reuse as reuse_mod
-
     _mock_candidate_evidence_passes(monkeypatch)
 
-    runs = [
-        {
-            "id": 100,
-            "run_attempt": 1,
-            "head_sha": HEAD,
-            "name": "Hunter / Pre-PR Preflight",
-            "path": reuse.PRE_PR_WORKFLOW_PATH,
-            "event": "push",
-            "status": "completed",
-            "conclusion": "success",
-        },
-        {
-            "id": 100,
-            "run_attempt": 1,
-            "head_sha": HEAD,
-            "name": "Hunter / Pre-PR Preflight",
-            "path": reuse.PRE_PR_WORKFLOW_PATH,
-            "event": "push",
-            "status": "completed",
-            "conclusion": "failure",
-        },
-    ]
+    runs = [_run(), _run(conclusion="failure")]
 
-    def fake_fetch(url, method, headers, data, token, what):
-        if "actions/runs" in url:
-            return {"workflow_runs": runs}
-        raise AssertionError(f"unexpected fetch URL: {url}")
-
-    monkeypatch.setattr(reuse_mod.transport, "request_rest_json", fake_fetch)
-    monkeypatch.setattr(
-        decision.governance,
-        "read_pr_changed_paths",
-        lambda *_a, **_k: (True, (), None),
-    )
+    _mock_runs(monkeypatch, runs)
 
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
     assert reusable is False
@@ -775,32 +662,9 @@ def test_conflicting_api_snapshots_same_run_attempt_rejected(monkeypatch: pytest
 
 def test_malformed_or_malicious_proof_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Malformed or malicious proof evidence fails closed."""
-    import hunter_validation_reuse as reuse_mod
+    runs = [_run(run_id=-1, attempt=0)]
 
-    runs = [
-        {
-            "id": -1,
-            "run_attempt": 0,
-            "head_sha": HEAD,
-            "name": "Hunter / Pre-PR Preflight",
-            "path": reuse.PRE_PR_WORKFLOW_PATH,
-            "event": "push",
-            "status": "completed",
-            "conclusion": "success",
-        }
-    ]
-
-    def fake_fetch(url, method, headers, data, token, what):
-        if "actions/runs" in url:
-            return {"workflow_runs": runs}
-        raise AssertionError(f"unexpected fetch URL: {url}")
-
-    monkeypatch.setattr(reuse_mod.transport, "request_rest_json", fake_fetch)
-    monkeypatch.setattr(
-        decision.governance,
-        "read_pr_changed_paths",
-        lambda *_a, **_k: (True, (), None),
-    )
+    _mock_runs(monkeypatch, runs)
 
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
     assert reusable is False
@@ -808,34 +672,11 @@ def test_malformed_or_malicious_proof_fails_closed(monkeypatch: pytest.MonkeyPat
 
 def test_replayed_proof_digest_rejected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A replayed proof digest for a different head is rejected."""
-    import hunter_validation_reuse as reuse_mod
-
     _mock_candidate_evidence_passes(monkeypatch)
     source_head = "b" * 40
-    runs = [
-        {
-            "id": 100,
-            "run_attempt": 1,
-            "head_sha": source_head,
-            "name": "Hunter / Pre-PR Preflight",
-            "path": reuse.PRE_PR_WORKFLOW_PATH,
-            "event": "push",
-            "status": "completed",
-            "conclusion": "success",
-        }
-    ]
+    runs = [_run(head_sha=source_head)]
 
-    def fake_fetch(url, method, headers, data, token, what):
-        if "actions/runs" in url:
-            return {"workflow_runs": runs}
-        raise AssertionError(f"unexpected fetch URL: {url}")
-
-    monkeypatch.setattr(reuse_mod.transport, "request_rest_json", fake_fetch)
-    monkeypatch.setattr(
-        decision.governance,
-        "read_pr_changed_paths",
-        lambda *_a, **_k: (True, (), None),
-    )
+    _mock_runs(monkeypatch, runs)
 
     # Request reuse for HEAD != source head SOURCE_HEAD.
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
@@ -845,33 +686,9 @@ def test_replayed_proof_digest_rejected(monkeypatch: pytest.MonkeyPatch, tmp_pat
 
 def test_missing_or_incomplete_job_evidence_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Missing or incomplete job evidence fails closed."""
-    import hunter_validation_reuse as reuse_mod
+    runs = [_run()]
 
-    runs = [
-        {
-            "id": 100,
-            "run_attempt": 1,
-            "head_sha": HEAD,
-            "name": "Hunter / Pre-PR Preflight",
-            "path": reuse.PRE_PR_WORKFLOW_PATH,
-            "event": "push",
-            "status": "completed",
-            "conclusion": "success",
-        }
-    ]
-
-    def fake_fetch(url, method, headers, data, token, what):
-        if "actions/runs" in url:
-            return {"workflow_runs": runs}
-        # No jobs endpoint response - incomplete evidence.
-        raise AssertionError("jobs evidence unavailable")
-
-    monkeypatch.setattr(reuse_mod.transport, "request_rest_json", fake_fetch)
-    monkeypatch.setattr(
-        decision.governance,
-        "read_pr_changed_paths",
-        lambda *_a, **_k: (True, (), None),
-    )
+    _mock_runs(monkeypatch, runs)
 
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
     assert reusable is False
@@ -914,11 +731,7 @@ def test_review_metadata_changes_while_other_checks_running_still_requires_proof
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Review metadata changes while other checks run: still requires exact-head proof."""
-    monkeypatch.setattr(
-        decision.governance,
-        "read_pr_changed_paths",
-        lambda *_a, **_k: (True, (".hunter/pre-ready-hostile-review.json",), None),
-    )
+    _metadata_only_changes(monkeypatch)
     monkeypatch.setattr(
         reuse,
         "verify_for_candidate",

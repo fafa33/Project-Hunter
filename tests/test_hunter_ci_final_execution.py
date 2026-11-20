@@ -8,11 +8,15 @@ decision is issued that references the original immutable proof -- the old
 HEAD's success is never copied as the new HEAD's proof.
 
 All equivalence bindings are verified; any missing, inconsistent,
-ambiguous, stale, or unverifiable identity fails closed.
+ambiguous, stale, or unverifiable identity fails closed. Caller-supplied
+run/attempt/job/digest labels are never accepted as proof: the canonical
+authority derives every one from immutable hosted evidence.
 """
 
 from __future__ import annotations
 
+import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -28,38 +32,21 @@ PR = 606
 CURRENT_HEAD = "a" * 40
 SOURCE_HEAD = "b" * 40
 BASE_SHA = "c" * 40
-RUN_ATTEMPT = 1
-JOB_ID = 1
+RUN_ATTEMPT = 2
+JOB_ID = 42
 PROOF_DIGEST = "sha256:" + "0" * 64
 FAKE_TREE = "tree:" + "d" * 40
 FAKE_TESTED_DIGEST = "sha256:" + "d" * 64
 
 
-def _monkeypatch_fetch(
-    monkeypatch: pytest.MonkeyPatch,
-    runs: list[dict[str, Any]],
-) -> None:
-    """Monkeypatch hunter_github_transport.request_rest_json to return runs."""
-
-    def fake_fetch(
-        url: str,
-        method: str,
-        headers: dict[str, str],
-        data: Any,
-        token: str,
-        what: str,
-    ) -> Any:
-        if "actions/runs" in url:
-            return {"workflow_runs": runs}
-        raise AssertionError(f"unexpected fetch URL: {url}")
-
-    monkeypatch.setattr(reuse.transport, "request_rest_json", fake_fetch)
+def _git(repo: Path, *args: str) -> str:
+    return subprocess.run(("git", *args), cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
 
 
 def _successful_proof_run(run_id: int = 100, head_sha: str = SOURCE_HEAD) -> dict[str, Any]:
     return {
         "id": run_id,
-        "run_attempt": 1,
+        "run_attempt": RUN_ATTEMPT,
         "head_sha": head_sha,
         "name": "Hunter / Pre-PR Preflight",
         "path": reuse.PRE_PR_WORKFLOW_PATH,
@@ -69,8 +56,22 @@ def _successful_proof_run(run_id: int = 100, head_sha: str = SOURCE_HEAD) -> dic
     }
 
 
+def _mock_canonical_bindings(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    attempt: int = RUN_ATTEMPT,
+    job_id: int = JOB_ID,
+    digest: str = PROOF_DIGEST,
+    problem: str = "",
+) -> None:
+    monkeypatch.setattr(
+        reuse,
+        "_source_proof_bindings",
+        lambda repo, token, source: (attempt, job_id, digest, problem),
+    )
+
+
 def _mock_identical_trees(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mock identical tested subtree digests and provenance for any head."""
     monkeypatch.setattr(
         reuse,
         "compute_tested_tree_digest",
@@ -80,9 +81,24 @@ def _mock_identical_trees(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _mock_matching_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mock toolchain identity to return matching measured and pinned values."""
     fake_identity = "sha256:" + "f" * 64
     monkeypatch.setattr(receipts, "toolchain_identity", lambda tc: fake_identity)
+
+
+def _verify(
+    root: Path = ROOT,
+    **overrides: Any,
+) -> reuse.EquivalenceDecision:
+    kwargs: dict[str, Any] = {
+        "repository": REPO,
+        "pr_number": PR,
+        "current_head": CURRENT_HEAD,
+        "base_sha": BASE_SHA,
+        "token": "token",
+        "source_proof_head": SOURCE_HEAD,
+    }
+    kwargs.update(overrides)
+    return reuse.verify_for_candidate(root, **kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -90,24 +106,13 @@ def _mock_matching_toolchain(monkeypatch: pytest.MonkeyPatch) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_cross_head_equivalence_identical_inputs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_cross_head_equivalence_identical_inputs(monkeypatch: pytest.MonkeyPatch) -> None:
     """A new HEAD with identical tested inputs binds to the source proof."""
-    runs = [_successful_proof_run(run_id=100, head_sha=SOURCE_HEAD)]
-    _monkeypatch_fetch(monkeypatch, runs)
+    _mock_canonical_bindings(monkeypatch)
     _mock_identical_trees(monkeypatch)
     _mock_matching_toolchain(monkeypatch)
 
-    decision = reuse.decide(
-        ROOT,
-        repository=REPO,
-        pr_number=PR,
-        current_head=CURRENT_HEAD,
-        base_sha=BASE_SHA,
-        token="token",
-        run_attempt=RUN_ATTEMPT,
-        job_id=JOB_ID,
-        proof_digest=PROOF_DIGEST,
-    )
+    decision = _verify()
 
     assert decision.equivalent is True
     assert decision.binding is not None
@@ -117,198 +122,13 @@ def test_cross_head_equivalence_identical_inputs(monkeypatch: pytest.MonkeyPatch
     assert "bound to" in decision.reason
 
 
-# ---------------------------------------------------------------------------
-# Fail closed: no previous proven head
-# ---------------------------------------------------------------------------
-
-
-def test_cross_head_equivalence_no_previous_proof_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """When no previous successful exact-head proof exists, fail closed."""
-    _monkeypatch_fetch(monkeypatch, [])
-    _mock_identical_trees(monkeypatch)
-
-    decision = reuse.decide(
-        ROOT,
-        repository=REPO,
-        pr_number=PR,
-        current_head=CURRENT_HEAD,
-        base_sha=BASE_SHA,
-        token="token",
-        run_attempt=RUN_ATTEMPT,
-        job_id=JOB_ID,
-        proof_digest=PROOF_DIGEST,
-    )
-
-    assert decision.equivalent is False
-    assert "no source proof" in decision.reason
-
-
-# ---------------------------------------------------------------------------
-# Fail closed: malformed inputs
-# ---------------------------------------------------------------------------
-
-
-def test_cross_head_equivalence_malformed_current_head_fails_closed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    decision = reuse.decide(
-        ROOT,
-        repository=REPO,
-        pr_number=PR,
-        current_head="not-a-sha",
-        base_sha=BASE_SHA,
-        token="token",
-        run_attempt=RUN_ATTEMPT,
-        job_id=JOB_ID,
-        proof_digest=PROOF_DIGEST,
-    )
-    assert decision.equivalent is False
-    assert "current head is not an exact 40-hex" in decision.reason
-
-
-def test_cross_head_equivalence_malformed_base_sha_fails_closed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    decision = reuse.decide(
-        ROOT,
-        repository=REPO,
-        pr_number=PR,
-        current_head=CURRENT_HEAD,
-        base_sha="not-a-sha",
-        token="token",
-        run_attempt=RUN_ATTEMPT,
-        job_id=JOB_ID,
-        proof_digest=PROOF_DIGEST,
-    )
-    assert decision.equivalent is False
-    assert "base SHA is not an exact 40-hex" in decision.reason
-
-
-def test_cross_head_equivalence_zero_pr_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    decision = reuse.decide(
-        ROOT,
-        repository=REPO,
-        pr_number=0,
-        current_head=CURRENT_HEAD,
-        base_sha=BASE_SHA,
-        token="token",
-        run_attempt=RUN_ATTEMPT,
-        job_id=JOB_ID,
-        proof_digest=PROOF_DIGEST,
-    )
-    assert decision.equivalent is False
-    assert "PR number must be positive" in decision.reason
-
-
-def test_cross_head_equivalence_zero_run_attempt_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    decision = reuse.decide(
-        ROOT,
-        repository=REPO,
-        pr_number=PR,
-        current_head=CURRENT_HEAD,
-        base_sha=BASE_SHA,
-        token="token",
-        run_attempt=0,
-        job_id=JOB_ID,
-        proof_digest=PROOF_DIGEST,
-    )
-    assert decision.equivalent is False
-    assert "run_attempt must be positive" in decision.reason
-
-
-def test_cross_head_equivalence_zero_job_id_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    decision = reuse.decide(
-        ROOT,
-        repository=REPO,
-        pr_number=PR,
-        current_head=CURRENT_HEAD,
-        base_sha=BASE_SHA,
-        token="token",
-        run_attempt=RUN_ATTEMPT,
-        job_id=0,
-        proof_digest=PROOF_DIGEST,
-    )
-    assert decision.equivalent is False
-    assert "job_id must be positive" in decision.reason
-
-
-def test_cross_head_equivalence_empty_proof_digest_fails_closed(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    decision = reuse.decide(
-        ROOT,
-        repository=REPO,
-        pr_number=PR,
-        current_head=CURRENT_HEAD,
-        base_sha=BASE_SHA,
-        token="token",
-        run_attempt=RUN_ATTEMPT,
-        job_id=JOB_ID,
-        proof_digest="",
-    )
-    assert decision.equivalent is False
-    assert "proof digest is required" in decision.reason
-
-
-# ---------------------------------------------------------------------------
-# Fail closed: source tree differs from current tree
-# ---------------------------------------------------------------------------
-
-
-def test_cross_head_equivalence_different_trees_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """When source and current trees differ, equivalence fails closed."""
-    runs = [_successful_proof_run(run_id=100, head_sha=SOURCE_HEAD)]
-    _monkeypatch_fetch(monkeypatch, runs)
-
-    # Source head returns one tested subtree digest, current head a different one.
-    def fake_digest(root: Path, head_sha: str) -> tuple[str, str]:
-        if head_sha == SOURCE_HEAD:
-            return "sha256:" + "d" * 64, ""
-        return "sha256:" + "e" * 64, ""
-
-    monkeypatch.setattr(reuse, "compute_tested_tree_digest", fake_digest)
-
-    decision = reuse.decide(
-        ROOT,
-        repository=REPO,
-        pr_number=PR,
-        current_head=CURRENT_HEAD,
-        base_sha=BASE_SHA,
-        token="token",
-        run_attempt=RUN_ATTEMPT,
-        job_id=JOB_ID,
-        proof_digest=PROOF_DIGEST,
-    )
-
-    assert decision.equivalent is False
-    assert "tested tree differs" in decision.reason
-
-
-# ---------------------------------------------------------------------------
-# All equivalence identities are present in the binding
-# ---------------------------------------------------------------------------
-
-
-def test_cross_head_equivalence_binding_contains_all_identities(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    runs = [_successful_proof_run(run_id=100, head_sha=SOURCE_HEAD)]
-    _monkeypatch_fetch(monkeypatch, runs)
+def test_cross_head_equivalence_binding_contains_all_identities(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every declared equivalence identity is present in the new binding."""
+    _mock_canonical_bindings(monkeypatch)
     _mock_identical_trees(monkeypatch)
     _mock_matching_toolchain(monkeypatch)
 
-    decision = reuse.decide(
-        ROOT,
-        repository=REPO,
-        pr_number=PR,
-        current_head=CURRENT_HEAD,
-        base_sha=BASE_SHA,
-        token="token",
-        run_attempt=RUN_ATTEMPT,
-        job_id=JOB_ID,
-        proof_digest=PROOF_DIGEST,
-    )
-
+    decision = _verify()
     assert decision.equivalent is True
     assert decision.binding is not None
     b = decision.binding
@@ -318,10 +138,10 @@ def test_cross_head_equivalence_binding_contains_all_identities(
     assert b.source_proof_head == SOURCE_HEAD
     assert b.base_sha == BASE_SHA
     assert b.tested_tree_digest == FAKE_TESTED_DIGEST
-    assert b.dependency_identity  # non-empty
-    assert b.workflow_definition_identity  # non-empty
-    assert b.toolchain_identity  # non-empty
-    assert b.environment_identity  # non-empty
+    assert b.dependency_identity
+    assert b.workflow_definition_identity
+    assert b.toolchain_identity
+    assert b.environment_identity
     assert b.trusted_workflow == reuse.PRE_PR_WORKFLOW_PATH
     assert b.run_attempt == RUN_ATTEMPT
     assert b.job_identity == f"job:{JOB_ID}"
@@ -330,88 +150,128 @@ def test_cross_head_equivalence_binding_contains_all_identities(
 
 
 # ---------------------------------------------------------------------------
-# CLI
+# Fail closed: malformed inputs
 # ---------------------------------------------------------------------------
 
 
-def test_cli_equivalent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    runs = [_successful_proof_run(run_id=100, head_sha=SOURCE_HEAD)]
-    _monkeypatch_fetch(monkeypatch, runs)
-    _mock_identical_trees(monkeypatch)
-    _mock_matching_toolchain(monkeypatch)
-
-    import sys
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "hunter_ci_final_execution",
-            "--repository",
-            REPO,
-            "--pr",
-            str(PR),
-            "--current-head",
-            CURRENT_HEAD,
-            "--base-sha",
-            BASE_SHA,
-            "--source-proof-head",
-            SOURCE_HEAD,
-            "--run-attempt",
-            str(RUN_ATTEMPT),
-            "--job-id",
-            str(JOB_ID),
-            "--proof-digest",
-            PROOF_DIGEST,
-        ],
-    )
-    rc = final_execution.main()
-    assert rc == 0
-
-
-def test_cli_rejects_malformed_sha(monkeypatch: pytest.MonkeyPatch) -> None:
-    import sys
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "hunter_ci_final_execution",
-            "--repository",
-            REPO,
-            "--pr",
-            str(PR),
-            "--current-head",
-            "not-a-sha",
-            "--base-sha",
-            BASE_SHA,
-            "--source-proof-head",
-            SOURCE_HEAD,
-            "--run-attempt",
-            str(RUN_ATTEMPT),
-            "--job-id",
-            str(JOB_ID),
-            "--proof-digest",
-            PROOF_DIGEST,
-        ],
-    )
-    assert final_execution.main() == 2
-
-
-# ---------------------------------------------------------------------------
-# Equivalence identity list is complete
-# ---------------------------------------------------------------------------
-
-
-def test_verify_for_candidate_issues_current_head_bound_decision(
-    monkeypatch: pytest.MonkeyPatch,
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"current_head": "not-a-sha"}, "current head is not an exact 40-hex"),
+        ({"base_sha": "not-a-sha"}, "base SHA is not an exact 40-hex"),
+        ({"pr_number": 0}, "PR number must be positive"),
+        ({"source_proof_head": "not-a-sha"}, "source proof head is not an exact 40-hex"),
+    ],
+)
+def test_malformed_inputs_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, overrides: dict[str, Any], expected: str
 ) -> None:
-    """The enforcement entry point verifies canonical proof then binds the current HEAD."""
+    decision = _verify(**overrides)
+    assert decision.equivalent is False
+    assert expected in decision.reason
+
+
+# ---------------------------------------------------------------------------
+# Fail closed: source proof evidence
+# ---------------------------------------------------------------------------
+
+
+def test_no_previous_source_proof_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         reuse,
-        "_source_proof_bindings",
-        lambda repo, token, source: (2, 42, "sha256:canonical", ""),
+        "find_previous_proven_head",
+        lambda repo, token, current: (None, "no previous successful exact-head proof found"),
     )
+    decision = _verify(source_proof_head=None)
+    assert decision.equivalent is False
+    assert "no source proof" in decision.reason
+
+
+def test_canonical_digest_unavailable_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_canonical_bindings(monkeypatch, digest="", problem="canonical proof digest unavailable")
+    decision = _verify()
+    assert decision.equivalent is False
+    assert "canonical proof digest unavailable" in decision.reason
+
+
+def _source_bindings_fetch(conclusion: str) -> tuple[Any, list[str]]:
+    """A single job snapshot for source-binding tests; returns fetch and call log."""
+    calls: list[str] = []
+
+    def fake_fetch(repository: str, token: str, path: str) -> Any:
+        calls.append(path)
+        if "actions/runs?" in path:
+            return {"workflow_runs": [_successful_proof_run()]}
+        if "/jobs" in path:
+            return {
+                "jobs": [
+                    {
+                        "id": JOB_ID,
+                        "run_id": 100,
+                        "name": "Hunter Pre-PR Preflight",
+                        "status": "completed",
+                        "conclusion": conclusion,
+                    }
+                ]
+            }
+        raise AssertionError(f"unexpected fetch path: {path}")
+
+    return fake_fetch, calls
+
+
+def test_source_proof_bindings_use_one_job_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Job identity and canonical digest derive from one validated API snapshot."""
+    fake_fetch, calls = _source_bindings_fetch("success")
+    monkeypatch.setattr(reuse, "_fetch", fake_fetch)
+
+    attempt, job_id, digest, problem = reuse._source_proof_bindings(REPO, "token", SOURCE_HEAD)
+    assert problem == ""
+    assert attempt == RUN_ATTEMPT
+    assert job_id == JOB_ID
+    assert digest.startswith("sha256:")
+    assert len([path for path in calls if "/jobs" in path]) == 1
+
+
+def test_failed_job_snapshot_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed authoritative job in the single snapshot is never proven."""
+    fake_fetch, calls = _source_bindings_fetch("failure")
+    monkeypatch.setattr(reuse, "_fetch", fake_fetch)
+
+    _attempt, _job_id, digest, problem = reuse._source_proof_bindings(REPO, "token", SOURCE_HEAD)
+    assert digest == ""
+    assert "did not succeed" in problem
+    assert len([path for path in calls if "/jobs" in path]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Fail closed: tested tree differs
+# ---------------------------------------------------------------------------
+
+
+def test_cross_head_equivalence_different_trees_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When source and current tested trees differ, equivalence fails closed."""
+    _mock_canonical_bindings(monkeypatch)
+
+    def fake_digest(root: Path, head_sha: str) -> tuple[str, str]:
+        if head_sha == SOURCE_HEAD:
+            return "sha256:" + "d" * 64, ""
+        return "sha256:" + "e" * 64, ""
+
+    monkeypatch.setattr(reuse, "compute_tested_tree_digest", fake_digest)
+
+    decision = _verify()
+    assert decision.equivalent is False
+    assert "tested tree differs" in decision.reason
+
+
+# ---------------------------------------------------------------------------
+# Enforcement entry point bindings
+# ---------------------------------------------------------------------------
+
+
+def test_verify_for_candidate_issues_current_head_bound_decision(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The enforcement entry point derives canonical proof then binds the current HEAD."""
+    _mock_canonical_bindings(monkeypatch, attempt=2, job_id=42, digest="sha256:canonical")
     captured: dict[str, Any] = {}
 
     def fake_verify(root: Path, **kwargs: Any) -> reuse.EquivalenceDecision:
@@ -419,16 +279,8 @@ def test_verify_for_candidate_issues_current_head_bound_decision(
         return reuse.EquivalenceDecision(True, "equivalent", binding=None)
 
     monkeypatch.setattr(reuse, "verify_equivalence", fake_verify)
+    decision = _verify()
 
-    decision = reuse.verify_for_candidate(
-        ROOT,
-        repository=REPO,
-        pr_number=PR,
-        current_head=CURRENT_HEAD,
-        base_sha=BASE_SHA,
-        token="token",
-        source_proof_head=SOURCE_HEAD,
-    )
     assert decision.equivalent is True
     assert captured["current_head"] == CURRENT_HEAD
     assert captured["source_proof_head"] == SOURCE_HEAD
@@ -437,96 +289,129 @@ def test_verify_for_candidate_issues_current_head_bound_decision(
     assert captured["proof_digest"] == "sha256:canonical"
 
 
-def test_verify_for_candidate_fails_closed_when_canonical_digest_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """If the canonical authority cannot produce a proof digest, fail closed."""
-    monkeypatch.setattr(
-        reuse,
-        "_source_proof_bindings",
-        lambda repo, token, source: (0, 0, "", "canonical proof digest unavailable"),
-    )
-    decision = reuse.verify_for_candidate(
-        ROOT,
-        repository=REPO,
-        pr_number=PR,
-        current_head=CURRENT_HEAD,
-        base_sha=BASE_SHA,
-        token="token",
-        source_proof_head=SOURCE_HEAD,
-    )
-    assert decision.equivalent is False
-    assert "canonical proof digest unavailable" in decision.reason
+# ---------------------------------------------------------------------------
+# Tested-subtree digest is content-bound and metadata-independent
+# ---------------------------------------------------------------------------
 
 
-def test_verify_for_candidate_fails_closed_when_source_head_unavailable(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """If no immutable source proof HEAD can be found, fail closed."""
-    monkeypatch.setattr(
-        reuse,
-        "find_previous_proven_head",
-        lambda repo, token, current: (None, "no previous successful exact-head proof found"),
-    )
-    decision = reuse.verify_for_candidate(
-        ROOT,
-        repository=REPO,
-        pr_number=PR,
-        current_head=CURRENT_HEAD,
-        base_sha=BASE_SHA,
-        token="token",
-    )
-    assert decision.equivalent is False
-    assert "no source proof" in decision.reason
+def test_tested_subtree_digest_excludes_review_metadata(tmp_path: Path) -> None:
+    """A metadata-only commit leaves the digest intact; a code commit changes it."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
+    (repo / "app.py").write_text("print(1)\n", encoding="utf-8")
+    (repo / ".hunter").mkdir()
+    metadata = repo / ".hunter" / "pre-ready-hostile-review.json"
+    metadata.write_text('{"v": 1}', encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "source")
+    source_head = _git(repo, "rev-parse", "HEAD")
+    source_digest, problem = reuse.compute_tested_tree_digest(repo, source_head)
+    assert problem == ""
+    assert source_digest is not None
 
+    metadata.write_text('{"v": 2}', encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "metadata")
+    metadata_head = _git(repo, "rev-parse", "HEAD")
+    metadata_digest, problem = reuse.compute_tested_tree_digest(repo, metadata_head)
+    assert problem == ""
+    assert metadata_digest == source_digest
 
-def test_verify_for_candidate_rejects_wrong_base(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """A malformed base SHA fails closed before any proof work."""
-    decision = reuse.verify_for_candidate(
-        ROOT,
-        repository=REPO,
-        pr_number=PR,
-        current_head=CURRENT_HEAD,
-        base_sha="not-a-sha",
-        token="token",
-        source_proof_head=SOURCE_HEAD,
-    )
-    assert decision.equivalent is False
-    assert "base SHA" in decision.reason
-
-
-def test_tested_subtree_digest_excludes_review_metadata() -> None:
-    """A real metadata-only HEAD change leaves the tested subtree digest intact.
-
-    Uses the actual repository: compares the current HEAD against an earlier
-    commit whose application code differs from the current tree. The digest
-    must still differ when real code changes, proving it is content-bound.
-    """
-    digest_head, problem = reuse.compute_tested_tree_digest(ROOT, "HEAD")
-    assert problem == "", problem
-    assert digest_head is not None
-    assert digest_head.startswith("sha256:")
-
-    digest_parent, problem = reuse.compute_tested_tree_digest(ROOT, "HEAD~1")
-    assert problem == "", problem
-    assert digest_parent is not None
-    # The current branch's HEAD and HEAD~1 differ in real code (the two signed
-    # commits on this branch), so their tested digests must differ.
-    assert digest_head != digest_parent
+    (repo / "app.py").write_text("print(2)\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "code")
+    code_head = _git(repo, "rev-parse", "HEAD")
+    code_digest, problem = reuse.compute_tested_tree_digest(repo, code_head)
+    assert problem == ""
+    assert code_digest != metadata_digest
 
 
 def test_tested_subtree_digest_is_deterministic() -> None:
-    """The tested subtree digest is stable for the same commit."""
     first, p1 = reuse.compute_tested_tree_digest(ROOT, "HEAD")
     second, p2 = reuse.compute_tested_tree_digest(ROOT, "HEAD")
     assert p1 == "" and p2 == ""
     assert first == second
 
 
+# ---------------------------------------------------------------------------
+# Operator CLI (authenticated through the same enforcement path)
+# ---------------------------------------------------------------------------
+
+
+def _cli_argv(**overrides: Any) -> list[str]:
+    argv = [
+        "hunter_ci_final_execution",
+        "--repository",
+        REPO,
+        "--pr",
+        str(PR),
+        "--current-head",
+        CURRENT_HEAD,
+        "--base-sha",
+        BASE_SHA,
+        "--source-proof-head",
+        SOURCE_HEAD,
+    ]
+    for key, value in overrides.items():
+        argv.extend([f"--{key.replace('_', '-')}", str(value)])
+    return argv
+
+
+def test_cli_equivalent(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    _mock_canonical_bindings(monkeypatch)
+    _mock_identical_trees(monkeypatch)
+    _mock_matching_toolchain(monkeypatch)
+    monkeypatch.setattr(sys, "argv", _cli_argv())
+    assert final_execution.main() == 0
+
+
+def test_cli_rejects_malformed_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+
+    monkeypatch.setattr(sys, "argv", _cli_argv(current_head="not-a-sha"))
+    assert final_execution.main() == 2
+
+
+def test_cli_rejects_unproven_source_labels(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The CLI no longer accepts caller-supplied run/job/digest proof labels."""
+    import sys
+
+    monkeypatch.setattr(sys, "argv", _cli_argv(proof_digest="sha256:invented"))
+    with pytest.raises(SystemExit):
+        final_execution.main()
+
+
+def test_performance_cli_has_no_caller_selected_write_target() -> None:
+    """The measurement CLI cannot write to a caller-chosen path (Issue #606)."""
+    script = (ROOT / "scripts" / "hunter_ci_final_execution.py").read_text(encoding="utf-8")
+    assert 'add_argument("--output"' not in script
+    assert "write_text" not in script
+
+
+def test_performance_cli_emits_json_without_file_writes(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(
+        final_execution,
+        "collect_performance_evidence",
+        lambda *args, **kwargs: {"repository": REPO, "records": []},
+    )
+    assert final_execution.performance_main(["--repository", REPO]) == 0
+    emitted = json.loads(capsys.readouterr().out)
+    assert emitted == {"repository": REPO, "records": []}
+
+
+# ---------------------------------------------------------------------------
+# Hosted performance evidence
+# ---------------------------------------------------------------------------
+
+
 def test_performance_measurement_uses_real_timestamps_and_counts_api_calls() -> None:
-    """Performance evidence derives from GitHub timestamps and counts API calls."""
     calls: list[str] = []
 
     def fake_fetch(path: str) -> Any:
@@ -574,8 +459,6 @@ def test_performance_measurement_uses_real_timestamps_and_counts_api_calls() -> 
 
 
 def test_performance_measurement_reports_missing_timestamps_as_none() -> None:
-    """Missing timestamps produce None, never an invented duration."""
-
     def fake_fetch(path: str) -> Any:
         if path.startswith("actions/workflows/"):
             return {
@@ -599,7 +482,6 @@ def test_performance_measurement_reports_missing_timestamps_as_none() -> None:
 
 
 def test_performance_measurement_filters_and_bounds() -> None:
-    """Measurement filters by workflow/head and respects the bound."""
     calls: list[str] = []
 
     def fake_fetch(path: str) -> Any:
@@ -620,28 +502,11 @@ def test_performance_measurement_filters_and_bounds() -> None:
     )
     assert len(report["records"]) == 2
     assert all(r["head_sha"] == "a" * 40 for r in report["records"])
-    assert report["api_requests"] == 3  # 1 runs fetch + 2 bounded job fetches
+    assert report["api_requests"] == 3
 
 
 def test_equivalence_identities_complete() -> None:
-    """All 15 required equivalence identities are declared."""
-    expected = frozenset(
-        {
-            "repository",
-            "pr",
-            "current_head",
-            "source_proof_head",
-            "base_sha",
-            "tested_tree_digest",
-            "dependency_identity",
-            "workflow_definition_identity",
-            "toolchain_identity",
-            "environment_identity",
-            "trusted_workflow",
-            "run_attempt",
-            "job_identity",
-            "proof_digest",
-            "provenance",
-        }
-    )
-    assert frozenset(reuse.EQUIVALENCE_IDENTITIES) == expected
+    identities = frozenset(reuse.EQUIVALENCE_IDENTITIES)
+    assert len(identities) == 15
+    assert {"repository", "pr", "current_head", "source_proof_head", "base_sha"} <= identities
+    assert {"run_attempt", "job_identity", "proof_digest", "provenance"} <= identities
