@@ -222,7 +222,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: hunter-issue-agent-executor
-    permissions: {}
+    permissions:
+      actions: read
     outputs:
       advisory_code: ${{ steps.execute.outputs.advisory_code }}
       stderr_category: ${{ steps.execute.outputs.stderr_category }}
@@ -273,6 +274,8 @@ jobs:
       - name: Run the model once through isolation and seal the result
         id: execute
         env:
+          # Trusted provenance reads only; the executor pops this before invoking Kilo.
+          HUNTER_ISSUE_AGENT_PROVENANCE_TOKEN: ${{ github.token }}
           HUNTER_ISSUE_AGENT_HANDOFF_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_HANDOFF_KEY }}
           HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY }}
           ISSUE: ${{ needs.authorize.outputs.issue }}

@@ -2021,6 +2021,9 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
     from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
 
     run_id, attempt, _ = _run_context()
+    # Issue #772: consume the job-scoped read credential inside this trusted process,
+    # before constructing or launching any untrusted model/container process.
+    access = _ledger_access(configuration)
     os.environ["HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"] = configuration.prompt_verifying_key
     model_secrets = _executor_model_secrets(tuple(arguments.model_argv), arguments.model_key_name)
     probe = None
@@ -2033,7 +2036,7 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
         issue=arguments.issue,
         authorization_id=arguments.authorization_id,
         context=roles.RoleContext(run_id, attempt),
-        ledger=_ledger_access(configuration),
+        ledger=access,
         handoff_envelope=Path(arguments.handoff).read_bytes(),
         config=roles.ExecutorConfig(
             remote=_remote(configuration),

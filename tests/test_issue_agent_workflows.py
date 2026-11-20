@@ -422,7 +422,7 @@ def test_only_the_owner_label_decides_a_pending_fallback() -> None:
 
 def test_role_tokens_are_minimal() -> None:
     jobs = load(LIFECYCLE)["jobs"]
-    assert jobs["execute"]["permissions"] == {}
+    assert jobs["execute"]["permissions"] == {"actions": "read"}  # trusted provenance only; never model env
     assert jobs["validate"]["permissions"] == {"actions": "read"}
     assert set(jobs["publish"]["permissions"].values()) == {"read"}
     for job_id, domain in LIFECYCLE_DOMAINS.items():
