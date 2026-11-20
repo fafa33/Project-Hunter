@@ -112,6 +112,22 @@ def trusted_branch_preflight_run(runs: Sequence[Any], head_sha: str) -> tuple[di
     if not matching:
         return None, f"no exact-head {PRE_PR_WORKFLOW_NAME} push run exists for {head_sha}"
 
+    # The Actions API may return overlapping pages or contradictory snapshots.
+    # Never select a successful record when the same run/attempt has competing
+    # terminal or in-flight evidence: an ambiguous authority is no authority.
+    identities: dict[tuple[int, int], tuple[str, str]] = {}
+    try:
+        for run in matching:
+            identity = (int(run["id"]), int(run.get("run_attempt", 1)))
+            if identity[0] <= 0 or identity[1] <= 0:
+                raise ValueError("nonpositive run/attempt")
+            outcome = (str(run.get("status") or ""), str(run.get("conclusion") or ""))
+            if identity in identities and identities[identity] != outcome:
+                return None, "conflicting authoritative snapshots for one run/attempt"
+            identities[identity] = outcome
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None, "exact-head proof run/attempt identity is malformed"
+
     # A rerun of one Actions run increments run_attempt without changing id.
     # An older successful attempt must never authorize a newer failed attempt.
     try:
