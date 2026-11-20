@@ -595,15 +595,30 @@ def compute_provenance(root: Path, head_sha: str) -> tuple[str | None, str]:
         return None, f"provenance unavailable ({exc})"
 
 
+def _is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
+    """Whether ``ancestor`` is an ancestor commit of ``descendant`` in Git."""
+    completed = subprocess.run(
+        ("git", "merge-base", "--is-ancestor", ancestor, descendant),
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return completed.returncode == 0
+
+
 def find_previous_proven_head(repository: str, token: str, current_head: str) -> tuple[str | None, str]:
-    """Find a previous HEAD with a successful exact-head preflight proof.
+    """Find an ancestral HEAD whose successful exact-head proof proves this tree.
 
-    Searches the Actions API for successful Hunter / Pre-PR Preflight runs
-    on push events. Returns the most recent proven head SHA other than the
-    current head, or None if none exists.
+    The Actions API is searched for *all* successful Hunter / Pre-PR Preflight
+    push runs, not just the globally newest one. A candidate source proof is
+    eligible only when it is an ancestor of the current HEAD, its tested subtree
+    digest equals the current HEAD's, and its run/attempt/job and freshness are
+    re-derived by the canonical proof authority. The globally newest successful
+    run on an unrelated branch is never selected.
 
-    The old HEAD's success is never copied as the new HEAD's proof; this
-    only locates the immutable source proof to reference in a new decision.
+    The old HEAD's success is never copied as the new HEAD's proof; this only
+    locates the immutable source proof to reference in a new decision.
     """
     try:
         payload = _fetch(repository, token, "actions/runs?event=push&per_page=100")
@@ -612,37 +627,47 @@ def find_previous_proven_head(repository: str, token: str, current_head: str) ->
         runs = payload.get("workflow_runs")
         if not isinstance(runs, list):
             return None, "workflow_runs payload is malformed"
+        if not _HEX_SHA.fullmatch(current_head):
+            return None, "current head is not an exact 40-hex commit SHA"
 
-        proven_heads: list[tuple[int, str]] = []
+        proven_heads: dict[str, int] = {}
         for run in runs:
             if not isinstance(run, dict):
                 continue
-            name = str(run.get("name") or "")
-            if name != "Hunter / Pre-PR Preflight":
+            if str(run.get("name") or "") != "Hunter / Pre-PR Preflight":
                 continue
-            path = str(run.get("path") or "")
-            if path != PRE_PR_WORKFLOW_PATH:
+            if str(run.get("path") or "") != PRE_PR_WORKFLOW_PATH:
                 continue
-            event = str(run.get("event") or "")
-            if event != "push":
+            if str(run.get("event") or "") != "push":
                 continue
-            status = str(run.get("status") or "")
-            conclusion = str(run.get("conclusion") or "")
+            if str(run.get("status") or "") != "completed" or str(run.get("conclusion") or "") != "success":
+                continue
             head_sha = str(run.get("head_sha") or "")
-            if status != "completed" or conclusion != "success" or not head_sha:
+            if head_sha == current_head or not _HEX_SHA.fullmatch(head_sha):
                 continue
-            if head_sha == current_head:
+            run_id = int(run.get("id", 0))
+            if run_id <= 0:
                 continue
-            if not _HEX_SHA.fullmatch(head_sha):
-                continue
-            proven_heads.append((int(run.get("id", 0)), head_sha))
+            proven_heads[head_sha] = max(proven_heads.get(head_sha, 0), run_id)
 
         if not proven_heads:
             return None, "no previous successful exact-head proof found"
 
-        # Return the most recent proven head by run ID (latest first).
-        proven_heads.sort(reverse=True)
-        return proven_heads[0][1], ""
+        current_tree, problem = compute_tested_tree_digest(ROOT, current_head)
+        if problem or current_tree is None:
+            return None, f"current tested tree for source selection is unavailable ({problem})"
+
+        for source_head, _run_id in sorted(proven_heads.items(), key=lambda item: item[1], reverse=True):
+            if not _is_ancestor(ROOT, source_head, current_head):
+                continue
+            source_tree, problem = compute_tested_tree_digest(ROOT, source_head)
+            if problem or source_tree != current_tree:
+                continue
+            attempt, job_id, digest, problem = _source_proof_bindings(repository, token, source_head)
+            if problem or attempt <= 0 or job_id <= 0 or not digest:
+                continue
+            return source_head, ""
+        return None, "no ancestral source proof with an identical tested tree and fresh canonical bindings"
     except Exception as exc:  # noqa: BLE001 - any failure fails closed
         return None, f"previous proof search failed ({type(exc).__name__}: {exc})"
 
@@ -784,13 +809,16 @@ def _source_proof_bindings(
     repository: str,
     token: str,
     source_head: str,
+    *,
+    now: datetime | None = None,
 ) -> tuple[int, int, str, str]:
     """Derive the authoritative run/attempt, job and proof digest for the source proof.
 
     The digest is produced by the existing Canonical Proof Outcome Authority
     (``hunter_validation_reuse._canonical_job_proof``); this module never mints
-    its own proof. Any missing, ambiguous or invalid hosted job evidence fails
-    closed.
+    its own proof. Any missing, ambiguous, stale or invalid hosted job evidence
+    fails closed. Freshness is enforced by the canonical receipt verifier over
+    the canonical completion time, never by a caller-supplied age estimate.
     """
     if not _HEX_SHA.fullmatch(source_head):
         return 0, 0, "", "source proof head is not an exact 40-hex commit SHA"
@@ -803,6 +831,23 @@ def _source_proof_bindings(
         run, problem = trusted_branch_preflight_run(payload["workflow_runs"], source_head)
         if run is None or problem:
             return 0, 0, "", f"source proof run is not authoritative ({problem})"
+        produced_at, problem = _run_produced_at(run)
+        if produced_at is None:
+            return 0, 0, "", f"source proof completion time is unavailable ({problem})"
+        freshness_receipt = receipts.ValidationReceipt(
+            lane=receipts.FULL_LANE,
+            result=receipts.PASSED,
+            head_sha=source_head,
+            content_identity="",
+            definition_identity="",
+            toolchain_identity="",
+            produced_at=produced_at,
+            produced_by=PRODUCED_BY,
+        )
+        expected = receipts.ValidationIdentity(content="", definition="", toolchain="")
+        blocker = receipts.verify(freshness_receipt, expected, head_sha=source_head, now=now)
+        if blocker is not None:
+            return 0, 0, "", f"source proof freshness refused: {blocker}"
         attempt = int(run.get("run_attempt", 1))
         run_id = int(run["id"])
         # A single jobs snapshot is fetched and reused for both the canonical

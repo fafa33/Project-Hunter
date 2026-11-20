@@ -317,12 +317,21 @@ def test_missing_base_identity_refuses_reuse_before_proof(monkeypatch: pytest.Mo
     assert "base identity" in reason
 
 
+SOURCE = "d" * 40
+
+
 def _metadata_only_changes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Report changed paths as review-request metadata only."""
+    """Report cumulative and source-to-current changes as review metadata only."""
     monkeypatch.setattr(
         decision.governance,
         "read_pr_changed_paths",
         lambda *_a, **_k: (True, (".hunter/pre-ready-hostile-review.json",), None),
+    )
+    monkeypatch.setattr(reuse, "find_previous_proven_head", lambda *_a, **_k: (SOURCE, ""))
+    monkeypatch.setattr(
+        decision,
+        "changed_paths_between",
+        lambda *_a, **_k: ([".hunter/pre-ready-hostile-review.json"], ""),
     )
 
 
@@ -387,6 +396,57 @@ def test_failed_equivalence_falls_back_to_exact_head_proof(monkeypatch: pytest.M
     reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
     assert reusable
     assert "exact-head" in reason
+
+
+def test_cumulative_metadata_only_cannot_hide_a_code_delta(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A later code commit is not metadata-only merely because an earlier one was."""
+    _metadata_only_changes(monkeypatch)
+    monkeypatch.setattr(
+        decision,
+        "changed_paths_between",
+        lambda *_a, **_k: ([".hunter/pre-ready-hostile-review.json", "scripts/hunter_pr_preflight.py"], ""),
+    )
+    monkeypatch.setattr(
+        reuse,
+        "verify_for_candidate",
+        lambda *_a, **_k: pytest.fail("equivalence must not run for a code-bearing delta"),
+    )
+    _failing_resolve_spy(monkeypatch)
+    reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
+    assert not reusable
+    assert "not metadata-only" in reason
+
+
+def test_metadata_only_without_source_proof_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """No authoritative source proof means no delta classification and no reuse."""
+    _metadata_only_changes(monkeypatch)
+    monkeypatch.setattr(reuse, "find_previous_proven_head", lambda *_a, **_k: (None, "no ancestral proof"))
+    monkeypatch.setattr(
+        reuse,
+        "verify_for_candidate",
+        lambda *_a, **_k: pytest.fail("equivalence must not run without a source proof"),
+    )
+    _failing_resolve_spy(monkeypatch)
+    reusable, reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
+    assert not reusable
+    assert "no usable source proof" in reason
+
+
+def test_metadata_only_equivalence_binds_the_authoritative_source_head(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The source head selected by the canonical authority is the one verified."""
+    _metadata_only_changes(monkeypatch)
+    seen: dict[str, Any] = {}
+
+    def fake_verify(*_args: Any, **kwargs: Any) -> reuse.EquivalenceDecision:
+        seen.update(kwargs)
+        return reuse.EquivalenceDecision(True, "verified cross-HEAD equivalence")
+
+    monkeypatch.setattr(reuse, "verify_for_candidate", fake_verify)
+    reusable, _reason = decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token")
+    assert reusable
+    assert seen["source_proof_head"] == SOURCE
 
 
 def test_review_metadata_with_workflow_change_requires_fresh_trusted_validation(

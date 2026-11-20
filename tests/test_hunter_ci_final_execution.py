@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,7 @@ def _successful_proof_run(run_id: int = 100, head_sha: str = SOURCE_HEAD) -> dic
         "event": "push",
         "status": "completed",
         "conclusion": "success",
+        "updated_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
     }
 
 
@@ -241,6 +243,134 @@ def test_failed_job_snapshot_fails_closed(monkeypatch: pytest.MonkeyPatch) -> No
     assert digest == ""
     assert "did not succeed" in problem
     assert len([path for path in calls if "/jobs" in path]) == 1
+
+
+def test_stale_source_proof_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A successful source proof older than the receipt bound is never reusable."""
+    stale = (datetime.now(UTC) - timedelta(seconds=receipts.DEFAULT_MAX_AGE_SECONDS + 60)).isoformat()
+    run = _successful_proof_run()
+    run["updated_at"] = stale.replace("+00:00", "Z")
+
+    def fake_fetch(repository: str, token: str, path: str) -> Any:
+        if "actions/runs?" in path:
+            return {"workflow_runs": [run]}
+        raise AssertionError("stale proof must not fetch job evidence")
+
+    monkeypatch.setattr(reuse, "_fetch", fake_fetch)
+    attempt, job_id, digest, problem = reuse._source_proof_bindings(REPO, "token", SOURCE_HEAD)
+    assert (attempt, job_id, digest) == (0, 0, "")
+    assert "stale" in problem
+    assert str(receipts.DEFAULT_MAX_AGE_SECONDS) in problem
+
+
+def test_source_proof_without_completion_time_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A successful run with no canonical timestamp cannot establish freshness."""
+    run = _successful_proof_run()
+    run.pop("updated_at")
+
+    def fake_fetch(repository: str, token: str, path: str) -> Any:
+        if "actions/runs?" in path:
+            return {"workflow_runs": [run]}
+        raise AssertionError("untimed proof must not fetch job evidence")
+
+    monkeypatch.setattr(reuse, "_fetch", fake_fetch)
+    attempt, job_id, digest, problem = reuse._source_proof_bindings(REPO, "token", SOURCE_HEAD)
+    assert (attempt, job_id, digest) == (0, 0, "")
+    assert "completion time is unavailable" in problem
+
+
+def test_source_proof_freshness_uses_canonical_verifier(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The canonical completion time is checked against the canonical age bound."""
+    now = datetime(2026, 1, 1, 0, 5, tzinfo=UTC)
+    run = _successful_proof_run()
+    run["updated_at"] = "2026-01-01T00:00:00Z"
+
+    def fake_fetch(repository: str, token: str, path: str) -> Any:
+        if "actions/runs?" in path:
+            return {"workflow_runs": [run]}
+        return {
+            "jobs": [
+                {
+                    "id": JOB_ID,
+                    "run_id": 100,
+                    "name": "Hunter Pre-PR Preflight",
+                    "status": "completed",
+                    "conclusion": "success",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(reuse, "_fetch", fake_fetch)
+    attempt, job_id, digest, problem = reuse._source_proof_bindings(REPO, "token", SOURCE_HEAD, now=now)
+    assert problem == ""
+    assert attempt == RUN_ATTEMPT and job_id == JOB_ID and digest.startswith("sha256:")
+
+
+def test_previous_proven_head_ignores_unrelated_global_latest(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The globally newest successful proof on an unrelated commit is not a source."""
+    unrelated = "e" * 40
+    ancestral = "f" * 40
+    runs = [
+        _successful_proof_run(run_id=999, head_sha=unrelated),
+        _successful_proof_run(run_id=100, head_sha=ancestral),
+    ]
+    monkeypatch.setattr(reuse, "_fetch", lambda *_a, **_k: {"workflow_runs": runs})
+    monkeypatch.setattr(reuse, "_is_ancestor", lambda root, a, d: a == ancestral)
+    monkeypatch.setattr(reuse, "compute_tested_tree_digest", lambda root, head: (FAKE_TESTED_DIGEST, ""))
+    checked: list[str] = []
+
+    def fake_bindings(repository: str, token: str, head: str, **kwargs: Any) -> tuple[int, int, str, str]:
+        checked.append(head)
+        return RUN_ATTEMPT, JOB_ID, PROOF_DIGEST, ""
+
+    monkeypatch.setattr(reuse, "_source_proof_bindings", fake_bindings)
+    source, problem = reuse.find_previous_proven_head(REPO, "token", CURRENT_HEAD)
+    assert problem == ""
+    assert source == ancestral
+    assert checked == [ancestral]
+
+
+def test_previous_proven_head_requires_tree_and_canonical_bindings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ancestral proof with a different tree or unverifiable bindings is skipped."""
+    wrong_tree = "1" * 40
+    wrong_binding = "2" * 40
+    good = "3" * 40
+    runs = [
+        _successful_proof_run(run_id=300, head_sha=wrong_tree),
+        _successful_proof_run(run_id=200, head_sha=wrong_binding),
+        _successful_proof_run(run_id=100, head_sha=good),
+    ]
+    monkeypatch.setattr(reuse, "_fetch", lambda *_a, **_k: {"workflow_runs": runs})
+    monkeypatch.setattr(reuse, "_is_ancestor", lambda root, a, d: True)
+
+    def fake_digest(root: Path, head: str) -> tuple[str, str]:
+        return ("sha256:" + "9" * 64, "") if head == wrong_tree else (FAKE_TESTED_DIGEST, "")
+
+    monkeypatch.setattr(reuse, "compute_tested_tree_digest", fake_digest)
+    checked: list[str] = []
+
+    def fake_bindings(repository: str, token: str, head: str, **kwargs: Any) -> tuple[int, int, str, str]:
+        checked.append(head)
+        if head == wrong_binding:
+            return 0, 0, "", "source proof freshness refused: stale"
+        return RUN_ATTEMPT, JOB_ID, PROOF_DIGEST, ""
+
+    monkeypatch.setattr(reuse, "_source_proof_bindings", fake_bindings)
+    source, problem = reuse.find_previous_proven_head(REPO, "token", CURRENT_HEAD)
+    assert problem == ""
+    assert source == good
+    assert set(checked) == {wrong_binding, good}
+
+
+def test_previous_proven_head_fails_closed_without_eligible_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No ancestral, tree-identical, canonically proven source means no equivalence."""
+    runs = [_successful_proof_run(run_id=999, head_sha="e" * 40)]
+    monkeypatch.setattr(reuse, "_fetch", lambda *_a, **_k: {"workflow_runs": runs})
+    monkeypatch.setattr(reuse, "_is_ancestor", lambda root, a, d: False)
+    monkeypatch.setattr(reuse, "compute_tested_tree_digest", lambda root, head: (FAKE_TESTED_DIGEST, ""))
+    source, problem = reuse.find_previous_proven_head(REPO, "token", CURRENT_HEAD)
+    assert source is None
+    assert "no ancestral source proof" in problem
 
 
 # ---------------------------------------------------------------------------

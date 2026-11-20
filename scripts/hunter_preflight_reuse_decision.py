@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -84,6 +85,30 @@ def is_trusted_definition_path(path: str) -> bool:
         or path == "conftest.py"
         or path.endswith("/conftest.py")
     )
+
+
+def changed_paths_between(root: Path, source_head: str, current_head: str) -> tuple[list[str] | None, str]:
+    """The exact commit delta between the source proof HEAD and the current HEAD.
+
+    The pull-request files API reports the cumulative base-to-head diff, which
+    can hide an ordinary code commit behind an earlier metadata-only commit.
+    Equivalence must instead classify only what changed since the source proof.
+    """
+    if not re.fullmatch(r"[0-9a-f]{40}", source_head) or not re.fullmatch(r"[0-9a-f]{40}", current_head):
+        return None, "source/current proof heads must be exact 40-hex commit IDs"
+    try:
+        completed = subprocess.run(
+            ("git", "diff", "--name-only", "--diff-filter=ACDMRTUXB", source_head, current_head, "--"),
+            cwd=root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        return None, f"source-to-current diff unavailable ({type(exc).__name__}: {exc})"
+    if completed.returncode != 0:
+        return None, f"source-to-current diff unavailable ({completed.stderr.strip() or 'git diff failed'})"
+    return completed.stdout.splitlines(), ""
 
 
 def emit(reusable: bool, reason: str) -> None:
@@ -149,12 +174,22 @@ def decide(
         return False, f"candidate changes trusted validation definition paths: {', '.join(touched)}"
 
     # Issue #606: a metadata-only HEAD change (e.g. a review-request-only
-    # commit) leaves the tested inputs unchanged. Reuse is permitted only when
-    # the Canonical Proof Outcome Authority verifies cross-HEAD equivalence and
-    # issues a NEW current-HEAD-bound decision referencing the immutable source
-    # proof. Every missing/ambiguous identity fails closed into a fresh run.
+    # commit) leaves the tested inputs unchanged. The metadata classification
+    # applies to the source-proof-to-current commit delta, not to the cumulative
+    # PR diff: an earlier metadata commit must not disguise a later code change.
+    # Reuse is permitted only when the Canonical Proof Outcome Authority verifies
+    # cross-HEAD equivalence and issues a NEW current-HEAD-bound decision.
+    # Every missing/ambiguous identity fails closed into a fresh run.
     equivalence_refusal = ""
-    if impact.classify_review_metadata_only(list(changed_paths)):
+    if changed_paths:
+        source_head, source_problem = reuse.find_previous_proven_head(repository, token, head_sha)
+        if not source_head:
+            return False, f"metadata-only candidate has no usable source proof ({source_problem})"
+        delta_paths, problem = changed_paths_between(candidate_root, source_head, head_sha)
+        if problem:
+            return False, problem
+        if not impact.classify_review_metadata_only(delta_paths or []):
+            return False, "candidate HEAD delta since the source proof is not metadata-only"
         equivalent = reuse.verify_for_candidate(
             candidate_root,
             repository=repository,
@@ -162,6 +197,7 @@ def decide(
             current_head=head_sha,
             base_sha=base_sha,
             token=token,
+            source_proof_head=source_head,
         )
         if equivalent.equivalent:
             # A successful equivalence skips the trusted gate chain, so it must

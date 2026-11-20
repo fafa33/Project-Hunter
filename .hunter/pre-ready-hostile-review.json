@@ -3,19 +3,19 @@
     "acceptance_criteria": [
       {
         "criterion": "Changes solely to review-request metadata should not repeat unrelated heavy suites if unchanged tested inputs can be proven identical, while review-request exact-head validation and independent review authority remain mandatory.",
-        "evidence": "scripts/hunter_validation_reuse.py computes a Git-blob-based tested-subtree digest (git ls-tree object IDs/modes/paths) excluding only .hunter/pre-ready-hostile-review.json, verifies 15 equivalence identities, and exposes verify_for_candidate, wired into hunter_preflight_reuse_decision.decide() for metadata-only diffs. scripts/hunter_ci_final_execution.py is only the standalone operator CLI/consumer. Reuse succeeds only with a new current-HEAD-bound decision referencing the immutable source proof; independent exact-head review is never bypassed. The digest regression uses a hermetic temporary Git repository rather than relying on the checked-out HEAD history. Focused suite: 131 passed.",
+        "evidence": "scripts/hunter_validation_reuse.py computes a Git-blob-based tested-subtree digest (git ls-tree object IDs/modes/paths) excluding only .hunter/pre-ready-hostile-review.json, verifies 15 equivalence identities, and exposes verify_for_candidate, wired into hunter_preflight_reuse_decision.decide() for metadata-only diffs. scripts/hunter_ci_final_execution.py is only the standalone operator CLI/consumer. Reuse succeeds only with a new current-HEAD-bound decision referencing the immutable source proof; independent exact-head review is never bypassed. The digest regression uses a hermetic temporary Git repository rather than relying on the checked-out HEAD history. Focused suite: 131 passed. Fresh local remediation review: Codex P1 stale proof is rejected by canonical completion-time receipt verification; P2 source selection requires ancestral matching tested-tree digest and canonical job proof; P2 metadata-only checks source-to-candidate commit delta while cumulative trusted-definition paths remain protected. Focused 96 tests passed; Ruff and Black passed. Independent Codex review authority is not asserted; outstanding threads remain subject to GitHub verification.",
         "id": "AC-606-01",
         "verdict": "satisfied"
       },
       {
         "criterion": "Run one final authoritative aggregate gate after candidate HEAD stabilizes; bind outcome to repo, PR, exact HEAD, run attempt, proof digest and trusted job, and never self-depend on an unpublished status.",
-        "evidence": "_source_proof_bindings lives inside the canonical authority module (hunter_validation_reuse) and derives run/attempt/job/digest using that module's own _canonical_job_proof and trusted_branch_preflight_run. A single validated jobs API snapshot supplies both the canonical digest and the authoritative job identity, so contradictory successive reads cannot authorize reuse. No second proof authority or status publisher was introduced. EQUIVALENCE_IDENTITIES binds repository, PR, current head, source proof head, base, tested subtree, dependency/workflow/toolchain/environment identities, run attempt, trusted job, proof digest and provenance.",
+        "evidence": "_source_proof_bindings lives inside the canonical authority module (hunter_validation_reuse) and derives run/attempt/job/digest using that module's own _canonical_job_proof and trusted_branch_preflight_run. A single validated jobs API snapshot supplies both the canonical digest and the authoritative job identity, so contradictory successive reads cannot authorize reuse. No second proof authority or status publisher was introduced. EQUIVALENCE_IDENTITIES binds repository, PR, current head, source proof head, base, tested subtree, dependency/workflow/toolchain/environment identities, run attempt, trusted job, proof digest and provenance. Fresh local remediation review: Codex P1 stale proof is rejected by canonical completion-time receipt verification; P2 source selection requires ancestral matching tested-tree digest and canonical job proof; P2 metadata-only checks source-to-candidate commit delta while cumulative trusted-definition paths remain protected. Focused 96 tests passed; Ruff and Black passed. Independent Codex review authority is not asserted; outstanding threads remain subject to GitHub verification.",
         "id": "AC-606-02",
         "verdict": "satisfied"
       },
       {
         "criterion": "Cancel or supersede obsolete runs on HEAD changes and protect against ABA changes, parallel pushes, stale successes, delayed callbacks, overlapping controllers, retry, cancellation and replayed status; an old HEAD must never authorize a newer HEAD.",
-        "evidence": "Hostile regression tests in tests/test_preflight_reuse_decision.py exercise the real production selectors and decision functions for A\u2192B while A runs, A\u2192B\u2192A, two overlapping controllers producing identical canonical outcomes, stale callbacks, over-deadline pending publication, cancelled runs, conflicting same-run/attempt API snapshots, newer-attempt precedence, rejected replayed digests and source/current head mismatch. A successful cross-HEAD equivalence now passes the same live PR HEAD/base recheck as ordinary reuse, and a failed equivalence falls back to the existing exact-head resolver before any fresh run. Full focused set: 131 passed.",
+        "evidence": "Hostile regression tests in tests/test_preflight_reuse_decision.py exercise the real production selectors and decision functions for A\u2192B while A runs, A\u2192B\u2192A, two overlapping controllers producing identical canonical outcomes, stale callbacks, over-deadline pending publication, cancelled runs, conflicting same-run/attempt API snapshots, newer-attempt precedence, rejected replayed digests and source/current head mismatch. A successful cross-HEAD equivalence now passes the same live PR HEAD/base recheck as ordinary reuse, and a failed equivalence falls back to the existing exact-head resolver before any fresh run. Full focused set: 131 passed. Fresh local remediation review: Codex P1 stale proof is rejected by canonical completion-time receipt verification; P2 source selection requires ancestral matching tested-tree digest and canonical job proof; P2 metadata-only checks source-to-candidate commit delta while cumulative trusted-definition paths remain protected. Focused 96 tests passed; Ruff and Black passed. Independent Codex review authority is not asserted; outstanding threads remain subject to GitHub verification.",
         "id": "AC-606-03",
         "verdict": "satisfied"
       },
@@ -27,7 +27,7 @@
       },
       {
         "criterion": "Independent hostile review request must be fresh for the exact candidate and must not force unnecessary heavy retests; findings must be resolved and no reviewer authority self-certified.",
-        "evidence": "The exact-head-bound .hunter/pre-ready-hostile-review.json is regenerated at commit time by the authorized writer finalizer from this fresh judgement for governing Issue #606 and the actual base-to-staged-head range, with all 11 adversarial dimensions and all applicable defect families recomputed from the diff. Findings is empty; no reviewer authority is asserted by the writer.",
+        "evidence": "The exact-head-bound .hunter/pre-ready-hostile-review.json is regenerated at commit time by the authorized writer finalizer from this fresh judgement for governing Issue #606 and the actual base-to-staged-head range, with all 11 adversarial dimensions and all applicable defect families recomputed from the diff. Findings is empty; no reviewer authority is asserted by the writer. Fresh local remediation review: Codex P1 stale proof is rejected by canonical completion-time receipt verification; P2 source selection requires ancestral matching tested-tree digest and canonical job proof; P2 metadata-only checks source-to-candidate commit delta while cumulative trusted-definition paths remain protected. Focused 96 tests passed; Ruff and Black passed. Independent Codex review authority is not asserted; outstanding threads remain subject to GitHub verification.",
         "id": "AC-606-05",
         "verdict": "satisfied"
       },
@@ -55,87 +55,87 @@
     "base_sha": "3e6e52f298323ac4cc2a29f531fc390d062c50bd",
     "defect_families": [
       {
-        "evidence": "Cross-HEAD reuse binds repository, PR, current HEAD, source proof HEAD, run, attempt, job and proof digest; the CLI no longer accepts caller-supplied attempt/job/digest labels and verifies through the canonical authority, so an authorization cannot be replayed onto another operation or resulting content.",
+        "evidence": "Cross-HEAD reuse binds repository, PR, current HEAD, source proof HEAD, run, attempt, job and proof digest; the CLI no longer accepts caller-supplied attempt/job/digest labels and verifies through the canonical authority, so an authorization cannot be replayed onto another operation or resulting content. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "The tested-subtree digest is derived from Git blob object IDs via git ls-tree, not caller-supplied labels; the exact-head review request is regenerated from fresh judgement with content-bound review_target entries, so hand-edited or forged equivalence/review artifacts are detectable.",
+        "evidence": "The tested-subtree digest is derived from Git blob object IDs via git ls-tree, not caller-supplied labels; the exact-head review request is regenerated from fresh judgement with content-bound review_target entries, so hand-edited or forged equivalence/review artifacts are detectable. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "No connector write-channel or proof-granting code changed. Source proof provenance is read from the trusted Actions API through the existing canonical authority; the candidate cannot mint its own proof. The measurement CLI was hardened to have no caller-selected write target.",
+        "evidence": "No connector write-channel or proof-granting code changed. Source proof provenance is read from the trusted Actions API through the existing canonical authority; the candidate cannot mint its own proof. The measurement CLI was hardened to have no caller-selected write target. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "No writer/provenance resolution code changed. The commit is signed with the repository-declared ed25519 SSH signing key through the authorized writer channel; no author/committer alias logic was touched.",
+        "evidence": "No writer/provenance resolution code changed. The commit is signed with the repository-declared ed25519 SSH signing key through the authorized writer channel; no author/committer alias logic was touched. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "All changes are committed through signed commits on the existing branch with no rewind or force-push; every commit has base-to-HEAD range evidence and no manual rewind is required.",
+        "evidence": "All changes are committed through signed commits on the existing branch with no rewind or force-push; every commit has base-to-HEAD range evidence and no manual rewind is required. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "The governed review request is regenerated at its canonical path for the exact staged head before the signed commit and verified by the finalizer; the stale PR #774 request is not reused and any later content change re-invalidates it.",
+        "evidence": "The governed review request is regenerated at its canonical path for the exact staged head before the signed commit and verified by the finalizer; the stale PR #774 request is not reused and any later content change re-invalidates it. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Independent exact-head hostile review remains mandatory; the refreshed request records all 11 adversarial dimensions, all applicable defect families, and empty findings. This change does not claim readiness or short-circuit review.",
+        "evidence": "Independent exact-head hostile review remains mandatory; the refreshed request records all 11 adversarial dimensions, all applicable defect families, and empty findings. This change does not claim readiness or short-circuit review. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "No tri-state admission change was made. Metadata-only uncertainty returns a fail-closed refusal into a fresh full run; no merely-pending prerequisite is published as a final success by this path.",
+        "evidence": "No tri-state admission change was made. Metadata-only uncertainty returns a fail-closed refusal into a fresh full run; no merely-pending prerequisite is published as a final success by this path. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Evidence in this review is limited to identities actually implemented and exercised by committed tests; no unmet enforcement stage is claimed for any defect family, and the hosted BEFORE/AFTER measurements are reported as observed samples with no causal improvement claimed.",
+        "evidence": "Evidence in this review is limited to identities actually implemented and exercised by committed tests; no unmet enforcement stage is claimed for any defect family, and the hosted BEFORE/AFTER measurements are reported as observed samples with no causal improvement claimed. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "This is the core hardened path, implemented inside the already-root-of-trust hunter_validation_reuse module: expensive hosted proof reuse requires 15 verifiable identities including Git-content tested subtree, definition, toolchain, base, exact head, run attempt, trusted job and canonical proof digest; any changed input, stale head or ambiguous evidence fails closed. Covered by the equivalence and enforcement tests.",
+        "evidence": "This is the core hardened path, implemented inside the already-root-of-trust hunter_validation_reuse module: expensive hosted proof reuse requires 15 verifiable identities including Git-content tested subtree, definition, toolchain, base, exact head, run attempt, trusted job and canonical proof digest; any changed input, stale head or ambiguous evidence fails closed. Covered by the equivalence and enforcement tests. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "No runtime bootstrap, volume, or issuer-composition code is touched by this diff; applicability is structural from the changed-path set only, and no bootstrap invariant is weakened.",
+        "evidence": "No runtime bootstrap, volume, or issuer-composition code is touched by this diff; applicability is structural from the changed-path set only, and no bootstrap invariant is weakened. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "No live-instance execution ledger, ownership, or lease code is touched; this diff cannot fail or terminally mutate another instance's active work.",
+        "evidence": "No live-instance execution ledger, ownership, or lease code is touched; this diff cannot fail or terminally mutate another instance's active work. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "No shutdown, worker-drain, or dispatcher code is touched; accepted-execution drain semantics are unchanged.",
+        "evidence": "No shutdown, worker-drain, or dispatcher code is touched; accepted-execution drain semantics are unchanged. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "No execution ledger or preflight-ordering code is touched and this change creates no ledger claim; the canonical pre-push and hosted proof boundaries are preserved.",
+        "evidence": "No execution ledger or preflight-ordering code is touched and this change creates no ledger claim; the canonical pre-push and hosted proof boundaries are preserved. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "No workflow or validation-stage contract is modified. The candidate still passes the repository pre-push safety boundary and the full hosted exact-head Pre-PR proof; no stage is disabled or skipped by this diff.",
+        "evidence": "No workflow or validation-stage contract is modified. The candidate still passes the repository pre-push safety boundary and the full hosted exact-head Pre-PR proof; no stage is disabled or skipped by this diff. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "The governed review asset is regenerated at its canonical tracked path .hunter/pre-ready-hostile-review.json and is loadable/verifiable by verify_review_request; no unloadable or character-corrupted governance path was introduced.",
+        "evidence": "The governed review asset is regenerated at its canonical tracked path .hunter/pre-ready-hostile-review.json and is loadable/verifiable by verify_review_request; no unloadable or character-corrupted governance path was introduced. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "New tests are hermetic: equivalence/time/API behavior is driven by monkeypatched clocks and fetch functions, and subtree-digest tests read only a temporary local Git repository. No deterministic test asserts on an Issue body, remote API response, or live endpoint; shared helpers remove duplicated fixtures. The hosted performance figures are recorded as external evidence, not asserted by tests.",
+        "evidence": "New tests are hermetic: equivalence/time/API behavior is driven by monkeypatched clocks and fetch functions, and subtree-digest tests read only a temporary local Git repository. No deterministic test asserts on an Issue body, remote API response, or live endpoint; shared helpers remove duplicated fixtures. The hosted performance figures are recorded as external evidence, not asserted by tests. Remediation rechecked locally against 96 focused passing tests; no independent reviewer approval claimed.",
         "family": "DFF-035",
         "outcome": "clear"
       }
@@ -150,7 +150,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "ec2d66d9c697d013c7d474e341e7d7a3aadfb029",
+        "blob_sha": "37607804c674054e73be43ebb5f3961eedca9636",
         "path": "tests/test_hunter_ci_final_execution.py",
         "previous_path": "",
         "status": "added"
@@ -168,13 +168,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "2c23c1e5afe6e3130631e98d83a643d4225969bd",
+        "blob_sha": "6f0132541e4a0f3e3af1b5f73f33ada2a86ac741",
         "path": "scripts/hunter_preflight_reuse_decision.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "340c4e6794a460523cb39af19fd55fedd78c12fc",
+        "blob_sha": "99619fd639e822080a2c30c5ed93560798b9e1f0",
         "path": "scripts/hunter_validation_reuse.py",
         "previous_path": "",
         "status": "modified"
@@ -192,17 +192,17 @@
         "status": "modified"
       },
       {
-        "blob_sha": "a3b9222b01e345de021c2f3b085aee8574931b70",
+        "blob_sha": "71dc55aed83f32db7fec9aab7f2a3da2807555f1",
         "path": "tests/test_preflight_reuse_decision.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "5fa12c0a143d7ae010237b8a5a923edc470d5bac228ef7f8b6044d2c287c6883"
+    "review_target_digest": "6adf03de5098b02ab3f8754ff89a518b46eff98873e7c16d793207774caaccf1"
   },
-  "review_id": "e83fa44206eaec219dbe4c7f611d45a11524bfb9f3e439c43737b393274adfe7",
+  "review_id": "b1a22f6eefbab52b20a7c8c6fc00f00b1971b45122f4d7df6cb39b0506ba193b",
   "review_request": {
-    "claims_id": "e83fa44206eaec219dbe4c7f611d45a11524bfb9f3e439c43737b393274adfe7",
+    "claims_id": "b1a22f6eefbab52b20a7c8c6fc00f00b1971b45122f4d7df6cb39b0506ba193b",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
