@@ -1,4 +1,4 @@
-from hunter_ci_impact import select_tests
+from hunter_ci_impact import classify_review_metadata_only, select_tests
 
 
 def test_changed_test_maps_to_itself():
@@ -102,3 +102,11 @@ def test_cli_rejects_untrusted_git_revision_arguments(monkeypatch):
 
     monkeypatch.setattr(sys, "argv", ["impact", "--base", "HEAD~1", "--head", "b" * 40])
     assert impact.main() == 2
+
+
+def test_review_request_only_classification_is_advisory():
+    assert classify_review_metadata_only([".hunter/pre-ready-hostile-review.json"])
+    assert not classify_review_metadata_only([])
+    assert not classify_review_metadata_only([".hunter/pre-ready-hostile-review.json", "pyproject.toml"])
+    assert not classify_review_metadata_only([".hunter/pre-ready-hostile-review.json.bak"])
+    assert select_tests([".hunter/pre-ready-hostile-review.json"], set())[0]

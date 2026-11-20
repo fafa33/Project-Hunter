@@ -16,6 +16,18 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+REVIEW_REQUEST_PATH = ".hunter/pre-ready-hostile-review.json"
+
+
+def classify_review_metadata_only(changed: list[str]) -> bool:
+    """Conservative metadata-only signal; never an authorization to skip proof.
+
+    Empty/unknown diffs and mixed security or code changes always return False.
+    Consumers must independently validate exact-head/base and trusted receipts.
+    """
+    return bool(changed) and all(path == REVIEW_REQUEST_PATH for path in changed)
+
+
 def select_tests(changed: list[str], available: set[str]) -> tuple[bool, tuple[str, ...], str]:
     """Return full-proof requirement, focused tests and audit reason."""
     if not changed:
@@ -53,7 +65,13 @@ def main() -> int:
         print("[Hunter CI Impact] FULL REQUIRED: git diff unavailable", flush=True)
         return 2
     available = {str(p.relative_to(ROOT)) for p in (ROOT / "tests").rglob("test_*.py")}
-    full, tests, reason = select_tests(result.stdout.splitlines(), available)
+    changed = result.stdout.splitlines()
+    if classify_review_metadata_only(changed):
+        print(
+            "[Hunter CI Impact] REVIEW-METADATA-ONLY: advisory classification; authoritative full proof still required",
+            flush=True,
+        )
+    full, tests, reason = select_tests(changed, available)
     print(f"[Hunter CI Impact] {'FULL REQUIRED' if full else 'FOCUSED FIRST'}: {reason}", flush=True)
     if tests:
         print("[Hunter CI Impact] selected: " + " ".join(tests), flush=True)
