@@ -74,6 +74,7 @@ def _mock_canonical_bindings(
 
 
 def _mock_identical_trees(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(reuse, "_commit_has_red_mode", lambda root, head: (False, ""))
     monkeypatch.setattr(
         reuse,
         "compute_tested_tree_digest",
@@ -388,6 +389,7 @@ def test_cross_head_equivalence_different_trees_fails_closed(monkeypatch: pytest
         return "sha256:" + "e" * 64, ""
 
     monkeypatch.setattr(reuse, "compute_tested_tree_digest", fake_digest)
+    monkeypatch.setattr(reuse, "_commit_has_red_mode", lambda root, head: (False, ""))
 
     decision = _verify()
     assert decision.equivalent is False
@@ -640,3 +642,42 @@ def test_equivalence_identities_complete() -> None:
     assert len(identities) == 15
     assert {"repository", "pr", "current_head", "source_proof_head", "base_sha"} <= identities
     assert {"run_attempt", "job_identity", "proof_digest", "provenance"} <= identities
+
+
+def test_red_source_cannot_be_promoted_by_metadata_only_head(tmp_path: Path) -> None:
+    """An expected-RED successful run cannot authorize a normal full-suite proof."""
+    _git(tmp_path, "init")
+    _git(tmp_path, "config", "user.name", "Hunter Regression")
+    _git(tmp_path, "config", "user.email", "hunter-regression@example.invalid")
+    (tmp_path / "app.py").write_text("assert True\n")
+    (tmp_path / reuse.MODE_MARKER).write_text("tests-first-red\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-m", "expected red")
+    source = _git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / ".hunter").mkdir()
+    (tmp_path / ".hunter" / "pre-ready-hostile-review.json").write_text("{}\n")
+    _git(tmp_path, "add", ".")
+    _git(tmp_path, "commit", "-m", "review metadata only")
+    current = _git(tmp_path, "rev-parse", "HEAD")
+    assert reuse._commit_has_red_mode(tmp_path, source) == (True, "")
+    assert reuse._commit_has_red_mode(tmp_path, current) == (True, "")
+    decision = reuse.verify_equivalence(
+        tmp_path,
+        repository=REPO,
+        pr_number=PR,
+        current_head=current,
+        source_proof_head=source,
+        base_sha=source,
+        token="token",
+        run_attempt=1,
+        job_id=42,
+        proof_digest=PROOF_DIGEST,
+    )
+    assert not decision.equivalent
+    assert "tests-first-red" in decision.reason
+
+
+def test_red_marker_git_failure_fails_closed(tmp_path: Path) -> None:
+    present, problem = reuse._commit_has_red_mode(tmp_path, SOURCE_HEAD)
+    assert not present
+    assert "unavailable" in problem

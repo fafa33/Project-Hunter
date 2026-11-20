@@ -672,6 +672,24 @@ def find_previous_proven_head(repository: str, token: str, current_head: str) ->
         return None, f"previous proof search failed ({type(exc).__name__}: {exc})"
 
 
+def _commit_has_red_mode(root: Path, head_sha: str) -> tuple[bool, str]:
+    """Check the committed RED marker, never just the checkout working tree.
+
+    A successful tests-first-red run proves that tests FAILED, not that the
+    full suite passed. Missing Git evidence must not authorize proof reuse.
+    """
+    result = subprocess.run(
+        ("git", "ls-tree", "--name-only", head_sha, "--", MODE_MARKER),
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return False, "tests-first-red mode evidence unavailable"
+    return MODE_MARKER in result.stdout.splitlines(), ""
+
+
 def verify_equivalence(
     root: Path,
     *,
@@ -691,6 +709,18 @@ def verify_equivalence(
     current-HEAD-bound decision is issued that references the original
     immutable proof.
     """
+    # Source proof must be normal full validation, not an expected-RED run.
+    # Check BOTH committed HEADs: the metadata-only successor inherits the
+    # same tested tree, but must never promote an expected failure to success.
+    for proof_head in (source_proof_head, current_head):
+        red_mode, mode_problem = _commit_has_red_mode(root, proof_head)
+        if mode_problem:
+            return EquivalenceDecision(False, mode_problem)
+        if red_mode:
+            return EquivalenceDecision(False, "tests-first-red head is never full repository proof")
+    if (root / MODE_MARKER).exists():
+        return EquivalenceDecision(False, "tests-first-red working tree is never full repository proof")
+
     bindings: dict[str, str] = {}
 
     # 1. Repository identity.
