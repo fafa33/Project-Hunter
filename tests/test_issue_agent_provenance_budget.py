@@ -261,6 +261,7 @@ def test_only_the_trusted_intake_steps_receive_the_job_scoped_read_token() -> No
         if lifecycle.PROVENANCE_TOKEN_ENV in (step.get("env") or {})
     }
     assert holders == {
+        ("execute", "Run the model once through isolation and seal the result"),
         ("validate", "Read the bound result binding from the ledger"),
         ("validate", "Validate the exact unsigned commit (credential-free)"),
         ("publish", "Read the bound result binding from the ledger"),
@@ -272,4 +273,55 @@ def test_only_the_trusted_intake_steps_receive_the_job_scoped_read_token() -> No
         assert (
             step["env"][lifecycle.PROVENANCE_TOKEN_ENV] == "${{ github.token }}"
         )  # the job's own token, no new secret
-    assert jobs["execute"]["permissions"] == {}
+    assert jobs["execute"]["permissions"] == {"actions": "read"}
+    executor_step = next(s for s in jobs["execute"]["steps"] if s.get("id") == "execute")
+    assert "GITHUB_TOKEN" not in executor_step["env"]
+    assert all(
+        "PROVENANCE_TOKEN" not in str(s.get("env", {})) for s in jobs["execute"]["steps"] if s.get("id") != "execute"
+    )
+
+
+def test_execute_consumes_read_token_before_model_boundary(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The executor's credential is only available to trusted provenance verification."""
+    from types import SimpleNamespace
+
+    seen: list[str] = []
+    monkeypatch.setenv(lifecycle.PROVENANCE_TOKEN_ENV, TOKEN)
+    monkeypatch.setattr(lifecycle, "_run_context", lambda: (123, 1, "a" * 40))
+    monkeypatch.setattr(
+        lifecycle,
+        "_ledger_access",
+        lambda configuration: (seen.append("authenticated"), lifecycle._provenance_github(configuration))[1],
+    )
+    monkeypatch.setattr(lifecycle, "_executor_model_secrets", lambda *_a: {})
+    monkeypatch.setattr(lifecycle, "_x25519", lambda *_a: object())
+    monkeypatch.setattr(lifecycle, "_output", lambda **_k: None)
+    monkeypatch.setattr(
+        lifecycle.roles,
+        "run_executor",
+        lambda **kwargs: (
+            seen.append("isolated"),
+            (
+                pytest.fail("provenance token leaked into model boundary")
+                if lifecycle.PROVENANCE_TOKEN_ENV in lifecycle.os.environ
+                else None
+            ),
+            SimpleNamespace(
+                sealed_result=None, advisory_code=None, stderr_category=None, probe_category=None, canary_refusal=None
+            ),
+        )[-1],
+    )
+    handoff = tmp_path / "handoff.sealed"
+    handoff.write_bytes(b"fixture")
+    args = SimpleNamespace(
+        model_argv=("kilo", "run", "--model", "kilo/kilo-auto/free"),
+        model_key_name="KILO_API_KEY",
+        issue=606,
+        authorization_id="hunter-issue-agent-authorization:" + "a" * 64,
+        handoff=str(handoff),
+        out=str(tmp_path / "result"),
+        workroot=str(tmp_path),
+    )
+    assert lifecycle.cmd_execute(ct.CONFIG, args) == 0
+    assert seen == ["authenticated", "isolated"]
+    assert lifecycle.PROVENANCE_TOKEN_ENV not in lifecycle.os.environ
