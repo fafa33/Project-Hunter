@@ -1087,6 +1087,11 @@ def test_push_decision_runs_from_trusted_default_branch_code_only() -> None:
     assert "--push" in str(decision_step["run"])
     assert "hunter_preflight_reuse_decision.py" in str(decision_step["run"])
     assert (decision_step.get("env") or {}).get("GITHUB_TOKEN") == "${{ github.token }}"
+    # The trusted job installs only pinned binary distributions: no local
+    # setup script from any checkout is executed in the deciding job.
+    install = next(step for step in steps if "Install trusted adjudicator toolchain" in str(step.get("name", "")))
+    assert "--only-binary :all:" in str(install.get("run"))
+    assert "-e " not in str(install.get("run"))
     # Until the adjudicator reaches trusted main, an unavailable/incompatible
     # trusted script must mean RUN FULL, never a red required check or reuse.
     script = str(decision_step.get("run"))

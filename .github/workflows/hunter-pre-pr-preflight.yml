@@ -46,12 +46,16 @@ jobs:
             pyproject.toml
             requirements/ci-constraints.txt
 
-      - name: Install trusted project
+      - name: Install trusted adjudicator toolchain
         env:
           PIP_CONSTRAINT: requirements/ci-constraints.txt
         run: |
           set -euo pipefail
-          python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
+          # The adjudicator uses only stdlib plus the four pinned toolchain
+          # distributions and imports its sibling scripts directly from the
+          # trusted checkout. No local setup script needs to execute.
+          python -m pip install --disable-pip-version-check --only-binary :all: \
+            -c requirements/ci-constraints.txt black mypy pytest ruff
 
       - name: Fetch exact pushed HEAD as untrusted git evidence
         env:
