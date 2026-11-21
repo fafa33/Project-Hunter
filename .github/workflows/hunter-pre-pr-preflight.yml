@@ -67,12 +67,24 @@ jobs:
           GH_REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.sha }}
         run: |
-          set -euo pipefail
-          python scripts/hunter_preflight_reuse_decision.py \
+          set -uo pipefail
+          # Until this adjudicator is present on the trusted default branch,
+          # the trusted checkout cannot decide reuse. That is not a broken
+          # required check: it means RUN FULL. Only a positively verified
+          # decision may set reusable=true, so an unavailable/incompatible
+          # adjudicator fails closed onto the heavy suite.
+          if python scripts/hunter_preflight_reuse_decision.py \
             --push \
             --repository "${GH_REPO}" \
             --head-sha "${HEAD_SHA}" \
-            --candidate-root "${GITHUB_WORKSPACE}"
+            --candidate-root "${GITHUB_WORKSPACE}"; then
+            exit 0
+          fi
+          echo "reusable=false" >> "${GITHUB_OUTPUT}"
+          echo "execution_mode=full-execution" >> "${GITHUB_OUTPUT}"
+          echo "proof_digest=" >> "${GITHUB_OUTPUT}"
+          echo "reason=trusted push-lane adjudicator unavailable; running the full suite" >> "${GITHUB_OUTPUT}"
+          echo "Trusted push-lane adjudicator unavailable; full suite is authoritative."
 
   preflight:
     name: Hunter Pre-PR Preflight

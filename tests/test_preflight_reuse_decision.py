@@ -1087,6 +1087,13 @@ def test_push_decision_runs_from_trusted_default_branch_code_only() -> None:
     assert "--push" in str(decision_step["run"])
     assert "hunter_preflight_reuse_decision.py" in str(decision_step["run"])
     assert (decision_step.get("env") or {}).get("GITHUB_TOKEN") == "${{ github.token }}"
+    # Until the adjudicator reaches trusted main, an unavailable/incompatible
+    # trusted script must mean RUN FULL, never a red required check or reuse.
+    script = str(decision_step.get("run"))
+    assert 'echo "reusable=false"' in script
+    assert "execution_mode=full-execution" in script
+    assert "running the full suite" in script
+    assert "if python scripts/hunter_preflight_reuse_decision.py" in script
     # This job checks out no candidate code at all: candidate code cannot decide reuse.
     assert not any(
         "candidate" in str(step.get("name", "")).lower() or "candidate" in str(step.get("with", {})).lower()

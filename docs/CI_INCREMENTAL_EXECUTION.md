@@ -66,6 +66,14 @@ validation to the existing canonical authority via
 `verify_for_candidate`. Every missing, malformed, stale, conflicting or
 unverifiable identity refuses reuse and runs the full suite.
 
+Bootstrap constraint: the decision job runs the adjudicator from the trusted
+default branch, so the optimization cannot exercise itself in the PR that
+introduces it. An unavailable or incompatible trusted adjudicator emits
+`reusable=false` and runs the full suite; the decision job still succeeds and
+no required context is left pending or failed for that reason. The reuse path
+becomes active only after the adjudicator is present on the trusted default
+branch.
+
 The required `Hunter Pre-PR Preflight` check always concludes: the preflight job
 uses `always() && !cancelled()` on `needs: proof-equivalence`, and the heavy
 suite is suppressed only by a positively reusable decision on a normal-mode
