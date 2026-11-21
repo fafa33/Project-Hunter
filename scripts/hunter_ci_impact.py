@@ -70,8 +70,9 @@ def main() -> int:
     # A divergent or non-commit base must never produce a misleading focused
     # test selection. Git diff accepts unrelated trees, but trusted incremental
     # admission requires an exact ancestor relationship.
+    ancestry_command = "git merge-base --is-ancestor " + shlex.quote(args.base) + " " + shlex.quote(args.head)
     ancestry = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", args.base, args.head],
+        shlex.split(ancestry_command),
         cwd=ROOT,
         capture_output=True,
         check=False,
