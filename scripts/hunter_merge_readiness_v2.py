@@ -343,7 +343,7 @@ def knowledge_receipt_verdict_from_statuses(statuses: list[Any], pr_number: int)
       ``_parse_cycle``/``read_collector_completion`` already use for their own trusted statuses. Any
       other actor's status is invisible here, never merely distrusted.
     - **Bounded freshness (F1/F3).** GitHub Actions has no "review thread resolved" trigger, so the
-      producer's own scheduled cadence (``hunter-issue-agent-knowledge.yml``, a ~30-minute cron) is
+      producer's own scheduled cadence (``hunter-issue-agent-knowledge.yml``, a 5-minute recovery cron) is
       the only thing that can ever notice a thread resolving into a new obligation, or recover from
       a transient status-publish failure. Relying on that cadence *indefinitely* would let an old
       ``success`` posted before an obligation existed outlive its truth. A status older than
