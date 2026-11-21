@@ -46,6 +46,8 @@ def test_cli_focused_executes_and_propagates_failure(monkeypatch, tmp_path):
 
     def fake_run(command, **kwargs):
         calls.append((command, kwargs))
+        if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+            return subprocess.CompletedProcess(command, 0)
         if command[0] == "git":
             return subprocess.CompletedProcess(command, 0, stdout="tests/test_example.py\n")
         assert command == [sys.executable, "-m", "pytest", "-q", "tests/test_example.py"]
@@ -54,7 +56,7 @@ def test_cli_focused_executes_and_propagates_failure(monkeypatch, tmp_path):
 
     monkeypatch.setattr(impact.subprocess, "run", fake_run)
     assert impact.main() == 1
-    assert len(calls) == 2
+    assert len(calls) == 3
 
 
 def test_cli_diff_failure_fails_closed(monkeypatch, tmp_path):
@@ -69,11 +71,13 @@ def test_cli_diff_failure_fails_closed(monkeypatch, tmp_path):
 
     def fake_run(command, **kwargs):
         calls.append(command)
+        if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+            return subprocess.CompletedProcess(command, 0)
         return subprocess.CompletedProcess(command, 128, stderr="invalid revision")
 
     monkeypatch.setattr(impact.subprocess, "run", fake_run)
     assert impact.main() == 2
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_cli_full_required_never_runs_focused(monkeypatch, tmp_path):
@@ -88,11 +92,13 @@ def test_cli_full_required_never_runs_focused(monkeypatch, tmp_path):
 
     def fake_run(command, **kwargs):
         calls.append(command)
+        if command[:3] == ["git", "merge-base", "--is-ancestor"]:
+            return subprocess.CompletedProcess(command, 0)
         return subprocess.CompletedProcess(command, 0, stdout="pyproject.toml\n")
 
     monkeypatch.setattr(impact.subprocess, "run", fake_run)
     assert impact.main() == 0
-    assert len(calls) == 1
+    assert len(calls) == 2
 
 
 def test_cli_rejects_untrusted_git_revision_arguments(monkeypatch):
@@ -127,3 +133,23 @@ def test_cross_head_equivalence_candidate_never_accepts_unknown_inputs():
         inputs = dict(changed=metadata, base_unchanged=True, definitions_unchanged=True, toolchain_unchanged=True)
         inputs.update(overrides)
         assert not eligible(**inputs)
+
+
+def test_cli_rejects_divergent_base_before_diff_or_tests(monkeypatch, tmp_path):
+    import subprocess
+    import sys
+
+    import hunter_ci_impact as impact
+
+    monkeypatch.setattr(impact, "ROOT", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["impact", "--base", "a" * 40, "--head", "b" * 40, "--run-focused"])
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        assert command == ["git", "merge-base", "--is-ancestor", "a" * 40, "b" * 40]
+        return subprocess.CompletedProcess(command, 1)
+
+    monkeypatch.setattr(impact.subprocess, "run", fake_run)
+    assert impact.main() == 2
+    assert len(calls) == 1
