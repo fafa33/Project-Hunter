@@ -2918,7 +2918,7 @@ def test_pre_push_refuses_an_unbound_writer_before_any_network_push(monkeypatch,
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(
         hunter_pre_push.provenance,
-        "check_range",
+        "check_publish_range",
         lambda *_a, **_k: "commit cccccccccc committer Jules <jules@example.invalid> is not an "
         "authorization-bound writer identity",
     )
@@ -2946,7 +2946,7 @@ def test_pre_push_admits_a_bound_multi_commit_range(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head, _updates: None)
     monkeypatch.setattr(hunter_pre_push, "require_current_review_request_if_present", lambda _head, _updates: None)
-    monkeypatch.setattr(hunter_pre_push.provenance, "check_range", lambda *_a, **_k: None)
+    monkeypatch.setattr(hunter_pre_push.provenance, "check_publish_range", lambda *_a, **_k: None)
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
     # Issue #588: these pre-push integration fixtures isolate review/ingress
     # behavior; the workflow and impact gates have dedicated regression tests.
@@ -3981,6 +3981,7 @@ def test_malformed_review_evidence_does_not_block_an_ordinary_draft_push(monkeyp
     )
     monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda _head: None)
+    monkeypatch.setattr(hunter_pre_push.provenance, "check_publish_range", lambda *_args: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
     # Issue #588: these pre-push integration fixtures isolate review/ingress

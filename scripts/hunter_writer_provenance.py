@@ -1083,6 +1083,45 @@ def check_range(head: str, *, base_ref: str = "main", remote: str | None = None,
     return f"{verdict.reason}. {remediation(binding)}"
 
 
+def check_publish_range(
+    head: str,
+    remote_sha: str,
+    *,
+    base_ref: str = "main",
+    remote: str | None = None,
+    cwd: Path | None = None,
+) -> str | None:
+    """Validate only commits introduced by this exact Git push ref update.
+
+    Git supplies the previous remote ref SHA through the pre-push protocol.
+    The fork-point fallback is valid only for a genuinely new remote ref.
+    """
+    remote = remote or trusted_remote(cwd=cwd)
+    try:
+        trusted = resolve_trusted_tip(base_ref=base_ref, remote=remote, cwd=cwd)
+        if remote_sha == "0" * 40:
+            base = resolve_governed_base(head, base_ref=base_ref, remote=remote, cwd=cwd)
+        else:
+            if len(remote_sha) != 40 or any(ch not in "0123456789abcdefABCDEF" for ch in remote_sha):
+                return "invalid remote SHA in pre-push update"
+            remote_commit = _run_git("rev-parse", "--verify", f"{remote_sha}^{{commit}}", cwd=cwd).strip()
+            if remote_commit.lower() != remote_sha.lower():
+                return "remote ref SHA is not an exact commit"
+            _run_git("merge-base", "--is-ancestor", remote_sha, head, cwd=cwd)
+            # --is-ancestor returns no output on success, but nonzero raises.
+            base = remote_sha
+        binding, error = load_trusted_binding(trusted, cwd=cwd)
+        if binding is None:
+            return f"writer provenance is unknown at trusted {remote}/{base_ref} {trusted[:10]} ({error})"
+        commits = read_range_commits(base, head, cwd=cwd, binding=binding)
+    except GitEvidenceUnavailable as exc:
+        return f"writer provenance evidence is unavailable or remote ref is not an ancestor ({exc})"
+    if not commits:
+        return None
+    verdict = evaluate_range(binding, commits)
+    return None if verdict.ok else f"{verdict.reason}. {remediation(binding)}"
+
+
 def remediation(binding: WriterIdentityBinding) -> str:
     """The exact, copy-free instruction that repairs a provenance mismatch."""
 
