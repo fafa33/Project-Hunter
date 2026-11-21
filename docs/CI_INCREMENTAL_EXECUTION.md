@@ -49,6 +49,45 @@ The pushed candidate HEAD reran all required and security workflows successfully
 
 These are point-in-time samples, not a controlled A/B experiment: the BEFORE and AFTER windows cover partially different head sets, and job durations vary 617–1004 s run to run. The median shift (828 s → 803 s) is within that variance and is reported only as observed data; no causal improvement, target attainment, or security-gate relaxation is claimed. The behavior that avoids redundant heavy work is enforced by the cross-HEAD equivalence authority and covered by focused regression tests — it is not inferred from these timings.
 
+## Trusted push-lane equivalence (implemented)
+
+`.github/workflows/hunter-pre-pr-preflight.yml` now contains a separate
+`Push Proof Equivalence Decision` job that checks out only the trusted default
+branch, installs the trusted toolchain, fetches the pushed SHA as untrusted Git
+evidence, and calls `hunter_preflight_reuse_decision.py --push` with a read-only
+token scoped to that job. It never checks out or executes candidate code; the
+candidate `Hunter Pre-PR Preflight` job has no decision token and clears
+`GITHUB_TOKEN`/`GH_TOKEN` before the heavy step.
+
+`decide_push` resolves PR identity and base from the exact pushed HEAD,
+requires an open same-repository PR, classifies only the source-proof-to-current
+commit delta as review-metadata-only, and delegates all immutable proof
+validation to the existing canonical authority via
+`verify_for_candidate`. Every missing, malformed, stale, conflicting or
+unverifiable identity refuses reuse and runs the full suite.
+
+The required `Hunter Pre-PR Preflight` check always concludes: the preflight job
+uses `always() && !cancelled()` on `needs: proof-equivalence`, and the heavy
+suite is suppressed only by a positively reusable decision on a normal-mode
+HEAD. Two mutually exclusive named steps record `Hunter proof mode:
+verified-reuse` or `Hunter proof mode: full-execution` in the authoritative job
+record. `proof_execution_mode` folds that marker into the canonical proof
+digest, `resolve` refuses to treat a verified-reuse job as a fresh exact-head
+full proof, and `_source_proof_bindings` refuses a verified-reuse run as a
+source proof. A successful skipped job is therefore never equivalent to a newly
+executed suite; only the original immutable full proof can anchor equivalence.
+
+### Focused regression evidence
+
+`python3 -m pytest tests/test_hunter_ci_impact.py tests/test_preflight_reuse_decision.py tests/test_hunter_ci_final_execution.py tests/test_hma1_trusted_gate.py tests/test_hunter_merge_readiness.py -q`
+→ **175 passed**. Ruff, Black and `mypy --follow-imports=skip` passed on the
+changed Python files. The new hostile cases cover metadata-only and ordinary
+code/dependency/workflow/trust-root deltas, missing and failed source proofs,
+newer failed attempts, A→B and A→B→A HEAD movement via Git-backed subtree
+digests, concurrent identical decisions, stale callbacks, base changes,
+fork/closed-PR self-authorization, proof-mode forgery/ambiguity, and workflow
+token/conclusion wiring.
+
 ## Required checks and non-weakening
 
 No required context, ruleset, security gate, signature, or trusted boundary is removed or weakened. `paths-ignore` skipping never suppresses a required context. Merge remains owner-gated; this change does not merge or mark the PR ready by itself.

@@ -69,6 +69,14 @@ MODE_MARKER = ".hunter-preflight-mode"
 #: This invariant prevents cross-workflow polling from becoming PR latency.
 PRODUCED_BY = "hunter-pre-pr-preflight"
 RUN_PENDING_STATUSES = frozenset({"queued", "in_progress", "requested", "waiting", "pending"})
+
+# Issue #606: a successful push job is not automatically a newly executed full
+# suite. Its authoritative job record carries a named proof-mode marker, and
+# that mode is folded into the canonical proof digest. Consumers can therefore
+# distinguish full execution from a verified current-HEAD-bound equivalence.
+PROOF_MODE_FULL = "full-execution"
+PROOF_MODE_REUSE = "verified-reuse"
+PROOF_MODE_STEP_PREFIX = "Hunter proof mode: "
 # Hosted workflow timeout is 30 minutes; an additional 15 minutes covers queue
 # propagation without treating a stranded run as pending indefinitely.
 PENDING_PROOF_DEADLINE_SECONDS = 45 * 60
@@ -279,15 +287,50 @@ def decide_from_runs(runs: list[Any], evidence: CandidateEvidence, *, now: datet
     )
 
 
-def _canonical_job_proof(
+def proof_execution_mode(job: dict[str, Any]) -> tuple[str, str]:
+    """Whether the authoritative job executed the full suite or verified reuse.
+
+    The mode is read from the job's own named step record, never from a
+    caller-supplied label. A missing marker means a historical full run; an
+    ambiguous, unknown or unsuccessful marker fails closed.
+    """
+    steps = job.get("steps")
+    if not isinstance(steps, list):
+        return PROOF_MODE_FULL, ""
+    markers: list[tuple[str, str]] = []
+    for step in steps:
+        if not isinstance(step, dict):
+            continue
+        name = str(step.get("name") or "")
+        if not name.startswith(PROOF_MODE_STEP_PREFIX):
+            continue
+        conclusion = str(step.get("conclusion") or "")
+        # GitHub lists skipped steps too; only the marker that actually ran
+        # describes how this job established its outcome.
+        if conclusion == "skipped":
+            continue
+        markers.append((name[len(PROOF_MODE_STEP_PREFIX) :], conclusion))
+    if not markers:
+        return PROOF_MODE_FULL, ""
+    if len(markers) != 1:
+        return "", "ambiguous proof mode markers"
+    mode, conclusion = markers[0]
+    if mode not in (PROOF_MODE_FULL, PROOF_MODE_REUSE):
+        return "", f"unknown proof mode {mode!r}"
+    if conclusion != "success":
+        return "", "proof mode marker did not succeed"
+    return mode, ""
+
+
+def _canonical_job_proof_with_mode(
     repository: str,
     token: str,
     run: dict[str, Any],
     head_sha: str,
     fetch: Fetch | None,
     jobs_payload: dict[str, Any] | None = None,
-) -> tuple[str | None, str]:
-    """Re-derive one immutable outcome from GitHub's trusted run and job records.
+) -> tuple[str | None, str, str]:
+    """The canonical digest and its execution mode from one immutable job snapshot.
 
     GitHub Actions is the producer; this is a read-only canonical receipt, not
     a candidate-authored status or a second proof publisher.
@@ -307,18 +350,21 @@ def _canonical_job_proof(
                 repository, token, f"actions/runs/{run_id}/attempts/{attempt}/jobs?per_page=100"
             )
         if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
-            return None, "trusted proof job evidence is malformed"
+            return None, "", "trusted proof job evidence is malformed"
         jobs = [
             job for job in payload["jobs"] if isinstance(job, dict) and job.get("name") == "Hunter Pre-PR Preflight"
         ]
         if len(jobs) != 1:
-            return None, "trusted proof must have exactly one authoritative preflight job"
+            return None, "", "trusted proof must have exactly one authoritative preflight job"
         job = jobs[0]
         job_id = int(job["id"])
         if job_id <= 0 or job.get("run_id") != run_id:
-            return None, "trusted proof job/run binding is invalid"
+            return None, "", "trusted proof job/run binding is invalid"
         if job.get("status") != "completed" or job.get("conclusion") != "success":
-            return None, "trusted proof authoritative job did not succeed"
+            return None, "", "trusted proof authoritative job did not succeed"
+        mode, mode_problem = proof_execution_mode(job)
+        if mode_problem:
+            return None, "", mode_problem
         claims = {
             "schema": "hunter.canonical-proof-outcome/1",
             "repository": repository,
@@ -328,12 +374,28 @@ def _canonical_job_proof(
             "run_attempt": attempt,
             "job_id": job_id,
             "conclusion": "success",
+            "execution_mode": mode,
             "provenance": "github-actions-api",
         }
         digest = hashlib.sha256(json.dumps(claims, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        return f"sha256:{digest}", ""
+        return f"sha256:{digest}", mode, ""
     except (KeyError, TypeError, ValueError, OverflowError) as exc:
-        return None, f"trusted proof job identity is invalid ({type(exc).__name__})"
+        return None, "", f"trusted proof job identity is invalid ({type(exc).__name__})"
+
+
+def _canonical_job_proof(
+    repository: str,
+    token: str,
+    run: dict[str, Any],
+    head_sha: str,
+    fetch: Fetch | None,
+    jobs_payload: dict[str, Any] | None = None,
+) -> tuple[str | None, str]:
+    """Backward-compatible digest-only view of the canonical proof outcome."""
+    digest, _mode, problem = _canonical_job_proof_with_mode(
+        repository, token, run, head_sha, fetch, jobs_payload=jobs_payload
+    )
+    return digest, problem
 
 
 def resolve(
@@ -363,11 +425,19 @@ def resolve(
     if run is None or problem:
         return ReuseDecision(False, problem or "trusted proof disappeared")
     try:
-        digest, blocker = _canonical_job_proof(repository, token, run, head_sha, fetch)
+        digest, mode, blocker = _canonical_job_proof_with_mode(repository, token, run, head_sha, fetch)
     except Exception as exc:  # noqa: BLE001 - missing hosted job evidence never authorizes reuse
         return ReuseDecision(False, f"trusted proof job evidence unavailable ({type(exc).__name__})")
     if digest is None:
         return ReuseDecision(False, blocker)
+    if mode == PROOF_MODE_REUSE:
+        # A verified-reuse push run is a current-HEAD-bound equivalence decision,
+        # not a newly executed full suite. It can never authorize exact-head
+        # reuse here; the cross-HEAD equivalence path must bind it to the
+        # original immutable full proof instead.
+        return ReuseDecision(
+            False, "exact-head proof is verified reuse, not a fresh full run; use cross-HEAD equivalence"
+        )
     return ReuseDecision(True, f"{decision.reason}; canonical proof outcome digest={digest}")
 
 
@@ -607,7 +677,9 @@ def _is_ancestor(root: Path, ancestor: str, descendant: str) -> bool:
     return completed.returncode == 0
 
 
-def find_previous_proven_head(repository: str, token: str, current_head: str) -> tuple[str | None, str]:
+def find_previous_proven_head(
+    repository: str, token: str, current_head: str, *, root: Path = ROOT
+) -> tuple[str | None, str]:
     """Find an ancestral HEAD whose successful exact-head proof proves this tree.
 
     The Actions API is searched for *all* successful Hunter / Pre-PR Preflight
@@ -653,14 +725,14 @@ def find_previous_proven_head(repository: str, token: str, current_head: str) ->
         if not proven_heads:
             return None, "no previous successful exact-head proof found"
 
-        current_tree, problem = compute_tested_tree_digest(ROOT, current_head)
+        current_tree, problem = compute_tested_tree_digest(root, current_head)
         if problem or current_tree is None:
             return None, f"current tested tree for source selection is unavailable ({problem})"
 
         for source_head, _run_id in sorted(proven_heads.items(), key=lambda item: item[1], reverse=True):
-            if not _is_ancestor(ROOT, source_head, current_head):
+            if not _is_ancestor(root, source_head, current_head):
                 continue
-            source_tree, problem = compute_tested_tree_digest(ROOT, source_head)
+            source_tree, problem = compute_tested_tree_digest(root, source_head)
             if problem or source_tree != current_tree:
                 continue
             attempt, job_id, digest, problem = _source_proof_bindings(repository, token, source_head)
@@ -899,6 +971,11 @@ def _source_proof_bindings(
         job_id = int(authoritative_jobs[0]["id"])
         if job_id <= 0 or authoritative_jobs[0].get("run_id") != run_id:
             return 0, 0, "", "source proof job/run binding is invalid"
+        mode, mode_problem = proof_execution_mode(authoritative_jobs[0])
+        if mode_problem:
+            return 0, 0, "", mode_problem
+        if mode != PROOF_MODE_FULL:
+            return 0, 0, "", f"source proof is {mode}, not a fresh full-suite proof"
         return attempt, job_id, digest, ""
     except Exception as exc:  # noqa: BLE001 - any failure fails closed
         return 0, 0, "", f"source proof bindings unavailable ({type(exc).__name__}: {exc})"
@@ -933,7 +1010,7 @@ def verify_for_candidate(
         return EquivalenceDecision(False, "source proof head is not an exact 40-hex commit SHA")
 
     if source_proof_head is None:
-        source_proof_head, problem = find_previous_proven_head(repository, token, current_head)
+        source_proof_head, problem = find_previous_proven_head(repository, token, current_head, root=root)
         if problem:
             return EquivalenceDecision(False, f"no source proof: {problem}")
 

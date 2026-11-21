@@ -13,8 +13,73 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Issue #606: the reuse decision is made only by trusted default-branch code.
+  # This job never checks out or executes the pushed branch. Its read-only token
+  # is scoped to these steps only; the candidate execution job has no such token.
+  proof-equivalence:
+    name: Push Proof Equivalence Decision
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      reusable: ${{ steps.decision.outputs.reusable }}
+      reason: ${{ steps.decision.outputs.reason }}
+      execution_mode: ${{ steps.decision.outputs.execution_mode }}
+      proof_digest: ${{ steps.decision.outputs.proof_digest }}
+    steps:
+      - name: Checkout trusted default branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11.18"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements/ci-constraints.txt
+
+      - name: Install trusted project
+        env:
+          PIP_CONSTRAINT: requirements/ci-constraints.txt
+        run: |
+          set -euo pipefail
+          python -m pip install --disable-pip-version-check -c requirements/ci-constraints.txt -e ".[dev]"
+
+      - name: Fetch exact pushed HEAD as untrusted git evidence
+        env:
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin +"${HEAD_SHA}"
+
+      - name: Decide whether this push may reuse verified cross-HEAD proof
+        id: decision
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python scripts/hunter_preflight_reuse_decision.py \
+            --push \
+            --repository "${GH_REPO}" \
+            --head-sha "${HEAD_SHA}" \
+            --candidate-root "${GITHUB_WORKSPACE}"
+
   preflight:
     name: Hunter Pre-PR Preflight
+    needs: proof-equivalence
+    # The required context must conclude even if the optional decision job
+    # fails; a missing or inconclusive decision always runs the full suite.
+    if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
@@ -65,9 +130,42 @@ jobs:
           python scripts/hunter_ci_impact.py --base "${BASE_SHA}" --head "${HEAD_SHA}" --run-focused
 
       - name: Run shared deterministic preflight
+        # Only a positively reusable, current-HEAD-bound trusted decision on a
+        # normal-mode HEAD may suppress the heavy suite. Any other state runs it.
+        if: ${{ !(needs.proof-equivalence.result == 'success' && needs.proof-equivalence.outputs.reusable == 'true' && steps.preflight-mode.outputs.mode == 'normal') }}
         env:
           PREFLIGHT_MODE: ${{ steps.preflight-mode.outputs.mode }}
           # The authoritative full repository proof, so the parallel lane matters
           # most here. See the identical declaration in ci.yml.
           PYTEST_ADDOPTS: -n auto --dist loadfile
+          GITHUB_TOKEN: ""
+          GH_TOKEN: ""
         run: python scripts/hunter_pr_preflight.py --mode "${PREFLIGHT_MODE}"
+
+      - name: "Hunter proof mode: verified-reuse"
+        if: ${{ always() && needs.proof-equivalence.result == 'success' && needs.proof-equivalence.outputs.reusable == 'true' && steps.preflight-mode.outputs.mode == 'normal' }}
+        env:
+          REASON: ${{ needs.proof-equivalence.outputs.reason }}
+          PROOF_DIGEST: ${{ needs.proof-equivalence.outputs.proof_digest }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          echo "VERIFIED REUSE (no fresh full-suite execution) for exact HEAD ${HEAD_SHA}"
+          echo "Reason: ${REASON}"
+          echo "Referenced source proof digest: ${PROOF_DIGEST}"
+          {
+            echo "### Hunter proof mode: verified-reuse"
+            echo "This required check succeeded by canonical current-HEAD-bound equivalence to an immutable source proof; the full suite was NOT re-executed for this HEAD."
+            echo "- Exact HEAD: \`${HEAD_SHA}\`"
+            echo "- Decision: ${REASON}"
+            echo "- Referenced source proof digest: \`${PROOF_DIGEST}\`"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: "Hunter proof mode: full-execution"
+        if: ${{ always() && !(needs.proof-equivalence.result == 'success' && needs.proof-equivalence.outputs.reusable == 'true' && steps.preflight-mode.outputs.mode == 'normal') }}
+        env:
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          echo "FULL EXECUTION of the deterministic preflight for exact HEAD ${HEAD_SHA}"
+          echo "### Hunter proof mode: full-execution" >> "${GITHUB_STEP_SUMMARY}"

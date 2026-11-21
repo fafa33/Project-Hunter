@@ -35,6 +35,7 @@ import os
 import re
 import subprocess
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import hunter_ci_impact as impact
@@ -111,7 +112,24 @@ def changed_paths_between(root: Path, source_head: str, current_head: str) -> tu
     return completed.stdout.splitlines(), ""
 
 
-def emit(reusable: bool, reason: str) -> None:
+@dataclass(frozen=True)
+class PushLaneDecision:
+    """A current-HEAD-bound push-lane outcome, never a fresh full proof claim."""
+
+    reusable: bool
+    reason: str
+    execution_mode: str
+    proof_digest: str = ""
+    binding: reuse.EquivalenceBinding | None = None
+
+
+def emit(
+    reusable: bool,
+    reason: str,
+    *,
+    execution_mode: str = reuse.PROOF_MODE_FULL,
+    proof_digest: str = "",
+) -> None:
     print(f"[Preflight Reuse Decision] {'REUSE' if reusable else 'RUN-FRESH'}: {reason}")
     output = os.environ.get("GITHUB_OUTPUT")
     if not output:
@@ -119,6 +137,8 @@ def emit(reusable: bool, reason: str) -> None:
     with open(output, "a", encoding="utf-8") as handle:
         handle.write(f"reusable={'true' if reusable else 'false'}\n")
         handle.write(f"reason={reason}\n")
+        handle.write(f"execution_mode={execution_mode}\n")
+        handle.write(f"proof_digest={proof_digest}\n")
 
 
 def _pr_identity_still_matches(
@@ -139,6 +159,96 @@ def _pr_identity_still_matches(
     except Exception as exc:  # noqa: BLE001 - fail closed
         return False, f"PR head recheck unavailable ({type(exc).__name__}: {exc})"
     return True, ""
+
+
+def decide_push(git_root: Path, *, head_sha: str, repository: str, token: str) -> PushLaneDecision:
+    """Adjudicate push-lane cross-HEAD reuse from trusted default-branch code.
+
+    The push workflow checks out trusted code and calls this function with a
+    read-only token. Candidate code neither decides reuse nor receives that
+    token. A successful result is a NEW current-HEAD-bound equivalence decision
+    that references the immutable source proof; it never claims fresh execution.
+    Any absent, conflicting, stale or unverifiable identity runs the full suite.
+    """
+    if not re.fullmatch(r"[0-9a-f]{40}", head_sha):
+        return PushLaneDecision(False, "push head is not an exact 40-hex commit ID", reuse.PROOF_MODE_FULL)
+    if not isinstance(repository, str) or repository.count("/") != 1 or not all(repository.split("/")):
+        return PushLaneDecision(False, "repository identity is malformed", reuse.PROOF_MODE_FULL)
+
+    try:
+        containing = governance.request_json(repository, token, "GET", f"commits/{head_sha}/pulls")
+    except Exception as exc:  # noqa: BLE001 - unavailable PR identity must run full
+        return PushLaneDecision(False, f"push PR identity unavailable ({type(exc).__name__})", reuse.PROOF_MODE_FULL)
+    if not isinstance(containing, list) or len(containing) != 1 or not isinstance(containing[0], dict):
+        return PushLaneDecision(False, "push HEAD has no unique PR identity", reuse.PROOF_MODE_FULL)
+    pr = containing[0]
+    if str(pr.get("state") or "") != "open":
+        return PushLaneDecision(False, "push HEAD PR is not open", reuse.PROOF_MODE_FULL)
+    pr_number = pr.get("number")
+    if not isinstance(pr_number, int) or isinstance(pr_number, bool) or pr_number <= 0:
+        return PushLaneDecision(False, "push PR number is malformed", reuse.PROOF_MODE_FULL)
+    head = pr.get("head")
+    base = pr.get("base")
+    if not isinstance(head, dict) or str(head.get("sha") or "") != head_sha:
+        return PushLaneDecision(False, "live PR head differs from the pushed exact HEAD", reuse.PROOF_MODE_FULL)
+    head_repo = head.get("repo")
+    if head_repo is not None:
+        if not isinstance(head_repo, dict) or str(head_repo.get("full_name") or "").lower() != repository.lower():
+            return PushLaneDecision(False, "fork/non-repository PR never authorizes reuse", reuse.PROOF_MODE_FULL)
+    if (
+        not isinstance(base, dict)
+        or not isinstance(base.get("sha"), str)
+        or not re.fullmatch(r"[0-9a-f]{40}", base["sha"])
+    ):
+        return PushLaneDecision(False, "push PR base identity is unavailable or malformed", reuse.PROOF_MODE_FULL)
+    base_sha = base["sha"]
+
+    source_head, problem = reuse.find_previous_proven_head(repository, token, head_sha, root=git_root)
+    if not source_head:
+        return PushLaneDecision(
+            False, f"metadata-only candidate has no usable source proof ({problem})", reuse.PROOF_MODE_FULL
+        )
+    delta_paths, problem = changed_paths_between(git_root, source_head, head_sha)
+    if problem:
+        return PushLaneDecision(False, problem, reuse.PROOF_MODE_FULL)
+    if not impact.classify_review_metadata_only(delta_paths or []):
+        return PushLaneDecision(
+            False, "candidate HEAD delta since the source proof is not metadata-only", reuse.PROOF_MODE_FULL
+        )
+
+    equivalent = reuse.verify_for_candidate(
+        git_root,
+        repository=repository,
+        pr_number=pr_number,
+        current_head=head_sha,
+        base_sha=base_sha,
+        token=token,
+        source_proof_head=source_head,
+    )
+    if not equivalent.equivalent or equivalent.binding is None:
+        return PushLaneDecision(False, f"cross-HEAD equivalence refused: {equivalent.reason}", reuse.PROOF_MODE_FULL)
+    binding = equivalent.binding
+    if (
+        binding.current_head != head_sha
+        or binding.source_proof_head != source_head
+        or binding.base_sha != base_sha
+        or binding.pr_number != pr_number
+        or binding.repository != repository
+        or not binding.proof_digest
+    ):
+        return PushLaneDecision(
+            False, "equivalence binding does not match the pushed exact HEAD/PR", reuse.PROOF_MODE_FULL
+        )
+    still_matches, reason = _pr_identity_still_matches(repository, token, pr_number, head_sha, base_sha)
+    if not still_matches:
+        return PushLaneDecision(False, reason, reuse.PROOF_MODE_FULL)
+    return PushLaneDecision(
+        True,
+        f"cross-HEAD proof reuse: {equivalent.reason}",
+        reuse.PROOF_MODE_REUSE,
+        binding.proof_digest,
+        binding,
+    )
 
 
 def decide(
@@ -236,9 +346,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             "branch preflight proof instead of re-running the identical full suite."
         )
     )
-    parser.add_argument("--pr", type=int, required=True)
+    parser.add_argument("--pr", type=int)
     parser.add_argument("--repository", required=True)
     parser.add_argument("--head-sha", required=True)
+    parser.add_argument(
+        "--push",
+        action="store_true",
+        help="Adjudicate the push lane from trusted default-branch code; the PR is resolved from the exact HEAD.",
+    )
     parser.add_argument(
         "--candidate-root",
         type=Path,
@@ -249,6 +364,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN") or ""
     try:
+        if args.push:
+            decision = decide_push(
+                args.candidate_root,
+                head_sha=args.head_sha,
+                repository=args.repository,
+                token=token,
+            )
+            emit(
+                decision.reusable,
+                decision.reason,
+                execution_mode=decision.execution_mode,
+                proof_digest=decision.proof_digest,
+            )
+            return 0
+        if not isinstance(args.pr, int) or args.pr <= 0:
+            print("[Preflight Reuse Decision] FAIL: --pr must be a positive integer", flush=True)
+            return 2
         reusable, reason = decide(
             args.candidate_root,
             head_sha=args.head_sha,
@@ -258,6 +390,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     except Exception as exc:  # noqa: BLE001 - reuse is optional; full gates are the fail-closed path
         reusable, reason = False, f"reuse decision failed ({type(exc).__name__}: {exc})"
+        if args.push:
+            emit(False, reason, execution_mode=reuse.PROOF_MODE_FULL)
+            return 0
     emit(reusable, reason)
     return 0
 
