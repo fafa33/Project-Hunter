@@ -35,6 +35,7 @@ def _stub_issue_412_boundaries(monkeypatch) -> None:
         hunter_pre_push, "_run_hgcc_contract_check", lambda _repo: SimpleNamespace(returncode=0, stderr="")
     )
     monkeypatch.setattr(hunter_pre_push, "_validate_writer_provenance", lambda _head: None)
+    monkeypatch.setattr(hunter_pre_push.provenance, "check_publish_range", lambda *_args: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "_run_mapped_regressions", lambda _head: 0)
     monkeypatch.setattr(hunter_pre_push, "_run_workflow_trigger_contracts", lambda _head: 0)
@@ -224,13 +225,19 @@ def test_pre_push_still_blocks_every_pre_network_rewrite_defect(monkeypatch, tmp
 
         return check
 
-    for name in ("_validate_writer_provenance", "_validate_receipt_freshness"):
-        monkeypatch.setattr(hunter_pre_push, name, failing(name))
-        with pytest.raises(RuntimeError, match=name):
-            hunter_pre_push.enforce_pre_push(_update())
-        monkeypatch.setattr(hunter_pre_push, name, lambda _head: None)
+    monkeypatch.setattr(
+        hunter_pre_push.provenance,
+        "check_publish_range",
+        lambda *_args: (_ for _ in ()).throw(RuntimeError("publish provenance")),
+    )
+    with pytest.raises(RuntimeError, match="publish provenance"):
+        hunter_pre_push.enforce_pre_push(_update())
+    monkeypatch.setattr(hunter_pre_push.provenance, "check_publish_range", lambda *_args: None)
+    monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", failing("_validate_receipt_freshness"))
+    with pytest.raises(RuntimeError, match="_validate_receipt_freshness"):
+        hunter_pre_push.enforce_pre_push(_update())
 
-    assert order == ["_validate_writer_provenance", "_validate_receipt_freshness"]
+    assert order == ["_validate_receipt_freshness"]
 
 
 def test_hook_installer_owns_repository_hooks_path() -> None:
@@ -545,3 +552,58 @@ def test_m2_nested_test_git_environment_does_not_inherit_push_repository(monkeyp
     assert "GIT_WORK_TREE" not in environment
     assert "GIT_INDEX_FILE" not in environment
     assert environment["HUNTER_TEST_MARKER"] == "preserved"
+
+
+def test_issue_545_publish_provenance_uses_actual_remote_sha(monkeypatch, tmp_path) -> None:
+    """The remote SHA, not the old fork point, governs signed publication."""
+    seen = []
+    monkeypatch.setattr(
+        hunter_pre_push,
+        "_run_git",
+        lambda *args: (
+            str(tmp_path)
+            if args == ("rev-parse", "--show-toplevel")
+            else (HEAD_A if args == ("rev-parse", "HEAD") else "")
+        ),
+    )
+    monkeypatch.setattr(hunter_pre_push, "_require_persistent_worktree", lambda *_: None)
+    monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda *_: None)
+    _stub_issue_412_boundaries(monkeypatch)
+
+    def record_publish_range(head: str, old: str) -> None:
+        seen.append((head, old))
+
+    monkeypatch.setattr(hunter_pre_push.provenance, "check_publish_range", record_publish_range)
+    monkeypatch.setattr(hunter_pre_push, "_run_push_safety_lane", lambda: 0)
+    monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda *_: hunter_pre_push.NORMAL_MODE)
+    monkeypatch.setattr(
+        hunter_pre_push, "_run_hgcc_contract_check", lambda *_: SimpleNamespace(returncode=0, stderr="")
+    )
+    monkeypatch.setattr(hunter_pre_push, "_run_workflow_trigger_contracts", lambda *_: 0)
+    monkeypatch.setattr(hunter_pre_push, "_run_mapped_regressions", lambda *_: 0)
+    # Exact branch HEAD is fixed, but each remote ref has a different old SHA.
+    updates = [f"refs/heads/feature {HEAD_A} refs/heads/feature {HEAD_B}\n"]
+    try:
+        hunter_pre_push.enforce_pre_push(updates)
+    except (RuntimeError, AssertionError):
+        pass
+    assert seen == [(HEAD_A, HEAD_B)]
+
+
+def test_issue_545_rejects_publish_range_failure_before_preflight(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        hunter_pre_push,
+        "_run_git",
+        lambda *args: (
+            str(tmp_path)
+            if args == ("rev-parse", "--show-toplevel")
+            else (HEAD_A if args == ("rev-parse", "HEAD") else "")
+        ),
+    )
+    monkeypatch.setattr(hunter_pre_push, "_require_persistent_worktree", lambda *_: None)
+    monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda *_: None)
+    _stub_issue_412_boundaries(monkeypatch)
+    monkeypatch.setattr(hunter_pre_push.provenance, "check_publish_range", lambda *_: "remote ref is not an ancestor")
+    monkeypatch.setattr(hunter_pre_push, "_run_push_safety_lane", lambda: pytest.fail("must block before preflight"))
+    with pytest.raises(RuntimeError, match="not an ancestor"):
+        hunter_pre_push.enforce_pre_push([f"refs/heads/feature {HEAD_A} refs/heads/feature {HEAD_B}\n"])

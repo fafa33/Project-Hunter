@@ -114,7 +114,7 @@ def test_knowledge_receipt_producer_has_direct_trusted_pr_wakeup_and_bounded_rec
     assert {"Hunter Knowledge Learning", "Hunter Governance Review"} <= set(on["workflow_run"]["workflows"])
     assert "completed" in on["workflow_run"]["types"]
     assert "workflow_dispatch" in on
-    assert on["schedule"] == [{"cron": "7,17,27,37,47,57 * * * *"}]
+    assert on["schedule"] == [{"cron": "*/5 * * * *"}]
     job = knowledge["jobs"]["knowledge-ingest"]
     assert job["environment"] == "hunter-issue-agent-control"
     assert "github.ref == 'refs/heads/main'" in job["if"]
@@ -137,3 +137,22 @@ def test_knowledge_receipt_completion_wakes_same_trusted_readiness_controller():
     assert consumer["jobs"]["controller"]["if"] == (
         "github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
     )
+
+
+def test_knowledge_receipt_recovery_uses_bounded_trusted_five_minute_sweep():
+    """Issue #588 recurrence: fresh owner disposition must not wait ten minutes.
+
+    GitHub schedules are best-effort; this is a bounded recovery cadence, not
+    proof of immediate wakeup or authority to bypass the signed ledger.
+    """
+    workflow = load("hunter-issue-agent-knowledge.yml")
+    on = triggers(workflow)
+    assert on["schedule"] == [{"cron": "*/5 * * * *"}]
+    assert "repository_dispatch" not in on
+    assert set(on["workflow_run"]["workflows"]) == {"Hunter Knowledge Learning", "Hunter Governance Review"}
+    assert workflow["permissions"] == {}
+    job = workflow["jobs"]["knowledge-ingest"]
+    assert job["environment"] == "hunter-issue-agent-control"
+    assert job["permissions"]["contents"] == "write"
+    assert job["permissions"]["checks"] == "write"
+    assert "github.ref == 'refs/heads/main'" in job["if"]

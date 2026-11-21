@@ -875,7 +875,12 @@ def parse_commit_records(raw: str) -> tuple[CommitProvenance, ...]:
 
 
 def read_range_commits(
-    base: str, head: str, *, cwd: Path | None = None, binding: WriterIdentityBinding | None = None
+    base: str,
+    head: str,
+    *,
+    cwd: Path | None = None,
+    binding: WriterIdentityBinding | None = None,
+    exclude_refs: tuple[str, ...] = (),
 ) -> tuple[CommitProvenance, ...]:
     """Commit provenance for ``base..head``, oldest first.
 
@@ -885,9 +890,9 @@ def read_range_commits(
     break record parsing.
     """
 
-    raw = _run_git(
-        *GIT_SIGNATURE_READ_CONFIG, "log", "--reverse", f"--format={GIT_LOG_FORMAT}", f"{base}..{head}", cwd=cwd
-    )
+    # Both the prior remote tip and trusted main are already admitted.
+    revision = (f"{base}..{head}", *(f"^{ref}" for ref in exclude_refs))
+    raw = _run_git(*GIT_SIGNATURE_READ_CONFIG, "log", "--reverse", f"--format={GIT_LOG_FORMAT}", *revision, cwd=cwd)
     commits = parse_commit_records(raw)
     recovery = binding if binding is not None else load_binding()[0]
     if recovery is None or recovery.owner_recovery is None or not commits:
@@ -898,7 +903,7 @@ def read_range_commits(
         "log",
         "--reverse",
         f"--format=%H{GIT_FIELD_SEPARATOR}%(trailers:key={trailer},valueonly,separator={GIT_FIELD_SEPARATOR}){GIT_RECORD_SEPARATOR}",
-        f"{base}..{head}",
+        *revision,
         cwd=cwd,
     )
     found: dict[str, str] = {}
@@ -1081,6 +1086,45 @@ def check_range(head: str, *, base_ref: str = "main", remote: str | None = None,
     if verdict.ok:
         return None
     return f"{verdict.reason}. {remediation(binding)}"
+
+
+def check_publish_range(
+    head: str,
+    remote_sha: str,
+    *,
+    base_ref: str = "main",
+    remote: str | None = None,
+    cwd: Path | None = None,
+) -> str | None:
+    """Validate only commits introduced by this exact Git push ref update.
+
+    Git supplies the previous remote ref SHA through the pre-push protocol.
+    The fork-point fallback is valid only for a genuinely new remote ref.
+    """
+    remote = remote or trusted_remote(cwd=cwd)
+    try:
+        trusted = resolve_trusted_tip(base_ref=base_ref, remote=remote, cwd=cwd)
+        if remote_sha == "0" * 40:
+            base = resolve_governed_base(head, base_ref=base_ref, remote=remote, cwd=cwd)
+        else:
+            if len(remote_sha) != 40 or any(ch not in "0123456789abcdefABCDEF" for ch in remote_sha):
+                return "invalid remote SHA in pre-push update"
+            remote_commit = _run_git("rev-parse", "--verify", f"{remote_sha}^{{commit}}", cwd=cwd).strip()
+            if remote_commit.lower() != remote_sha.lower():
+                return "remote ref SHA is not an exact commit"
+            _run_git("merge-base", "--is-ancestor", remote_sha, head, cwd=cwd)
+            # --is-ancestor returns no output on success, but nonzero raises.
+            base = remote_sha
+        binding, error = load_trusted_binding(trusted, cwd=cwd)
+        if binding is None:
+            return f"writer provenance is unknown at trusted {remote}/{base_ref} {trusted[:10]} ({error})"
+        commits = read_range_commits(base, head, cwd=cwd, binding=binding, exclude_refs=(trusted,))
+    except GitEvidenceUnavailable as exc:
+        return f"writer provenance evidence is unavailable or remote ref is not an ancestor ({exc})"
+    if not commits:
+        return None
+    verdict = evaluate_range(binding, commits)
+    return None if verdict.ok else f"{verdict.reason}. {remediation(binding)}"
 
 
 def remediation(binding: WriterIdentityBinding) -> str:

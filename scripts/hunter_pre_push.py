@@ -555,7 +555,8 @@ def enforce_credential_free_candidate_safety(lines: Iterable[str]) -> int:
 
 
 def enforce_pre_push(lines: Iterable[str]) -> int:
-    updates = _parse_updates(lines)
+    push_lines = list(lines)
+    updates = _parse_updates(push_lines)
     if not updates:
         return 0
 
@@ -565,7 +566,18 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
     before_head = _run_git("rev-parse", "HEAD")
     _require_clean_tree()
     _require_exact_head(updates, before_head)
-    _validate_writer_provenance(before_head)
+    # Issue #545: the signed publication boundary governs only newly pushed
+    # commits, not unrelated historical commits already on the remote ref.
+    for raw_update in push_lines:
+        fields = raw_update.split()
+        if len(fields) != 4:
+            raise RuntimeError("malformed pre-push ref update")
+        local_ref, local_sha, remote_ref, remote_sha = fields
+        if local_sha == ZERO_SHA:
+            continue
+        problem = provenance.check_publish_range(local_sha, remote_sha)
+        if problem:
+            raise RuntimeError(problem)
     _validate_receipt_freshness(before_head)
     # HGCC-1: shared read-only GitHub contract observation for every agent using
     # the repository-owned push boundary. No independent status publisher.
