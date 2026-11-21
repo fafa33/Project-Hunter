@@ -398,3 +398,80 @@ def test_hma1_trusted_proof_rechecks_pr_head_after_proof(monkeypatch):
     assert state == "failure"
     assert "head changed" in message
     assert calls["pr"] >= 3
+
+
+def test_issue_606_conflicting_exact_run_attempt_snapshots_fail_closed():
+    import hunter_validation_reuse as reuse
+
+    sha = "a" * 40
+    run = {
+        "id": 101,
+        "run_attempt": 2,
+        "head_sha": sha,
+        "name": reuse.PRE_PR_WORKFLOW_NAME,
+        "path": reuse.PRE_PR_WORKFLOW_PATH,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    conflicting = dict(run, conclusion="failure")
+    selected, reason = reuse.trusted_branch_preflight_run([run, conflicting], sha)
+    assert selected is None
+    assert "conflicting" in reason
+
+
+def test_issue_606_aba_never_accepts_different_exact_head():
+    import hunter_validation_reuse as reuse
+
+    sha_a, sha_b = "a" * 40, "b" * 40
+    run = {
+        "id": 101,
+        "run_attempt": 1,
+        "head_sha": sha_a,
+        "name": reuse.PRE_PR_WORKFLOW_NAME,
+        "path": reuse.PRE_PR_WORKFLOW_PATH,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    assert reuse.trusted_branch_preflight_run([run], sha_b)[0] is None
+    assert reuse.trusted_branch_preflight_run([run], sha_a)[0] == run
+
+
+def test_issue_606_new_attempt_supersedes_old_success():
+    import hunter_validation_reuse as reuse
+
+    sha = "a" * 40
+    base = {
+        "id": 111,
+        "head_sha": sha,
+        "name": reuse.PRE_PR_WORKFLOW_NAME,
+        "path": reuse.PRE_PR_WORKFLOW_PATH,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    old = dict(base, run_attempt=1)
+    new = dict(base, run_attempt=2, status="in_progress", conclusion=None)
+    selected, reason = reuse.trusted_branch_preflight_run([old, new], sha)
+    assert selected == new
+    assert "in_progress" in reason
+
+
+def test_issue_606_same_attempt_duplicate_identical_record_is_safe():
+    import hunter_validation_reuse as reuse
+
+    sha = "a" * 40
+    run = {
+        "id": 111,
+        "run_attempt": 2,
+        "head_sha": sha,
+        "name": reuse.PRE_PR_WORKFLOW_NAME,
+        "path": reuse.PRE_PR_WORKFLOW_PATH,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+    }
+    selected, reason = reuse.trusted_branch_preflight_run([run, dict(run)], sha)
+    assert selected == run
+    assert reason == ""

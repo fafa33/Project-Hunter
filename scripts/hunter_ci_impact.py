@@ -28,6 +28,17 @@ def classify_review_metadata_only(changed: list[str]) -> bool:
     return bool(changed) and all(path == REVIEW_REQUEST_PATH for path in changed)
 
 
+def classify_cross_head_equivalence_candidate(
+    *, changed: list[str], base_unchanged: bool, definitions_unchanged: bool, toolchain_unchanged: bool
+) -> bool:
+    """Signal only: an eligible metadata diff is NOT a reusable proof.
+
+    The canonical proof authority must separately bind new HEAD, run/attempt,
+    job, digest and provenance before any required context can be satisfied.
+    """
+    return classify_review_metadata_only(changed) and base_unchanged and definitions_unchanged and toolchain_unchanged
+
+
 def select_tests(changed: list[str], available: set[str]) -> tuple[bool, tuple[str, ...], str]:
     """Return full-proof requirement, focused tests and audit reason."""
     if not changed:
