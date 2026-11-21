@@ -875,7 +875,12 @@ def parse_commit_records(raw: str) -> tuple[CommitProvenance, ...]:
 
 
 def read_range_commits(
-    base: str, head: str, *, cwd: Path | None = None, binding: WriterIdentityBinding | None = None
+    base: str,
+    head: str,
+    *,
+    cwd: Path | None = None,
+    binding: WriterIdentityBinding | None = None,
+    exclude_refs: tuple[str, ...] = (),
 ) -> tuple[CommitProvenance, ...]:
     """Commit provenance for ``base..head``, oldest first.
 
@@ -885,9 +890,9 @@ def read_range_commits(
     break record parsing.
     """
 
-    raw = _run_git(
-        *GIT_SIGNATURE_READ_CONFIG, "log", "--reverse", f"--format={GIT_LOG_FORMAT}", f"{base}..{head}", cwd=cwd
-    )
+    # Both the prior remote tip and trusted main are already admitted.
+    revision = (f"{base}..{head}", *(f"^{ref}" for ref in exclude_refs))
+    raw = _run_git(*GIT_SIGNATURE_READ_CONFIG, "log", "--reverse", f"--format={GIT_LOG_FORMAT}", *revision, cwd=cwd)
     commits = parse_commit_records(raw)
     recovery = binding if binding is not None else load_binding()[0]
     if recovery is None or recovery.owner_recovery is None or not commits:
@@ -898,7 +903,7 @@ def read_range_commits(
         "log",
         "--reverse",
         f"--format=%H{GIT_FIELD_SEPARATOR}%(trailers:key={trailer},valueonly,separator={GIT_FIELD_SEPARATOR}){GIT_RECORD_SEPARATOR}",
-        f"{base}..{head}",
+        *revision,
         cwd=cwd,
     )
     found: dict[str, str] = {}
@@ -1113,7 +1118,7 @@ def check_publish_range(
         binding, error = load_trusted_binding(trusted, cwd=cwd)
         if binding is None:
             return f"writer provenance is unknown at trusted {remote}/{base_ref} {trusted[:10]} ({error})"
-        commits = read_range_commits(base, head, cwd=cwd, binding=binding)
+        commits = read_range_commits(base, head, cwd=cwd, binding=binding, exclude_refs=(trusted,))
     except GitEvidenceUnavailable as exc:
         return f"writer provenance evidence is unavailable or remote ref is not an ancestor ({exc})"
     if not commits:

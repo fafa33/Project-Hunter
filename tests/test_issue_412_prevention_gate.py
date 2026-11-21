@@ -4068,3 +4068,32 @@ def test_review_finding_multiline_trailer_is_not_truncated(monkeypatch) -> None:
     declaration_value, error = provenance.parse_recovery_declaration(read[0], _recovery_binding().owner_recovery)
     assert declaration_value is None
     assert "malformed" in error
+
+
+def test_issue_545_publish_range_excludes_trusted_main_after_sync(tmp_path, _hosted_git) -> None:
+    """Codex P1: merging already-admitted main must not re-govern its commits."""
+    repo, _ = _trusted_base_repository(tmp_path, {"claude": ["FRESH"], "fafa33": [OWNER_KEY]})
+    git = _git_in(repo)
+    # The candidate's earlier tip is the exact previous remote branch tip.
+    previous_tip = git("rev-parse", "HEAD")
+    git("push", "-q", "origin", f"{previous_tip}:refs/heads/feature")
+    git("checkout", "-q", "-b", "new-main", "origin/main")
+    (repo / "already-admitted.txt").write_text("main", encoding="utf-8")
+    git("add", "-A")
+    git(
+        "-c",
+        "user.name=GitHub",
+        "-c",
+        "user.email=noreply@github.com",
+        "commit",
+        "-q",
+        "-m",
+        "already admitted on main",
+    )
+    git("push", "-q", "origin", "HEAD:refs/heads/main")
+    git("checkout", "-q", "-B", "feature", previous_tip)
+    git("merge", "-q", "-S", "--no-edit", "origin/main")
+    # Only the merge commit (authorized local writer), not main's GitHub
+    # committer, belongs to the newly published feature range.
+    assert provenance.check_publish_range("HEAD", previous_tip, cwd=repo) is None
+    assert provenance.check_publish_range("HEAD", "f" * 40, cwd=repo) is not None
