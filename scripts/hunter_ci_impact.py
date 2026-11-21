@@ -67,6 +67,18 @@ def main() -> int:
     if not all(re.fullmatch(r"[0-9a-f]{40}", value) for value in (args.base, args.head)):
         print("[Hunter CI Impact] FULL REQUIRED: base/head must be exact 40-hex commit IDs", flush=True)
         return 2
+    # A divergent or non-commit base must never produce a misleading focused
+    # test selection. Git diff accepts unrelated trees, but trusted incremental
+    # admission requires an exact ancestor relationship.
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", args.base, args.head],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if ancestry.returncode != 0:
+        print("[Hunter CI Impact] FULL REQUIRED: base is not a verified ancestor of head", flush=True)
+        return 2
     # Fixed git subcommand; validated hashes cannot become options or shell syntax.
     command = (
         "git diff --name-only --diff-filter=ACDMRTUXB " + shlex.quote(args.base) + " " + shlex.quote(args.head) + " --"
