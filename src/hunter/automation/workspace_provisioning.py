@@ -70,7 +70,7 @@ def provision_verified_dispatch(
         checkpoint=checkpoint,
         lease_owner=issuer_instance,
         lease_token_digest=hashlib.sha256(lease_token.encode()).hexdigest(),
-        lease_expiry=(instant + timedelta(minutes=30)).isoformat(),
+        lease_expiry=(max(instant, datetime.now(UTC)) + timedelta(minutes=30)).isoformat(),
         fencing=1,
         next_action="dispatch",
     )

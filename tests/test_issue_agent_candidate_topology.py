@@ -28,14 +28,12 @@ is implemented these tests fail as tests rather than as collection errors.
 from __future__ import annotations
 
 import fnmatch
-import hashlib
 import importlib
 import json
 import secrets
 import subprocess
 import sys
 import time
-from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -71,8 +69,6 @@ from hunter.automation.issue_agent_execution import (
     derive_execution_target,
     issue_agent_document_id,
 )
-from hunter.automation.issue_agent_workspace import workspace_path
-from hunter.automation.workspace_authority import WorkspaceGrant, WorkspaceRegistry
 
 CANONICAL_REMOTE = f"https://github.com/{REPOSITORY}.git"
 ISSUE_TEXT = "src/hunter/example.py::apply_fix must preserve the governed authority boundary."
@@ -323,24 +319,9 @@ class Topology:
         checkpoint = f"signed-test-checkpoint:{_authorization_id(document)}"
         registry_path = tmp_path / "workspace-authority.json"
         if target is not None:
-            grant = WorkspaceGrant(
-                repository=target.repository,
-                issue=target.issue_number,
-                task_scope_digest=hashlib.sha256(document.encode()).hexdigest(),
-                workspace=str(workspace_path(self.workspace_root, target)),
-                branch=target.branch,
-                base_sha=target.base_sha,
-                head_sha=target.base_sha,
-                checkpoint=checkpoint,
-                lease_owner="test-trusted-issuer",
-                lease_token_digest=hashlib.sha256(lease_token.encode()).hexdigest(),
-                lease_expiry=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-                fencing=1,
-                next_action="execute",
-            )
-            WorkspaceRegistry(registry_path, authority_key=registry_key).write_cas(
-                expected_revision=None, grants={str(target.issue_number): grant}
-            )
+            # The trusted issuer, not the test fixture, owns first issuance.
+            # Pre-seeding this registry causes the real atomic issue_exclusive
+            # path to reject duplicate ownership before the HTTP ACK.
             environment.update(
                 HUNTER_WORKSPACE_REGISTRY_PATH=str(registry_path),
                 HUNTER_WORKSPACE_AUTHORITY_KEY_HEX=registry_key.hex(),

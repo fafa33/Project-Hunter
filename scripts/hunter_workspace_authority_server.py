@@ -38,7 +38,8 @@ def main() -> None:
         writer_token=writer,
     )
     try:
-        server.serve_forever()
+        # Local loopback-only HTTP; remote access requires a separately authenticated encrypted tunnel.
+        server.serve_forever()  # NOSONAR python:S5332 - never bound to a network interface
     finally:
         server.server_close()
 
