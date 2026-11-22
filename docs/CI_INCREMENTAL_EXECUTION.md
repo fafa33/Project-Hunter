@@ -99,3 +99,5 @@ token/conclusion wiring.
 ## Required checks and non-weakening
 
 No required context, ruleset, security gate, signature, or trusted boundary is removed or weakened. `paths-ignore` skipping never suppresses a required context. Merge remains owner-gated; this change does not merge or mark the PR ready by itself.
+
+<!-- Issue #606 hosted canary: temporary source-proof anchor; do not merge. -->
