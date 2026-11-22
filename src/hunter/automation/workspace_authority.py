@@ -201,6 +201,43 @@ class WorkspaceRegistry:
             raise WorkspaceAuthorityMismatch("publication lease expired")
         return grant
 
+    def issue_exclusive(self, grant: WorkspaceGrant) -> int:
+        """Atomic issuer-only insertion; no read-then-write ownership race."""
+        with self._writer_lock():
+            if self.path.exists():
+                old = self.read()
+                grants = {key: WorkspaceGrant(**value) for key, value in old["grants"].items()}
+                expected_revision = old["revision"]
+            else:
+                grants = {}
+                expected_revision = None
+            if str(grant.issue) in grants:
+                raise WorkspaceAuthorityMismatch("existing issue requires governed lease handoff")
+            grants[str(grant.issue)] = grant
+            return self._write_cas_locked(expected_revision=expected_revision, grants=grants)
+
+    def renew_owned_lease(
+        self, *, issue: int, owner: str, lease_token: str, now: datetime, duration_seconds: int = 1800
+    ) -> int:
+        """Extend only an active matching lease, without changing lineage/fence."""
+        from dataclasses import replace
+        from datetime import timedelta
+
+        if now.tzinfo is None or duration_seconds < 1:
+            raise WorkspaceAuthorityMismatch("invalid lease renewal time")
+        with self._writer_lock():
+            old = self.read()
+            grants = {key: WorkspaceGrant(**value) for key, value in old["grants"].items()}
+            current = grants.get(str(issue))
+            if current is None or current.lease_owner != owner:
+                raise WorkspaceAuthorityMismatch("lease renewal ownership")
+            if not hmac.compare_digest(current.lease_token_digest, hashlib.sha256(lease_token.encode()).hexdigest()):
+                raise WorkspaceAuthorityMismatch("lease renewal token")
+            if datetime.fromisoformat(current.lease_expiry) <= now:
+                raise WorkspaceAuthorityMismatch("expired lease cannot renew")
+            grants[str(issue)] = replace(current, lease_expiry=(now + timedelta(seconds=duration_seconds)).isoformat())
+            return self._write_cas_locked(expected_revision=old["revision"], grants=grants)
+
     def write_cas(self, *, expected_revision: int | None, grants: dict[str, WorkspaceGrant]) -> int:
         """Serialized interprocess CAS; never accepts a self-asserted hash as authority."""
         with self._writer_lock():

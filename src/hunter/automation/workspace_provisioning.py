@@ -66,17 +66,6 @@ def provision_verified_dispatch(
         fencing=1,
         next_action="dispatch",
     )
-    # Existing issues are not overwritten, even by a new signed authorization.
-    # A lease handoff must use a separately governed recovery transition.
-    try:
-        old = registry.read()
-    except WorkspaceAuthorityMismatch:
-        if registry.path.exists():
-            raise
-        old = None
-    grants = {} if old is None else {k: WorkspaceGrant(**v) for k, v in old["grants"].items()}
-    if str(target.issue_number) in grants:
-        raise WorkspaceAuthorityMismatch("existing issue requires governed lease handoff")
-    grants[str(target.issue_number)] = grant
-    registry.write_cas(expected_revision=None if old is None else old["revision"], grants=grants)
+    # Registry owns the lock across the entire read/ownership-check/write.
+    registry.issue_exclusive(grant)
     return grant

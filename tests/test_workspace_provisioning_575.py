@@ -73,3 +73,44 @@ def test_issuer_provisions_runtime_and_publisher_from_same_grant(tmp_path: Path)
     assert registry.read()["revision"] == 1
     with pytest.raises(WorkspaceAuthorityMismatch, match="configuration required"):
         provision_verified_dispatch(**{**args, "trusted_environment": {}})
+
+
+def test_owned_lease_renews_without_changing_fence_or_lineage(tmp_path: Path) -> None:
+    import hashlib
+    from dataclasses import replace
+    from datetime import timedelta
+
+    from hunter.automation.workspace_authority import WorkspaceGrant
+
+    now = datetime(2026, 11, 22, tzinfo=UTC)
+    token = "renew-token"
+    registry = WorkspaceRegistry(tmp_path / "registry.json", authority_key=b"k" * 32)
+    original = WorkspaceGrant(
+        repository="fafa33/Project-Hunter",
+        issue=575,
+        task_scope_digest="a" * 64,
+        workspace=str(tmp_path / "workspace"),
+        branch="issue-575-aaaa",
+        base_sha="b" * 40,
+        head_sha="b" * 40,
+        checkpoint="checkpoint-1",
+        lease_owner="issuer-1",
+        lease_token_digest=hashlib.sha256(token.encode()).hexdigest(),
+        lease_expiry=(now + timedelta(minutes=30)).isoformat(),
+        fencing=1,
+        next_action="dispatch",
+    )
+    assert registry.issue_exclusive(original) == 1
+    with pytest.raises(WorkspaceAuthorityMismatch, match="governed lease handoff"):
+        registry.issue_exclusive(replace(original, lease_owner="issuer-2"))
+    with pytest.raises(WorkspaceAuthorityMismatch, match="renewal ownership"):
+        registry.renew_owned_lease(issue=575, owner="issuer-2", lease_token=token, now=now)
+    with pytest.raises(WorkspaceAuthorityMismatch, match="renewal token"):
+        registry.renew_owned_lease(issue=575, owner="issuer-1", lease_token="wrong", now=now)
+    assert (
+        registry.renew_owned_lease(issue=575, owner="issuer-1", lease_token=token, now=now + timedelta(minutes=10)) == 2
+    )
+    updated = WorkspaceGrant(**registry.read()["grants"]["575"])
+    assert replace(updated, lease_expiry=original.lease_expiry) == original
+    with pytest.raises(WorkspaceAuthorityMismatch, match="expired lease"):
+        registry.renew_owned_lease(issue=575, owner="issuer-1", lease_token=token, now=now + timedelta(hours=2))

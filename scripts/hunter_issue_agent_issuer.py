@@ -81,6 +81,7 @@ from hunter.automation.issue_agent_execution import (
 )
 from hunter.automation.issue_agent_workspace import IssueAgentWorkspaceRuntime
 from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
+from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceRegistry
 from hunter.automation.workspace_provisioning import provision_verified_dispatch
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService
@@ -505,6 +506,26 @@ def _run_lease_renewer(
                     prepared.authorization,
                     health_at=services.configuration.clock.now(),
                 )
+                registry_path = os.environ.get("HUNTER_WORKSPACE_REGISTRY_PATH", "")
+                if registry_path:
+                    key_hex = os.environ.get("HUNTER_WORKSPACE_AUTHORITY_KEY_HEX", "")
+                    lease_token = os.environ.get("HUNTER_WORKSPACE_LEASE_TOKEN", "")
+                    try:
+                        key = bytes.fromhex(key_hex)
+                        WorkspaceRegistry(Path(registry_path), authority_key=key).renew_owned_lease(
+                            issue=prepared.target.issue_number,
+                            owner=services.configuration.instance_id,
+                            lease_token=lease_token,
+                            now=services.configuration.clock.now(),
+                        )
+                    except (ValueError, WorkspaceAuthorityMismatch) as error:
+                        # Never silently continue treating a stale workspace
+                        # lease as renewable. The runtime itself also checks
+                        # the exact active grant before any provider launch.
+                        logger.error(
+                            "workspace lease renewal refused for issue %s: %s", prepared.target.issue_number, error
+                        )
+                        registry.unregister(worker)
             except IssueAgentExecutionError as error:
                 logger.warning(
                     "execution %s is no longer renewable by this instance: %s",
