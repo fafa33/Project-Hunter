@@ -34,6 +34,7 @@ import argparse
 import os
 import re
 import subprocess
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -259,6 +260,8 @@ def decide(
     pr_number: int,
     token: str,
     fetch: reuse.Fetch | None = None,
+    wait_seconds: float = 0,
+    poll_seconds: float = 15,
 ) -> tuple[bool, str]:
     """Whether the trusted candidate lane may stand on the hosted exact-head proof."""
     try:
@@ -291,7 +294,10 @@ def decide(
     # cross-HEAD equivalence and issues a NEW current-HEAD-bound decision.
     # Every missing/ambiguous identity fails closed into a fresh run.
     equivalence_refusal = ""
-    if changed_paths:
+    # Ordinary code changes cannot reuse a *previous* HEAD, but may reuse a
+    # concurrently completing full proof for this exact HEAD. Only the hosted
+    # bounded-wait path (not existing zero-wait callers) takes that route.
+    if changed_paths and not (wait_seconds > 0 and not impact.classify_review_metadata_only(changed_paths)):
         source_head, source_problem = reuse.find_previous_proven_head(repository, token, head_sha)
         if not source_head:
             return False, f"metadata-only candidate has no usable source proof ({source_problem})"
@@ -329,6 +335,23 @@ def decide(
         token=token,
         fetch=fetch,
     )
+    # A concurrent push proof may still be running when pull_request_target
+    # starts. Wait only a bounded interval; no candidate code or token executes
+    # here. Every poll uses the existing canonical exact-head authority.
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    while not decision.reusable and time.monotonic() < deadline:
+        time.sleep(min(max(0.1, poll_seconds), deadline - time.monotonic()))
+        still_matches, reason = _pr_identity_still_matches(repository, token, pr_number, head_sha, base_sha)
+        if not still_matches:
+            return False, reason
+        decision = reuse.resolve(
+            candidate_root,
+            event_name="pull_request",
+            head_sha=head_sha,
+            repository=repository,
+            token=token,
+            fetch=fetch,
+        )
     if decision.reusable:
         still_matches, reason = _pr_identity_still_matches(repository, token, pr_number, head_sha, base_sha)
         if not still_matches:
@@ -387,6 +410,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             repository=args.repository,
             pr_number=args.pr,
             token=token,
+            wait_seconds=120,
         )
     except Exception as exc:  # noqa: BLE001 - reuse is optional; full gates are the fail-closed path
         reusable, reason = False, f"reuse decision failed ({type(exc).__name__}: {exc})"
