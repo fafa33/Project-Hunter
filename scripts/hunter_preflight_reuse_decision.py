@@ -34,8 +34,10 @@ import argparse
 import os
 import re
 import subprocess
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import hunter_ci_impact as impact
@@ -251,6 +253,38 @@ def decide_push(git_root: Path, *, head_sha: str, repository: str, token: str) -
     )
 
 
+def _near_completion_wait_budget(repository: str, token: str, head_sha: str) -> float:
+    """Wait briefly only when the exact-HEAD hosted full proof is already mature.
+
+    This is scheduling evidence, NOT proof authority. Any malformed/missing API
+    response returns zero wait; canonical reuse.resolve still decides validity.
+    """
+    try:
+        data = governance.request_json(repository, token, "GET", f"commits/{head_sha}/check-runs?per_page=100")
+        checks = data.get("check_runs") if isinstance(data, dict) else None
+        if not isinstance(checks, list):
+            return 0.0
+        matches = [
+            c
+            for c in checks
+            if isinstance(c, dict)
+            and c.get("name") == "Hunter Pre-PR Preflight"
+            and c.get("head_sha") == head_sha
+            and c.get("status") == "in_progress"
+        ]
+        if len(matches) != 1:
+            return 0.0
+        started = matches[0].get("started_at")
+        if not isinstance(started, str):
+            return 0.0
+        elapsed = (datetime.now(UTC) - datetime.fromisoformat(started.replace("Z", "+00:00"))).total_seconds()
+        # Observed full jobs normally need ~10–17 minutes. Starting together
+        # must NOT impose a 120-second idle delay before the trusted suite.
+        return 30.0 if 600 <= elapsed <= 1200 else 0.0
+    except Exception:  # noqa: BLE001 - optional scheduling
+        return 0.0
+
+
 def decide(
     candidate_root: Path,
     *,
@@ -259,6 +293,8 @@ def decide(
     pr_number: int,
     token: str,
     fetch: reuse.Fetch | None = None,
+    wait_seconds: float = 0,
+    poll_seconds: float = 15,
 ) -> tuple[bool, str]:
     """Whether the trusted candidate lane may stand on the hosted exact-head proof."""
     try:
@@ -291,7 +327,10 @@ def decide(
     # cross-HEAD equivalence and issues a NEW current-HEAD-bound decision.
     # Every missing/ambiguous identity fails closed into a fresh run.
     equivalence_refusal = ""
-    if changed_paths:
+    # Ordinary code changes cannot reuse a *previous* HEAD, but may reuse a
+    # concurrently completing full proof for this exact HEAD. Only the hosted
+    # bounded-wait path (not existing zero-wait callers) takes that route.
+    if changed_paths and not (wait_seconds > 0 and not impact.classify_review_metadata_only(changed_paths)):
         source_head, source_problem = reuse.find_previous_proven_head(repository, token, head_sha)
         if not source_head:
             return False, f"metadata-only candidate has no usable source proof ({source_problem})"
@@ -329,6 +368,23 @@ def decide(
         token=token,
         fetch=fetch,
     )
+    # A concurrent push proof may still be running when pull_request_target
+    # starts. Wait only a bounded interval; no candidate code or token executes
+    # here. Every poll uses the existing canonical exact-head authority.
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    while not decision.reusable and time.monotonic() < deadline:
+        time.sleep(min(max(0.1, poll_seconds), deadline - time.monotonic()))
+        still_matches, reason = _pr_identity_still_matches(repository, token, pr_number, head_sha, base_sha)
+        if not still_matches:
+            return False, reason
+        decision = reuse.resolve(
+            candidate_root,
+            event_name="pull_request",
+            head_sha=head_sha,
+            repository=repository,
+            token=token,
+            fetch=fetch,
+        )
     if decision.reusable:
         still_matches, reason = _pr_identity_still_matches(repository, token, pr_number, head_sha, base_sha)
         if not still_matches:
@@ -387,6 +443,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             repository=args.repository,
             pr_number=args.pr,
             token=token,
+            wait_seconds=_near_completion_wait_budget(args.repository, token, args.head_sha),
         )
     except Exception as exc:  # noqa: BLE001 - reuse is optional; full gates are the fail-closed path
         reusable, reason = False, f"reuse decision failed ({type(exc).__name__}: {exc})"

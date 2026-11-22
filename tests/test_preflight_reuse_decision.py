@@ -1145,3 +1145,119 @@ def test_push_delayed_or_inconclusive_decision_runs_full_suite() -> None:
     # a delayed, failed or malformed decision cannot.
     assert "needs.proof-equivalence.result == 'success'" in str(heavy.get("if"))
     assert "steps.preflight-mode.outputs.mode == 'normal'" in str(heavy.get("if"))
+
+
+def test_bounded_wait_reuses_late_exact_head_proof(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A concurrently finishing push proof can replace a duplicate trusted suite."""
+    monkeypatch.setattr(decision.governance, "read_pr_changed_paths", _no_changes)
+    clock = [0.0]
+    monkeypatch.setattr(decision.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(decision.time, "sleep", lambda duration: clock.__setitem__(0, clock[0] + duration))
+    attempts = iter([reuse.ReuseDecision(False, "pending"), reuse.ReuseDecision(True, "exact-head verified")])
+    monkeypatch.setattr(decision.reuse, "resolve", lambda *_a, **_k: next(attempts))
+    assert decision.decide(tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token", wait_seconds=30)[0]
+    assert clock[0] == 15
+
+
+def test_bounded_wait_times_out_fail_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(decision.governance, "read_pr_changed_paths", _no_changes)
+    clock = [0.0]
+    monkeypatch.setattr(decision.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(decision.time, "sleep", lambda duration: clock.__setitem__(0, clock[0] + duration))
+    monkeypatch.setattr(decision.reuse, "resolve", lambda *_a, **_k: reuse.ReuseDecision(False, "proof unavailable"))
+    reusable, reason = decision.decide(
+        tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token", wait_seconds=20
+    )
+    assert not reusable and "unavailable" in reason
+    assert clock[0] == 20
+
+
+def test_bounded_wait_rejects_head_race(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(decision.governance, "read_pr_changed_paths", _no_changes)
+    clock = [0.0]
+    monkeypatch.setattr(decision.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(decision.time, "sleep", lambda duration: clock.__setitem__(0, clock[0] + duration))
+    monkeypatch.setattr(decision.reuse, "resolve", lambda *_a, **_k: reuse.ReuseDecision(False, "pending"))
+    monkeypatch.setattr(decision, "_pr_identity_still_matches", lambda *_a: (False, "PR head changed"))
+    reusable, reason = decision.decide(
+        tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token", wait_seconds=30
+    )
+    assert not reusable and "head changed" in reason
+    assert clock[0] == 15
+
+
+def test_normal_code_pr_waits_for_same_head_proof_not_old_head(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        decision.governance,
+        "read_pr_changed_paths",
+        lambda *_a, **_k: (True, ("src/hunter/signal.py",), None),
+    )
+    monkeypatch.setattr(
+        decision.reuse,
+        "find_previous_proven_head",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("old-head reuse forbidden")),
+    )
+    clock = [0.0]
+    monkeypatch.setattr(decision.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(decision.time, "sleep", lambda duration: clock.__setitem__(0, clock[0] + duration))
+    attempts = iter([reuse.ReuseDecision(False, "pending"), reuse.ReuseDecision(True, "exact-head full proof")])
+    monkeypatch.setattr(decision.reuse, "resolve", lambda *_a, **_k: next(attempts))
+    reusable, reason = decision.decide(
+        tmp_path, head_sha=HEAD, repository=REPO, pr_number=PR, token="token", wait_seconds=30
+    )
+    assert reusable and "exact-head" in reason
+
+
+def test_simultaneous_full_proof_does_not_delay_trusted_lane(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC, datetime
+
+    monkeypatch.setattr(
+        decision.governance,
+        "request_json",
+        lambda *_a, **_k: {
+            "check_runs": [
+                {
+                    "name": "Hunter Pre-PR Preflight",
+                    "head_sha": HEAD,
+                    "status": "in_progress",
+                    "started_at": datetime.now(UTC).isoformat(),
+                }
+            ]
+        },
+    )
+    assert decision._near_completion_wait_budget(REPO, "token", HEAD) == 0
+
+
+def test_mature_same_head_proof_allows_short_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    from datetime import UTC, datetime, timedelta
+
+    monkeypatch.setattr(
+        decision.governance,
+        "request_json",
+        lambda *_a, **_k: {
+            "check_runs": [
+                {
+                    "name": "Hunter Pre-PR Preflight",
+                    "head_sha": HEAD,
+                    "status": "in_progress",
+                    "started_at": (datetime.now(UTC) - timedelta(seconds=700)).isoformat(),
+                }
+            ]
+        },
+    )
+    assert decision._near_completion_wait_budget(REPO, "token", HEAD) == 30
+
+
+def test_stale_or_ambiguous_proof_never_causes_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        decision.governance,
+        "request_json",
+        lambda *_a, **_k: {
+            "check_runs": [
+                {"name": "Hunter Pre-PR Preflight", "head_sha": BASE, "status": "in_progress", "started_at": "invalid"}
+            ]
+        },
+    )
+    assert decision._near_completion_wait_budget(REPO, "token", HEAD) == 0
+    monkeypatch.setattr(decision.governance, "request_json", lambda *_a, **_k: (_ for _ in ()).throw(OSError()))
+    assert decision._near_completion_wait_budget(REPO, "token", HEAD) == 0
