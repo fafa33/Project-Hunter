@@ -57,7 +57,7 @@ def admit(registry: WorkspaceRegistry, g: WorkspaceGrant, token: str, **override
 
 def test_registered_exact_lineage_admits(tmp_path: Path) -> None:
     g, token = grant(tmp_path)
-    registry = WorkspaceRegistry(tmp_path / "authority.json")
+    registry = WorkspaceRegistry(tmp_path / "authority.json", authority_key=b"a" * 32)
     assert registry.write_cas(expected_revision=None, grants={"575": g}) == 1
     assert admit(registry, g, token) == g
     assert registry.write_cas(expected_revision=1, grants={"575": g}) == 2
@@ -79,7 +79,7 @@ def test_registered_exact_lineage_admits(tmp_path: Path) -> None:
 )
 def test_mismatched_coordinates_refuse(tmp_path: Path, override: dict[str, object]) -> None:
     g, token = grant(tmp_path)
-    registry = WorkspaceRegistry(tmp_path / "authority.json")
+    registry = WorkspaceRegistry(tmp_path / "authority.json", authority_key=b"a" * 32)
     registry.write_cas(expected_revision=None, grants={"575": g})
     with pytest.raises(WorkspaceAuthorityMismatch, match="WORKSPACE_AUTHORITY_MISMATCH"):
         admit(registry, g, token, **override)
@@ -87,7 +87,7 @@ def test_mismatched_coordinates_refuse(tmp_path: Path, override: dict[str, objec
 
 def test_missing_and_tampered_registry_refuse(tmp_path: Path) -> None:
     g, token = grant(tmp_path)
-    registry = WorkspaceRegistry(tmp_path / "authority.json")
+    registry = WorkspaceRegistry(tmp_path / "authority.json", authority_key=b"a" * 32)
     with pytest.raises(WorkspaceAuthorityMismatch, match="registry unavailable"):
         admit(registry, g, token)
     registry.write_cas(expected_revision=None, grants={"575": g})
@@ -100,7 +100,7 @@ def test_missing_and_tampered_registry_refuse(tmp_path: Path) -> None:
 
 def test_expired_lease_and_missing_checkpoint_refuse(tmp_path: Path) -> None:
     g, token = grant(tmp_path)
-    registry = WorkspaceRegistry(tmp_path / "authority.json")
+    registry = WorkspaceRegistry(tmp_path / "authority.json", authority_key=b"a" * 32)
     expired = replace(g, lease_expiry=(datetime.now(UTC) - timedelta(seconds=1)).isoformat())
     registry.write_cas(expected_revision=None, grants={"575": expired})
     with pytest.raises(WorkspaceAuthorityMismatch, match="lease expired"):
@@ -111,6 +111,50 @@ def test_expired_lease_and_missing_checkpoint_refuse(tmp_path: Path) -> None:
 
 def test_duplicate_workspace_refused(tmp_path: Path) -> None:
     g, _ = grant(tmp_path)
-    registry = WorkspaceRegistry(tmp_path / "authority.json")
+    registry = WorkspaceRegistry(tmp_path / "authority.json", authority_key=b"a" * 32)
     with pytest.raises(WorkspaceAuthorityMismatch, match="workspace ownership conflict"):
         registry.write_cas(expected_revision=None, grants={"575": g, "576": replace(g, issue=576)})
+
+
+def test_forged_self_digest_cannot_bypass_authority(tmp_path: Path) -> None:
+    g, token = grant(tmp_path)
+    registry = WorkspaceRegistry(tmp_path / "authority.json", authority_key=b"a" * 32)
+    registry.write_cas(expected_revision=None, grants={"575": g})
+    raw = json.loads(registry.path.read_text())
+    raw["grants"]["575"]["head_sha"] = "c" * 40
+    body = {k: v for k, v in raw.items() if k != "digest"}
+    raw["digest"] = hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    registry.path.write_text(json.dumps(raw))
+    with pytest.raises(WorkspaceAuthorityMismatch, match="registry integrity"):
+        admit(registry, g, token)
+
+
+def test_missing_or_wrong_trusted_key_fails_closed(tmp_path: Path) -> None:
+    g, token = grant(tmp_path)
+    path = tmp_path / "authority.json"
+    WorkspaceRegistry(path, authority_key=b"a" * 32).write_cas(expected_revision=None, grants={"575": g})
+    for key in (None, b"b" * 32):
+        with pytest.raises(WorkspaceAuthorityMismatch):
+            admit(WorkspaceRegistry(path, authority_key=key), g, token)
+
+
+def test_interprocess_cas_only_one_writer_wins(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    g, _ = grant(tmp_path)
+    path = tmp_path / "authority.json"
+    key = b"a" * 32
+    WorkspaceRegistry(path, authority_key=key).write_cas(expected_revision=None, grants={"575": g})
+
+    def write(_: int) -> str:
+        try:
+            WorkspaceRegistry(path, authority_key=key).write_cas(expected_revision=1, grants={"575": g})
+            return "success"
+        except WorkspaceAuthorityMismatch:
+            return "stale"
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        results = list(executor.map(write, range(8)))
+    assert results.count("success") == 1
+    assert results.count("stale") == 7
+    assert WorkspaceRegistry(path, authority_key=key).read()["revision"] == 2

@@ -6,11 +6,14 @@ issuer leases remain authoritative until the global integration is proven.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import hmac
 import json
 import os
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -25,10 +28,6 @@ class WorkspaceAuthorityMismatch(ValueError):
 
     def __init__(self, reason: str) -> None:
         super().__init__(f"{MISMATCH}: {reason}")
-
-
-def _digest(value: dict[str, Any]) -> str:
-    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def _require_sha(value: str) -> None:
@@ -82,8 +81,27 @@ class WorkspaceRegistry:
     class deliberately never invents owner authorization or a signer.
     """
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, authority_key: bytes | None = None) -> None:
         self.path = path
+        self.authority_key = authority_key
+
+    def _seal(self, body: dict[str, Any]) -> str:
+        if self.authority_key is None or len(self.authority_key) < 32:
+            raise WorkspaceAuthorityMismatch("trusted authority key unavailable")
+        encoded = json.dumps(body, sort_keys=True, separators=(",", ":")).encode()
+        return hmac.new(self.authority_key, encoded, hashlib.sha256).hexdigest()
+
+    @contextmanager
+    def _writer_lock(self) -> Iterator[None]:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = self.path.with_name(self.path.name + ".lock")
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
     def read(self) -> dict[str, Any]:
         try:
@@ -94,7 +112,7 @@ class WorkspaceRegistry:
             raise WorkspaceAuthorityMismatch("registry schema")
         expected = value.get("digest")
         body = {k: v for k, v in value.items() if k != "digest"}
-        if not isinstance(expected, str) or not hmac.compare_digest(expected, _digest(body)):
+        if not isinstance(expected, str) or not hmac.compare_digest(expected, self._seal(body)):
             raise WorkspaceAuthorityMismatch("registry integrity")
         if not isinstance(value.get("revision"), int) or value["revision"] < 1:
             raise WorkspaceAuthorityMismatch("registry revision")
@@ -140,6 +158,11 @@ class WorkspaceRegistry:
         return grant
 
     def write_cas(self, *, expected_revision: int | None, grants: dict[str, WorkspaceGrant]) -> int:
+        """Serialized interprocess CAS; never accepts a self-asserted hash as authority."""
+        with self._writer_lock():
+            return self._write_cas_locked(expected_revision=expected_revision, grants=grants)
+
+    def _write_cas_locked(self, *, expected_revision: int | None, grants: dict[str, WorkspaceGrant]) -> int:
         if self.path.exists():
             old = self.read()
             if expected_revision != old["revision"]:
@@ -157,8 +180,7 @@ class WorkspaceRegistry:
             if key != str(grant.issue):
                 raise WorkspaceAuthorityMismatch("issue key conflict")
         body = {"version": VERSION, "revision": revision, "grants": entries}
-        document = {**body, "digest": _digest(body)}
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        document = {**body, "digest": self._seal(body)}
         fd, temp = tempfile.mkstemp(prefix=".workspace-registry-", dir=self.path.parent)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as stream:
@@ -166,6 +188,11 @@ class WorkspaceRegistry:
                 stream.flush()
                 os.fsync(stream.fileno())
             os.replace(temp, self.path)
+            dir_fd = os.open(self.path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
         finally:
             if os.path.exists(temp):
                 os.unlink(temp)
