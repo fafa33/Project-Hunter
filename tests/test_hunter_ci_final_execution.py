@@ -183,7 +183,7 @@ def test_no_previous_source_proof_fails_closed(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(
         reuse,
         "find_previous_proven_head",
-        lambda repo, token, current: (None, "no previous successful exact-head proof found"),
+        lambda repo, token, current, **_k: (None, "no previous successful exact-head proof found"),
     )
     decision = _verify(source_proof_head=None)
     assert decision.equivalent is False
@@ -681,3 +681,170 @@ def test_red_marker_git_failure_fails_closed(tmp_path: Path) -> None:
     present, problem = reuse._commit_has_red_mode(tmp_path, SOURCE_HEAD)
     assert not present
     assert "unavailable" in problem
+
+
+# ---------------------------------------------------------------------------
+# Issue #606: proof mode is canonical; a skip is never a fresh full run
+# ---------------------------------------------------------------------------
+
+
+def _jobs_snapshot(mode: str | None, *, skipped_marker: str | None = None) -> dict[str, Any]:
+    steps: list[dict[str, str]] = []
+    if mode:
+        steps.append({"name": f"{reuse.PROOF_MODE_STEP_PREFIX}{mode}", "conclusion": "success"})
+    if skipped_marker:
+        steps.append({"name": f"{reuse.PROOF_MODE_STEP_PREFIX}{skipped_marker}", "conclusion": "skipped"})
+    return {
+        "jobs": [
+            {
+                "id": JOB_ID,
+                "run_id": 100,
+                "name": "Hunter Pre-PR Preflight",
+                "status": "completed",
+                "conclusion": "success",
+                "steps": steps,
+            }
+        ]
+    }
+
+
+def test_canonical_digest_distinguishes_full_execution_from_verified_reuse() -> None:
+    run = _successful_proof_run()
+    full_digest, full_mode, full_problem = reuse._canonical_job_proof_with_mode(
+        REPO, "token", run, SOURCE_HEAD, None, _jobs_snapshot(reuse.PROOF_MODE_FULL)
+    )
+    reuse_digest, reuse_mode, reuse_problem = reuse._canonical_job_proof_with_mode(
+        REPO,
+        "token",
+        run,
+        SOURCE_HEAD,
+        None,
+        _jobs_snapshot(reuse.PROOF_MODE_REUSE, skipped_marker=reuse.PROOF_MODE_FULL),
+    )
+    assert full_problem == reuse_problem == ""
+    assert full_mode == reuse.PROOF_MODE_FULL
+    assert reuse_mode == reuse.PROOF_MODE_REUSE
+    assert full_digest and reuse_digest and full_digest != reuse_digest
+
+
+def test_skipped_proof_mode_marker_does_not_make_markers_ambiguous() -> None:
+    job = _jobs_snapshot(reuse.PROOF_MODE_REUSE, skipped_marker=reuse.PROOF_MODE_FULL)["jobs"][0]
+    assert reuse.proof_execution_mode(job) == (reuse.PROOF_MODE_REUSE, "")
+
+
+@pytest.mark.parametrize(
+    "steps,expected",
+    [
+        (
+            [
+                {"name": f"{reuse.PROOF_MODE_STEP_PREFIX}a", "conclusion": "success"},
+                {"name": f"{reuse.PROOF_MODE_STEP_PREFIX}b", "conclusion": "success"},
+            ],
+            "ambiguous",
+        ),
+        ([{"name": f"{reuse.PROOF_MODE_STEP_PREFIX}forged-mode", "conclusion": "success"}], "unknown"),
+        (
+            [{"name": f"{reuse.PROOF_MODE_STEP_PREFIX}{reuse.PROOF_MODE_REUSE}", "conclusion": "failure"}],
+            "did not succeed",
+        ),
+    ],
+)
+def test_malformed_proof_mode_markers_fail_closed(steps: list[dict[str, str]], expected: str) -> None:
+    mode, problem = reuse.proof_execution_mode({"steps": steps})
+    assert mode == ""
+    assert expected in problem
+
+
+def test_reuse_mode_source_proof_is_never_a_source_for_equivalence(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_fetch(repository: str, token: str, path: str) -> Any:
+        if "actions/runs?" in path:
+            return {"workflow_runs": [_successful_proof_run()]}
+        if "/jobs" in path:
+            return _jobs_snapshot(reuse.PROOF_MODE_REUSE)
+        raise AssertionError(f"unexpected fetch path: {path}")
+
+    monkeypatch.setattr(reuse, "_fetch", fake_fetch)
+    attempt, job_id, digest, problem = reuse._source_proof_bindings(REPO, "token", SOURCE_HEAD)
+    assert (attempt, job_id, digest) == (0, 0, "")
+    assert reuse.PROOF_MODE_REUSE in problem
+
+
+def test_exact_head_resolve_refuses_a_verified_reuse_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        reuse,
+        "candidate_evidence",
+        lambda *_a, **_k: (reuse.CandidateEvidence(CURRENT_HEAD, "tree", "tree", "def", "tc"), ""),
+    )
+    monkeypatch.setattr(
+        reuse,
+        "_authoritative_runs",
+        lambda *_a, **_k: ([_successful_proof_run(head_sha=CURRENT_HEAD)], ""),
+    )
+    monkeypatch.setattr(reuse, "decide_from_runs", lambda *_a, **_k: reuse.ReuseDecision(True, "hosted proof"))
+    monkeypatch.setattr(
+        reuse,
+        "_canonical_job_proof_with_mode",
+        lambda *_a, **_k: ("sha256:reuse", reuse.PROOF_MODE_REUSE, ""),
+    )
+    decision = reuse.resolve(ROOT, event_name="pull_request", head_sha=CURRENT_HEAD, repository=REPO, token="token")
+    assert decision.reusable is False
+    assert "not a fresh full run" in decision.reason
+
+
+def test_newer_failed_attempt_refuses_the_source_proof(monkeypatch: pytest.MonkeyPatch) -> None:
+    newer_failed = _successful_proof_run()
+    newer_failed["run_attempt"] = RUN_ATTEMPT + 1
+    newer_failed["conclusion"] = "failure"
+
+    def fake_fetch(repository: str, token: str, path: str) -> Any:
+        if "actions/runs?" in path:
+            return {"workflow_runs": [_successful_proof_run(), newer_failed]}
+        raise AssertionError("a failed latest attempt must never reach job/digest derivation")
+
+    monkeypatch.setattr(reuse, "_fetch", fake_fetch)
+    attempt, job_id, digest, problem = reuse._source_proof_bindings(REPO, "token", SOURCE_HEAD)
+    assert (attempt, job_id, digest) == (0, 0, "")
+    assert "concluded failure" in problem
+
+
+def _commit_with_identity(repo: Path, message: str, *, allow_empty: bool = False) -> str:
+    command = [
+        "git",
+        "-c",
+        "user.name=Regression",
+        "-c",
+        "user.email=regression@example.invalid",
+        "commit",
+        "-q",
+    ]
+    command.extend(["--allow-empty", "-m", message] if allow_empty else ["-m", message])
+    subprocess.run(command, cwd=repo, check=True, capture_output=True, text=True)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def test_tested_tree_digest_survives_metadata_only_aba_but_not_code_change(tmp_path: Path) -> None:
+    _git(tmp_path, "init", "-q")
+    (tmp_path / "app.py").write_text("value = 1\n", encoding="utf-8")
+    _git(tmp_path, "add", "app.py")
+    head_a = _commit_with_identity(tmp_path, "A")
+    digest_a, problem_a = reuse.compute_tested_tree_digest(tmp_path, head_a)
+    assert problem_a == "" and digest_a
+
+    metadata = tmp_path / ".hunter" / "pre-ready-hostile-review.json"
+    metadata.parent.mkdir(parents=True, exist_ok=True)
+    metadata.write_text('{"review": "hostile"}\n', encoding="utf-8")
+    _git(tmp_path, "add", str(metadata.relative_to(tmp_path)))
+    head_b = _commit_with_identity(tmp_path, "B")
+    digest_b, problem_b = reuse.compute_tested_tree_digest(tmp_path, head_b)
+    assert problem_b == "" and digest_b == digest_a
+
+    head_a_again = _commit_with_identity(tmp_path, "A again", allow_empty=True)
+    digest_aba, problem_aba = reuse.compute_tested_tree_digest(tmp_path, head_a_again)
+    assert problem_aba == "" and digest_aba == digest_a
+    assert head_a_again != head_b != head_a
+
+    (tmp_path / "app.py").write_text("value = 2\n", encoding="utf-8")
+    _git(tmp_path, "add", "app.py")
+    head_code = _commit_with_identity(tmp_path, "code change")
+    digest_code, problem_code = reuse.compute_tested_tree_digest(tmp_path, head_code)
+    assert problem_code == "" and digest_code != digest_a

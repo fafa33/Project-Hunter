@@ -515,8 +515,8 @@ def _mock_canonical_job_proof(monkeypatch: pytest.MonkeyPatch, digest: str = "sh
     """Mock canonical job proof to return a digest."""
     monkeypatch.setattr(
         decision.reuse,
-        "_canonical_job_proof",
-        lambda repo, token, run, head_sha, fetch: (digest, ""),
+        "_canonical_job_proof_with_mode",
+        lambda repo, token, run, head_sha, fetch: (digest, reuse.PROOF_MODE_FULL, ""),
     )
 
 
@@ -844,3 +844,304 @@ def test_two_overlapping_controllers_produce_identical_canonical_outcomes() -> N
     assert a.reusable is False and b.reusable is False
     assert a.reason == b.reason
     assert "conflicting" in a.reason.lower()
+
+
+# ---------------------------------------------------------------------------
+# Issue #606: trusted push-lane equivalence (hostile regressions)
+# ---------------------------------------------------------------------------
+
+PUSH_PR = 606
+PUSH_HEAD_B = "e" * 40
+REVIEW_PATH = ".hunter/pre-ready-hostile-review.json"
+
+
+def _binding(
+    *,
+    current: str = HEAD,
+    source: str = SOURCE,
+    base: str = BASE,
+    digest: str = "sha256:source-proof",
+) -> reuse.EquivalenceBinding:
+    return reuse.EquivalenceBinding(
+        repository=REPO,
+        pr_number=PUSH_PR,
+        current_head=current,
+        source_proof_head=source,
+        base_sha=base,
+        tested_tree_digest="sha256:tree",
+        dependency_identity="deps",
+        workflow_definition_identity="workflow",
+        toolchain_identity="toolchain",
+        environment_identity="environment",
+        trusted_workflow=reuse.PRE_PR_WORKFLOW_PATH,
+        run_attempt=1,
+        job_identity="job:1",
+        proof_digest=digest,
+        provenance=f"commit:{current}:tree:tree",
+    )
+
+
+def _equivalence(
+    *, equivalent: bool = True, binding: reuse.EquivalenceBinding | None = None
+) -> reuse.EquivalenceDecision:
+    return reuse.EquivalenceDecision(
+        equivalent,
+        "verified cross-HEAD equivalence" if equivalent else "source proof failed",
+        binding if binding is not None else (_binding() if equivalent else None),
+    )
+
+
+def _push_api(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    pr_head: str = HEAD,
+    base: str = BASE,
+    state: str = "open",
+    full_name: str = REPO,
+    recheck_head: str | None = None,
+    recheck_base: str | None = None,
+) -> None:
+    checks = {"count": 0}
+
+    def request(repository: str, token: str, method: str, path: str, *_a: Any, **_k: Any) -> Any:
+        if path.startswith("commits/"):
+            return [
+                {
+                    "number": PUSH_PR,
+                    "state": state,
+                    "head": {"sha": pr_head, "repo": {"full_name": full_name}},
+                    "base": {"sha": base},
+                }
+            ]
+        if path.startswith("pulls/"):
+            checks["count"] += 1
+            return {
+                "head": {"sha": recheck_head or pr_head},
+                "base": {"sha": recheck_base or base},
+            }
+        raise AssertionError(f"unexpected API path: {path}")
+
+    monkeypatch.setattr(decision.governance, "request_json", request)
+
+
+def _push_env(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    delta: tuple[str, ...] = (REVIEW_PATH,),
+    source: str | None = SOURCE,
+    source_problem: str = "",
+    equivalent: bool = True,
+    binding: reuse.EquivalenceBinding | None = None,
+    **api: Any,
+) -> None:
+    _push_api(monkeypatch, **api)
+    monkeypatch.setattr(decision.reuse, "find_previous_proven_head", lambda *_a, **_k: (source, source_problem))
+    monkeypatch.setattr(decision, "changed_paths_between", lambda *_a, **_k: (list(delta), ""))
+    monkeypatch.setattr(
+        decision.reuse, "verify_for_candidate", lambda *_a, **_k: _equivalence(equivalent=equivalent, binding=binding)
+    )
+
+
+def _push(*, head: str = HEAD) -> decision.PushLaneDecision:
+    return decision.decide_push(ROOT, head_sha=head, repository=REPO, token="token")
+
+
+def test_push_metadata_only_head_reuses_with_a_current_head_bound_decision(monkeypatch: pytest.MonkeyPatch) -> None:
+    _push_env(monkeypatch)
+    result = _push()
+    assert result.reusable is True
+    assert result.execution_mode == reuse.PROOF_MODE_REUSE
+    assert result.proof_digest == "sha256:source-proof"
+    assert result.binding is not None
+    assert result.binding.current_head == HEAD
+    assert result.binding.source_proof_head == SOURCE
+    assert "cross-HEAD proof reuse" in result.reason
+
+
+def test_push_ordinary_code_change_never_reuses(monkeypatch: pytest.MonkeyPatch) -> None:
+    _push_env(monkeypatch, delta=("src/hunter/engine.py",))
+    result = _push()
+    assert result.reusable is False
+    assert result.execution_mode == reuse.PROOF_MODE_FULL
+    assert "not metadata-only" in result.reason
+
+
+@pytest.mark.parametrize("changed", ["requirements/ci-constraints.txt", "pyproject.toml"])
+def test_push_dependency_change_never_reuses(monkeypatch: pytest.MonkeyPatch, changed: str) -> None:
+    _push_env(monkeypatch, delta=(changed,))
+    assert _push().reusable is False
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        ".github/workflows/hunter-pre-pr-preflight.yml",
+        "docs/VALIDATION_STAGE_CONTRACT.json",
+        "scripts/hunter_validation_reuse.py",
+    ],
+)
+def test_push_workflow_or_trust_root_change_never_reuses(monkeypatch: pytest.MonkeyPatch, changed: str) -> None:
+    _push_env(monkeypatch, delta=(changed,))
+    assert _push().reusable is False
+
+
+@pytest.mark.parametrize("source,problem", [(None, "no source proof"), (None, "malformed proof")])
+def test_push_missing_or_unverifiable_source_proof_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, source: str | None, problem: str
+) -> None:
+    _push_env(monkeypatch, source=source, source_problem=problem)
+    result = _push()
+    assert result.reusable is False
+    assert "source proof" in result.reason
+
+
+@pytest.mark.parametrize("reason", ["source proof concluded failure", "source proof was cancelled"])
+def test_push_failed_or_cancelled_source_proof_fails_closed(monkeypatch: pytest.MonkeyPatch, reason: str) -> None:
+    _push_env(monkeypatch, equivalent=False, binding=None)
+    result = _push()
+    assert result.reusable is False
+    assert "source proof" in result.reason
+
+
+def test_push_newer_failed_attempt_invalidates_the_source(monkeypatch: pytest.MonkeyPatch) -> None:
+    _push_env(monkeypatch, source=None, source_problem="newer run attempt failed")
+    result = _push()
+    assert result.reusable is False
+    assert "newer run attempt failed" in result.reason
+
+
+def test_push_head_a_to_b_never_reuses_an_unrelated_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    _push_env(monkeypatch, source=PUSH_HEAD_B, binding=_binding(source=PUSH_HEAD_B))
+    result = _push()
+    assert result.reusable is True
+    assert result.binding is not None
+    assert result.binding.source_proof_head == PUSH_HEAD_B
+    assert result.binding.current_head != result.binding.source_proof_head
+
+
+def test_push_head_a_to_b_to_a_must_rebind_the_current_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    _push_env(monkeypatch, binding=_binding(current=PUSH_HEAD_B))
+    result = _push()
+    assert result.reusable is False
+    assert "binding" in result.reason.lower()
+
+
+def test_push_two_concurrent_decisions_produce_identical_canonical_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
+    _push_env(monkeypatch)
+    first = _push()
+    second = _push()
+    assert (first.reusable, first.execution_mode, first.proof_digest, first.reason) == (
+        second.reusable,
+        second.execution_mode,
+        second.proof_digest,
+        second.reason,
+    )
+
+
+def test_push_stale_workflow_run_callback_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    _push_env(monkeypatch, recheck_head=PUSH_HEAD_B)
+    result = _push()
+    assert result.reusable is False
+    assert "head changed" in result.reason.lower()
+
+
+def test_push_pr_base_change_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    _push_env(monkeypatch, recheck_base=PUSH_HEAD_B)
+    result = _push()
+    assert result.reusable is False
+    assert "base changed" in result.reason.lower()
+
+
+def test_push_fork_or_non_open_pr_can_not_self_authorize(monkeypatch: pytest.MonkeyPatch) -> None:
+    _push_env(monkeypatch, state="closed")
+    assert _push().reusable is False
+    _push_env(monkeypatch, full_name="attacker/Project-Hunter")
+    assert _push().reusable is False
+
+
+def test_push_reused_proof_never_claims_fresh_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    _push_env(monkeypatch)
+    result = _push()
+    assert result.execution_mode == reuse.PROOF_MODE_REUSE
+    assert result.execution_mode != reuse.PROOF_MODE_FULL
+
+
+def _push_workflow() -> dict[str, Any]:
+    document = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "hunter-pre-pr-preflight.yml").read_text(encoding="utf-8")
+    )
+    assert isinstance(document, dict)
+    return document
+
+
+def test_push_decision_runs_from_trusted_default_branch_code_only() -> None:
+    workflow = _push_workflow()
+    decision_job = workflow["jobs"]["proof-equivalence"]
+    steps = [step for step in decision_job["steps"] if isinstance(step, dict)]
+    trusted = next(
+        step for step in steps if step.get("id") is None and "Checkout trusted default branch" in str(step.get("name"))
+    )
+    assert trusted["with"]["ref"] == "${{ github.event.repository.default_branch }}"
+    assert trusted["with"]["persist-credentials"] is False
+    decision_step = next(step for step in steps if step.get("id") == "decision")
+    assert "--push" in str(decision_step["run"])
+    assert "hunter_preflight_reuse_decision.py" in str(decision_step["run"])
+    assert (decision_step.get("env") or {}).get("GITHUB_TOKEN") == "${{ github.token }}"
+    # The trusted job installs only pinned binary distributions: no local
+    # setup script from any checkout is executed in the deciding job.
+    install = next(step for step in steps if "Install trusted adjudicator toolchain" in str(step.get("name", "")))
+    assert "--only-binary :all:" in str(install.get("run"))
+    assert "-e " not in str(install.get("run"))
+    # Until the adjudicator reaches trusted main, an unavailable/incompatible
+    # trusted script must mean RUN FULL, never a red required check or reuse.
+    script = str(decision_step.get("run"))
+    assert 'echo "reusable=false"' in script
+    assert "execution_mode=full-execution" in script
+    assert "running the full suite" in script
+    assert "if python scripts/hunter_preflight_reuse_decision.py" in script
+    # This job checks out no candidate code at all: candidate code cannot decide reuse.
+    assert not any(
+        "candidate" in str(step.get("name", "")).lower() or "candidate" in str(step.get("with", {})).lower()
+        for step in steps
+    )
+
+
+def test_push_no_privileged_token_reaches_candidate_execution() -> None:
+    workflow = _push_workflow()
+    preflight = workflow["jobs"]["preflight"]
+    heavy = next(step for step in preflight["steps"] if "hunter_pr_preflight.py" in str(step.get("run", "")))
+    env = heavy.get("env") or {}
+    assert env.get("GITHUB_TOKEN") == ""
+    assert env.get("GH_TOKEN") == ""
+    assert "proof-equivalence" not in str(env)
+    decision_job = workflow["jobs"]["proof-equivalence"]
+    assert set(decision_job.get("permissions") or {}) <= {"contents", "actions", "pull-requests"}
+
+
+def test_push_required_check_concludes_even_when_the_decision_job_fails() -> None:
+    workflow = _push_workflow()
+    preflight = workflow["jobs"]["preflight"]
+    assert preflight["needs"] == "proof-equivalence"
+    assert str(preflight.get("if")) == "${{ always() && !cancelled() }}"
+    steps = [step for step in preflight["steps"] if isinstance(step, dict)]
+    heavy = next(step for step in steps if "hunter_pr_preflight.py" in str(step.get("run", "")))
+    assert "needs.proof-equivalence.outputs.reusable == 'true'" in str(heavy.get("if"))
+    modes = [step for step in steps if str(step.get("name", "")).startswith(reuse.PROOF_MODE_STEP_PREFIX)]
+    assert {step["name"] for step in modes} == {
+        f"{reuse.PROOF_MODE_STEP_PREFIX}{reuse.PROOF_MODE_REUSE}",
+        f"{reuse.PROOF_MODE_STEP_PREFIX}{reuse.PROOF_MODE_FULL}",
+    }
+    assert all("always()" in str(step.get("if")) for step in modes)
+
+
+def test_push_delayed_or_inconclusive_decision_runs_full_suite() -> None:
+    workflow = _push_workflow()
+    heavy = next(
+        step
+        for step in workflow["jobs"]["preflight"]["steps"]
+        if isinstance(step, dict) and "hunter_pr_preflight.py" in str(step.get("run", ""))
+    )
+    # Only a positively reusable completed decision can suppress the heavy step;
+    # a delayed, failed or malformed decision cannot.
+    assert "needs.proof-equivalence.result == 'success'" in str(heavy.get("if"))
+    assert "steps.preflight-mode.outputs.mode == 'normal'" in str(heavy.get("if"))
