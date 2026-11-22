@@ -198,6 +198,7 @@ class IssueAgentWorkspaceRuntime:
             workspace=workspace_path(self._root.resolve(), target),
             branch=target.branch,
             head_sha=target.base_sha,
+            base_sha=target.base_sha,
             checkpoint=checkpoint,
             lease_token=lease_token,
         )
