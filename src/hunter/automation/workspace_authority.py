@@ -128,6 +128,7 @@ class WorkspaceRegistry:
         workspace: Path,
         branch: str,
         head_sha: str,
+        base_sha: str,
         checkpoint: str,
         lease_token: str,
         now: datetime | None = None,
@@ -147,6 +148,7 @@ class WorkspaceRegistry:
             or Path(grant.workspace).resolve() != workspace.resolve()
             or grant.branch != branch
             or grant.head_sha != head_sha
+            or grant.base_sha != base_sha
             or grant.checkpoint != checkpoint
         ):
             raise WorkspaceAuthorityMismatch("workspace lineage differs")
@@ -173,7 +175,7 @@ class WorkspaceRegistry:
                 raise WorkspaceAuthorityMismatch("registry absent")
             revision = 1
         entries = {key: vars_grant(value) for key, value in grants.items()}
-        if len({grant.workspace for grant in grants.values()}) != len(grants):
+        if len({str(Path(grant.workspace).resolve()) for grant in grants.values()}) != len(grants):
             raise WorkspaceAuthorityMismatch("workspace ownership conflict")
         for key, grant in grants.items():
             grant.validate()

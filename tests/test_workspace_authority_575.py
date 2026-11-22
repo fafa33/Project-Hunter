@@ -48,6 +48,7 @@ def admit(registry: WorkspaceRegistry, g: WorkspaceGrant, token: str, **override
         workspace=Path(g.workspace),
         branch=g.branch,
         head_sha=g.head_sha,
+        base_sha=g.base_sha,
         checkpoint=g.checkpoint,
         lease_token=token,
     )
@@ -114,6 +115,25 @@ def test_duplicate_workspace_refused(tmp_path: Path) -> None:
     registry = WorkspaceRegistry(tmp_path / "authority.json", authority_key=b"a" * 32)
     with pytest.raises(WorkspaceAuthorityMismatch, match="workspace ownership conflict"):
         registry.write_cas(expected_revision=None, grants={"575": g, "576": replace(g, issue=576)})
+
+
+def test_canonical_alias_workspace_ownership_refused(tmp_path: Path) -> None:
+    g, _ = grant(tmp_path)
+    alias = str(tmp_path / "alias" / ".." / "registered")
+    registry = WorkspaceRegistry(tmp_path / "authority.json", authority_key=b"a" * 32)
+    with pytest.raises(WorkspaceAuthorityMismatch, match="workspace ownership conflict"):
+        registry.write_cas(
+            expected_revision=None,
+            grants={"575": g, "576": replace(g, issue=576, workspace=alias)},
+        )
+
+
+def test_signed_base_must_match_registered_base_even_when_head_matches(tmp_path: Path) -> None:
+    g, token = grant(tmp_path)
+    registry = WorkspaceRegistry(tmp_path / "authority.json", authority_key=b"a" * 32)
+    registry.write_cas(expected_revision=None, grants={"575": replace(g, base_sha="c" * 40)})
+    with pytest.raises(WorkspaceAuthorityMismatch, match="workspace lineage differs"):
+        admit(registry, g, token)
 
 
 def test_forged_self_digest_cannot_bypass_authority(tmp_path: Path) -> None:
