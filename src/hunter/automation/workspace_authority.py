@@ -159,6 +159,48 @@ class WorkspaceRegistry:
             raise WorkspaceAuthorityMismatch("lease expired")
         return grant
 
+    def admit_publication(
+        self,
+        *,
+        issue: int,
+        repository: str,
+        branch: str,
+        base_sha: str,
+        checkpoint: str,
+        lease_token: str,
+        now: datetime | None = None,
+    ) -> WorkspaceGrant:
+        """Publisher's read-only check against the SAME trusted registry.
+
+        Publication is a distinct operation from execution: the candidate HEAD
+        is produced after validation, so only the authorized base lineage and
+        branch are matched here. Exact candidate HEAD proof stays with the
+        existing canonical publication receipt authority.
+        """
+        registry = self.read()
+        raw = registry["grants"].get(str(issue))
+        if not isinstance(raw, dict):
+            raise WorkspaceAuthorityMismatch("unregistered publication issue")
+        try:
+            grant = WorkspaceGrant(**raw)
+        except TypeError:
+            raise WorkspaceAuthorityMismatch("invalid publication grant") from None
+        grant.validate()
+        if (
+            grant.issue != issue
+            or grant.repository != repository
+            or grant.branch != branch
+            or grant.base_sha != base_sha
+            or grant.checkpoint != checkpoint
+        ):
+            raise WorkspaceAuthorityMismatch("publication lineage differs")
+        if not hmac.compare_digest(grant.lease_token_digest, hashlib.sha256(lease_token.encode()).hexdigest()):
+            raise WorkspaceAuthorityMismatch("publication lease token")
+        instant = now or datetime.now(UTC)
+        if instant.tzinfo is None or datetime.fromisoformat(grant.lease_expiry) <= instant:
+            raise WorkspaceAuthorityMismatch("publication lease expired")
+        return grant
+
     def write_cas(self, *, expected_revision: int | None, grants: dict[str, WorkspaceGrant]) -> int:
         """Serialized interprocess CAS; never accepts a self-asserted hash as authority."""
         with self._writer_lock():

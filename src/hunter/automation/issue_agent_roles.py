@@ -51,6 +51,7 @@ from hunter.automation.issue_agent_transport import (
     seal,
 )
 from hunter.automation.n8n_handoff import PromptAutomationEnvelopeHandoff
+from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceRegistry
 from hunter.evidence_intelligence.smart_prompt_routing import WORKSPACE_EDIT_OUTPUT_CONTRACT, PromptAutomationVerifier
 from hunter.task_scope import TaskScopeContract
 
@@ -1661,6 +1662,29 @@ def run_publisher(
     if group is None and open_issue_agent_pull_request:
         raise RoleRefused("PUBLICATION_UNAVAILABLE", "another Issue-Agent pull request is open for this Issue")
     _, validated = _open_validated(view, result_envelope, result_key, repository)
+    # Issue #575: when the trusted publisher is configured for canonical
+    # Workspace Authority, refuse stale/forged lineage BEFORE any git push.
+    # Existing signed-ledger publication remains the authority when rollout
+    # has not yet provisioned the shared registry; never mint grants here.
+    registry_path = os.environ.get("HUNTER_WORKSPACE_REGISTRY_PATH", "")
+    registry_key = os.environ.get("HUNTER_WORKSPACE_AUTHORITY_KEY_HEX", "")
+    checkpoint = os.environ.get("HUNTER_WORKSPACE_CHECKPOINT", "")
+    lease_token = os.environ.get("HUNTER_WORKSPACE_LEASE_TOKEN", "")
+    if any((registry_path, registry_key, checkpoint, lease_token)):
+        if not all((registry_path, registry_key, checkpoint, lease_token)):
+            raise RoleRefused("WORKSPACE_AUTHORITY_MISMATCH", "incomplete publisher workspace authority")
+        try:
+            key = bytes.fromhex(registry_key)
+            WorkspaceRegistry(Path(registry_path), authority_key=key).admit_publication(
+                issue=issue,
+                repository=repository,
+                branch=validated.branch,
+                base_sha=validated.base_sha,
+                checkpoint=checkpoint,
+                lease_token=lease_token,
+            )
+        except (ValueError, WorkspaceAuthorityMismatch):
+            raise RoleRefused("WORKSPACE_AUTHORITY_MISMATCH", "publisher workspace authority rejected") from None
     validation = view.evidence[state.VALIDATED]
     if validated.result_sha256 != validation["result_sha256"]:
         raise RoleRefused("TRANSPORT_INTEGRITY_FAILED", "the result is not the validated result")
