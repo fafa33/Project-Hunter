@@ -527,7 +527,9 @@ def _run_lease_renewer(
                             lease_token=lease_token,
                             now=services.configuration.clock.now(),
                         )
-                    except (ValueError, WorkspaceAuthorityMismatch) as error:
+                    except (OSError, ValueError, WorkspaceAuthorityMismatch) as error:
+                        # Filesystem-backed authority writes may raise OSError
+                        # (ENOSPC, EACCES, fsync). Never kill the shared renewer.
                         # Never silently continue treating a stale workspace
                         # lease as renewable. The runtime itself also checks
                         # the exact active grant before any provider launch.
