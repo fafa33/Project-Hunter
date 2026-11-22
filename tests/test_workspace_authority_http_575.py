@@ -85,3 +85,80 @@ def test_private_http_separates_reader_writer_and_survives_restart(tmp_path: Pat
         server.server_close()
         thread.join(timeout=3)
     assert WorkspaceSQLiteBackend(tmp_path / "authority.sqlite", authority_key=b"k" * 32).read_grant(575).issue == 575
+
+
+def test_client_uses_single_http_backend_with_separate_credentials(tmp_path: Path) -> None:
+    from hunter.automation.workspace_authority_client import WorkspaceAuthorityClient
+
+    backend = WorkspaceSQLiteBackend(tmp_path / "authority.sqlite", authority_key=b"k" * 32)
+    server = WorkspaceAuthorityHTTPServer(
+        ("127.0.0.1", 0), backend=backend, reader_token="r" * 40, writer_token="w" * 40
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    env = {
+        "HUNTER_WORKSPACE_API_URL": f"http://127.0.0.1:{server.server_port}",
+        "HUNTER_WORKSPACE_READER_TOKEN": "r" * 40,
+        "HUNTER_WORKSPACE_WRITER_TOKEN": "w" * 40,
+    }
+    now = datetime.now(UTC)
+    grant = WorkspaceGrant(
+        repository="fafa33/Project-Hunter",
+        issue=575,
+        task_scope_digest="a" * 64,
+        workspace=str(tmp_path / "work"),
+        branch="issue-575-aaaa",
+        base_sha="b" * 40,
+        head_sha="b" * 40,
+        checkpoint="checkpoint",
+        lease_owner="issuer",
+        lease_token_digest=hashlib.sha256(b"lease").hexdigest(),
+        lease_expiry=(now + timedelta(minutes=30)).isoformat(),
+        fencing=1,
+        next_action="dispatch",
+    )
+    try:
+        writer = WorkspaceAuthorityClient(env, writer=True)
+        reader = WorkspaceAuthorityClient(env)
+        writer.issue_exclusive(grant)
+        assert (
+            reader.admit(
+                issue=575,
+                repository=grant.repository,
+                workspace=Path(grant.workspace),
+                branch=grant.branch,
+                head_sha=grant.head_sha,
+                base_sha=grant.base_sha,
+                checkpoint=grant.checkpoint,
+                lease_token="lease",
+            )
+            == grant
+        )
+        assert (
+            reader.admit_publication(
+                issue=575,
+                repository=grant.repository,
+                branch=grant.branch,
+                base_sha=grant.base_sha,
+                checkpoint=grant.checkpoint,
+                lease_token="lease",
+            )
+            == grant
+        )
+        with pytest.raises(WorkspaceAuthorityMismatch):
+            reader.admit_publication(
+                issue=575,
+                repository=grant.repository,
+                branch="wrong",
+                base_sha=grant.base_sha,
+                checkpoint=grant.checkpoint,
+                lease_token="lease",
+            )
+        with pytest.raises(WorkspaceAuthorityMismatch):
+            reader.issue_exclusive(grant)
+        writer.renew_owned_lease(issue=575, owner="issuer", lease_token="lease", now=now + timedelta(minutes=5))
+        assert reader.read_grant(575).lease_expiry != grant.lease_expiry
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)

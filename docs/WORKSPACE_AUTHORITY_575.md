@@ -74,3 +74,18 @@ requires `HUNTER_WORKSPACE_SQLITE_PATH` (absolute),
 The API has not been exposed via Tailscale, deployed as a persistent service,
 or integrated with the existing runtime and publisher; those remain blocked
 until transport identity, checkpoint authority, and hosted tests are approved.
+
+## API client integration (opt-in, not production cutover)
+
+The existing trusted issuer grant issuance and lease renewal, Issue Agent
+runtime pre-dispatch admission, and publisher pre-publication admission now
+support `HUNTER_WORKSPACE_API_URL=http://127.0.0.1:<port>`. The issuer uses
+`HUNTER_WORKSPACE_WRITER_TOKEN`; runtime and publisher use
+`HUNTER_WORKSPACE_READER_TOKEN`. All require the existing checkpoint and lease
+token. API and legacy file authority configuration must not be mixed. Client
+requests fail closed if the loopback service is unavailable. This is an
+**optional transport**, not a global cutover: existing paths without authority
+configuration are still governed by their prior admission contracts. A remote
+runner needs a trusted, authenticated tunnel with its own loopback endpoint;
+no direct public HTTP exposure is permitted. A persistent service deployment,
+checkpoint signature and issuer/publisher trust-domain hardening remain gates.

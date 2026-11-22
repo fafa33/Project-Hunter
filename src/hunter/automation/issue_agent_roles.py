@@ -52,6 +52,7 @@ from hunter.automation.issue_agent_transport import (
 )
 from hunter.automation.n8n_handoff import PromptAutomationEnvelopeHandoff
 from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceRegistry
+from hunter.automation.workspace_authority_client import WorkspaceAuthorityClient
 from hunter.evidence_intelligence.smart_prompt_routing import WORKSPACE_EDIT_OUTPUT_CONTRACT, PromptAutomationVerifier
 from hunter.task_scope import TaskScopeContract
 
@@ -1670,12 +1671,19 @@ def run_publisher(
     registry_key = os.environ.get("HUNTER_WORKSPACE_AUTHORITY_KEY_HEX", "")
     checkpoint = os.environ.get("HUNTER_WORKSPACE_CHECKPOINT", "")
     lease_token = os.environ.get("HUNTER_WORKSPACE_LEASE_TOKEN", "")
-    if any((registry_path, registry_key, checkpoint, lease_token)):
-        if not all((registry_path, registry_key, checkpoint, lease_token)):
+    api_mode = bool(os.environ.get("HUNTER_WORKSPACE_API_URL"))
+    if api_mode or any((registry_path, registry_key, checkpoint, lease_token)):
+        if not all((checkpoint, lease_token)) or (api_mode and (registry_path or registry_key)):
+            raise RoleRefused("WORKSPACE_AUTHORITY_MISMATCH", "incomplete or conflicting publisher workspace authority")
+        if not api_mode and not all((registry_path, registry_key)):
             raise RoleRefused("WORKSPACE_AUTHORITY_MISMATCH", "incomplete publisher workspace authority")
         try:
-            key = bytes.fromhex(registry_key)
-            WorkspaceRegistry(Path(registry_path), authority_key=key).admit_publication(
+            if api_mode:
+                registry = WorkspaceAuthorityClient(os.environ)
+            else:
+                key = bytes.fromhex(registry_key)
+                registry = WorkspaceRegistry(Path(registry_path), authority_key=key)
+            registry.admit_publication(
                 issue=issue,
                 repository=repository,
                 branch=validated.branch,

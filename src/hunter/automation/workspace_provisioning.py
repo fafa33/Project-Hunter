@@ -14,6 +14,7 @@ from pathlib import Path
 from hunter.automation.issue_agent_execution import IssueAgentExecutionTarget
 from hunter.automation.issue_agent_workspace import workspace_path
 from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceGrant, WorkspaceRegistry
+from hunter.automation.workspace_authority_client import WorkspaceAuthorityClient
 
 _AUTHORITY_KEYS = (
     "HUNTER_WORKSPACE_REGISTRY_PATH",
@@ -37,20 +38,27 @@ def provision_verified_dispatch(
     Call after signed authorization verification and durable ledger dispatch;
     no independent claim, authorization, or alternate registry is created.
     """
-    values = [trusted_environment.get(name, "") for name in _AUTHORITY_KEYS]
+    api_mode = bool(trusted_environment.get("HUNTER_WORKSPACE_API_URL"))
+    if api_mode and trusted_environment.get("HUNTER_WORKSPACE_REGISTRY_PATH"):
+        raise WorkspaceAuthorityMismatch("conflicting workspace authorities")
+    values = [trusted_environment.get(name, "") for name in (_AUTHORITY_KEYS[2:] if api_mode else _AUTHORITY_KEYS)]
     if not all(values):
         raise WorkspaceAuthorityMismatch("trusted issuer workspace configuration required")
-    path, key_hex, checkpoint, lease_token = values
-    try:
-        key = bytes.fromhex(key_hex)
-    except ValueError:
-        raise WorkspaceAuthorityMismatch("invalid issuer workspace authority key") from None
+    if api_mode:
+        checkpoint, lease_token = values
+        registry = WorkspaceAuthorityClient(trusted_environment, writer=True)
+    else:
+        path, key_hex, checkpoint, lease_token = values
+        try:
+            key = bytes.fromhex(key_hex)
+        except ValueError:
+            raise WorkspaceAuthorityMismatch("invalid issuer workspace authority key") from None
+        registry = WorkspaceRegistry(Path(path), authority_key=key)
     instant = now or datetime.now(UTC)
     if instant.tzinfo is None:
         raise WorkspaceAuthorityMismatch("issuer clock must be timezone-aware")
     if not issuer_instance:
         raise WorkspaceAuthorityMismatch("issuer identity required")
-    registry = WorkspaceRegistry(Path(path), authority_key=key)
     grant = WorkspaceGrant(
         repository=repository,
         issue=target.issue_number,

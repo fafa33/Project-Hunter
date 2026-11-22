@@ -82,6 +82,7 @@ from hunter.automation.issue_agent_execution import (
 from hunter.automation.issue_agent_workspace import IssueAgentWorkspaceRuntime
 from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
 from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceRegistry
+from hunter.automation.workspace_authority_client import WorkspaceAuthorityClient
 from hunter.automation.workspace_provisioning import provision_verified_dispatch
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService
@@ -352,6 +353,7 @@ def prepare_authorization(
         if any(
             os.environ.get(name)
             for name in (
+                "HUNTER_WORKSPACE_API_URL",
                 "HUNTER_WORKSPACE_REGISTRY_PATH",
                 "HUNTER_WORKSPACE_AUTHORITY_KEY_HEX",
                 "HUNTER_WORKSPACE_CHECKPOINT",
@@ -507,12 +509,19 @@ def _run_lease_renewer(
                     health_at=services.configuration.clock.now(),
                 )
                 registry_path = os.environ.get("HUNTER_WORKSPACE_REGISTRY_PATH", "")
-                if registry_path:
+                api_mode = bool(os.environ.get("HUNTER_WORKSPACE_API_URL"))
+                if registry_path or api_mode:
                     key_hex = os.environ.get("HUNTER_WORKSPACE_AUTHORITY_KEY_HEX", "")
                     lease_token = os.environ.get("HUNTER_WORKSPACE_LEASE_TOKEN", "")
                     try:
-                        key = bytes.fromhex(key_hex)
-                        WorkspaceRegistry(Path(registry_path), authority_key=key).renew_owned_lease(
+                        if api_mode:
+                            if registry_path or key_hex:
+                                raise WorkspaceAuthorityMismatch("conflicting renewal authorities")
+                            workspace_registry = WorkspaceAuthorityClient(os.environ, writer=True)
+                        else:
+                            key = bytes.fromhex(key_hex)
+                            workspace_registry = WorkspaceRegistry(Path(registry_path), authority_key=key)
+                        workspace_registry.renew_owned_lease(
                             issue=prepared.target.issue_number,
                             owner=services.configuration.instance_id,
                             lease_token=lease_token,

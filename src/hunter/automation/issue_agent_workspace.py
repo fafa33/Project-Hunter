@@ -41,6 +41,7 @@ from hunter.automation.issue_agent_execution import (
     issue_agent_execution_branch,
 )
 from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceRegistry
+from hunter.automation.workspace_authority_client import WorkspaceAuthorityClient
 
 _REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _GIT_TIMEOUT_SECONDS = 600
@@ -188,13 +189,19 @@ class IssueAgentWorkspaceRuntime:
         key_hex = self._environ.get("HUNTER_WORKSPACE_AUTHORITY_KEY_HEX", "")
         checkpoint = self._environ.get("HUNTER_WORKSPACE_CHECKPOINT", "")
         lease_token = self._environ.get("HUNTER_WORKSPACE_LEASE_TOKEN", "")
-        if not all((registry_path, key_hex, checkpoint, lease_token)):
-            raise WorkspaceAuthorityMismatch("trusted workspace admission configuration required")
-        try:
-            key = bytes.fromhex(key_hex)
-        except ValueError:
-            raise WorkspaceAuthorityMismatch("invalid trusted workspace key") from None
-        WorkspaceRegistry(Path(registry_path), authority_key=key).admit(
+        if self._environ.get("HUNTER_WORKSPACE_API_URL"):
+            if registry_path or key_hex or not all((checkpoint, lease_token)):
+                raise WorkspaceAuthorityMismatch("conflicting or incomplete workspace authority")
+            registry = WorkspaceAuthorityClient(self._environ)
+        else:
+            if not all((registry_path, key_hex, checkpoint, lease_token)):
+                raise WorkspaceAuthorityMismatch("trusted workspace admission configuration required")
+            try:
+                key = bytes.fromhex(key_hex)
+            except ValueError:
+                raise WorkspaceAuthorityMismatch("invalid trusted workspace key") from None
+            registry = WorkspaceRegistry(Path(registry_path), authority_key=key)
+        registry.admit(
             issue=target.issue_number,
             repository=self._repository,
             workspace=workspace_path(self._root.resolve(), target),
