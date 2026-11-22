@@ -37,6 +37,7 @@ import subprocess
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import hunter_ci_impact as impact
@@ -252,6 +253,38 @@ def decide_push(git_root: Path, *, head_sha: str, repository: str, token: str) -
     )
 
 
+def _near_completion_wait_budget(repository: str, token: str, head_sha: str) -> float:
+    """Wait briefly only when the exact-HEAD hosted full proof is already mature.
+
+    This is scheduling evidence, NOT proof authority. Any malformed/missing API
+    response returns zero wait; canonical reuse.resolve still decides validity.
+    """
+    try:
+        data = governance.request_json(repository, token, "GET", f"commits/{head_sha}/check-runs?per_page=100")
+        checks = data.get("check_runs") if isinstance(data, dict) else None
+        if not isinstance(checks, list):
+            return 0.0
+        matches = [
+            c
+            for c in checks
+            if isinstance(c, dict)
+            and c.get("name") == "Hunter Pre-PR Preflight"
+            and c.get("head_sha") == head_sha
+            and c.get("status") == "in_progress"
+        ]
+        if len(matches) != 1:
+            return 0.0
+        started = matches[0].get("started_at")
+        if not isinstance(started, str):
+            return 0.0
+        elapsed = (datetime.now(UTC) - datetime.fromisoformat(started.replace("Z", "+00:00"))).total_seconds()
+        # Observed full jobs normally need ~10–17 minutes. Starting together
+        # must NOT impose a 120-second idle delay before the trusted suite.
+        return 30.0 if 600 <= elapsed <= 1200 else 0.0
+    except Exception:  # noqa: BLE001 - optional scheduling
+        return 0.0
+
+
 def decide(
     candidate_root: Path,
     *,
@@ -410,7 +443,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             repository=args.repository,
             pr_number=args.pr,
             token=token,
-            wait_seconds=120,
+            wait_seconds=_near_completion_wait_budget(args.repository, token, args.head_sha),
         )
     except Exception as exc:  # noqa: BLE001 - reuse is optional; full gates are the fail-closed path
         reusable, reason = False, f"reuse decision failed ({type(exc).__name__}: {exc})"
