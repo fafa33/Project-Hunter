@@ -534,7 +534,10 @@ def _run_lease_renewer(
                         logger.error(
                             "workspace lease renewal refused for issue %s: %s", prepared.target.issue_number, error
                         )
-                        registry.unregister(worker)
+                        # Workspace admission remains fail-closed independently.
+                        # Keep the live provider registered so its execution-ledger
+                        # lease continues to renew and shutdown still joins it.
+                        # An authority outage must not orphan a running worker.
             except IssueAgentExecutionError as error:
                 logger.warning(
                     "execution %s is no longer renewable by this instance: %s",
