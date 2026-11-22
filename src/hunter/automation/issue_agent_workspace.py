@@ -40,6 +40,7 @@ from hunter.automation.issue_agent_execution import (
     derive_execution_target,
     issue_agent_execution_branch,
 )
+from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceRegistry
 
 _REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _GIT_TIMEOUT_SECONDS = 600
@@ -154,7 +155,7 @@ class IssueAgentWorkspaceRuntime:
     misconfigured deployment fails at startup rather than after an ACK.
     """
 
-    __slots__ = ("_root", "_remote_url", "_environ", "_settings", "_runtime_factory")
+    __slots__ = ("_root", "_remote_url", "_repository", "_environ", "_settings", "_runtime_factory")
 
     def __init__(
         self,
@@ -168,6 +169,7 @@ class IssueAgentWorkspaceRuntime:
         if not str(workspace_root).strip() or not self._root.is_absolute():
             raise IssueAgentConfigurationError("the Issue Agent workspace root must be an absolute path")
         self._remote_url = canonical_github_remote(repository)
+        self._repository = repository
         self._environ = dict(os.environ if environ is None else environ)
         self._settings = AgentFallbackRuntimeSettings.from_environment(self._environ)
         self._runtime_factory = runtime_factory or OperationalAgentFallbackRuntime
@@ -177,6 +179,29 @@ class IssueAgentWorkspaceRuntime:
         return self._root
 
     def dispatch(self, document: str | bytes, target: IssueAgentExecutionTarget) -> AgentFallbackRuntimeReceipt:
+        # Issue #575: trusted operator-configured admission occurs BEFORE clone,
+        # provider invocation, any repository-content read, or mutation. Partial
+        # configuration is an error, never an implicit downgrade to legacy mode.
+        registry_path = self._environ.get("HUNTER_WORKSPACE_REGISTRY_PATH", "")
+        key_hex = self._environ.get("HUNTER_WORKSPACE_AUTHORITY_KEY_HEX", "")
+        checkpoint = self._environ.get("HUNTER_WORKSPACE_CHECKPOINT", "")
+        lease_token = self._environ.get("HUNTER_WORKSPACE_LEASE_TOKEN", "")
+        if any((registry_path, key_hex, checkpoint, lease_token)):
+            if not all((registry_path, key_hex, checkpoint, lease_token)):
+                raise WorkspaceAuthorityMismatch("incomplete trusted workspace admission configuration")
+            try:
+                key = bytes.fromhex(key_hex)
+            except ValueError:
+                raise WorkspaceAuthorityMismatch("invalid trusted workspace key") from None
+            WorkspaceRegistry(Path(registry_path), authority_key=key).admit(
+                issue=target.issue_number,
+                repository=self._repository,
+                workspace=workspace_path(self._root.resolve(), target),
+                branch=target.branch,
+                head_sha=target.base_sha,
+                checkpoint=checkpoint,
+                lease_token=lease_token,
+            )
         workspace = materialize_workspace(self._root, target, remote_url=self._remote_url)
         try:
             runtime = self._runtime_factory(
