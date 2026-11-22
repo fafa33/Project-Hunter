@@ -514,13 +514,39 @@ def test_m2_mapped_regression_failure_is_not_silenced(monkeypatch) -> None:
     assert hunter_pre_push._run_mapped_regressions(HEAD_A) == 7
 
 
+def test_m2_workflow_contracts_check_renamed_source(monkeypatch) -> None:
+    monkeypatch.setattr(hunter_pre_push.provenance, "resolve_governed_base", lambda _head: HEAD_B)
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            return SimpleNamespace(returncode=0, stdout=b"R100\0.github/workflows/old.yml\0docs/old.yml\0")
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(hunter_pre_push.subprocess, "run", fake_run)
+    assert hunter_pre_push._run_workflow_trigger_contracts(HEAD_A) == 0
+    assert len(calls) == 2
+
+
+def test_m2_workflow_contracts_reject_malformed_rename(monkeypatch) -> None:
+    monkeypatch.setattr(hunter_pre_push.provenance, "resolve_governed_base", lambda _head: HEAD_B)
+    monkeypatch.setattr(
+        hunter_pre_push.subprocess,
+        "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=b"R100\0.github/workflows/old.yml\0"),
+    )
+    with pytest.raises(RuntimeError, match="malformed"):
+        hunter_pre_push._run_workflow_trigger_contracts(HEAD_A)
+
+
 def test_m2_workflow_contracts_skip_unchanged_workflows(monkeypatch) -> None:
     monkeypatch.setattr(hunter_pre_push.provenance, "resolve_governed_base", lambda head: HEAD_B)
     calls = []
 
     def fake_run(args, **kwargs):
         calls.append(args)
-        return SimpleNamespace(returncode=0, stdout="scripts/hunter_pre_push.py\n")
+        return SimpleNamespace(returncode=0, stdout=b"M\0scripts/hunter_pre_push.py\0")
 
     monkeypatch.setattr(hunter_pre_push.subprocess, "run", fake_run)
     assert hunter_pre_push._run_workflow_trigger_contracts(HEAD_A) == 0
@@ -534,7 +560,7 @@ def test_m2_workflow_contracts_fail_closed_on_changed_workflow(monkeypatch) -> N
     def fake_run(args, **kwargs):
         calls.append(args)
         return SimpleNamespace(
-            returncode=9 if len(calls) == 2 else 0, stdout=".github/workflows/hunter-issue-agent-trigger.yml\n"
+            returncode=9 if len(calls) == 2 else 0, stdout=b"M\0.github/workflows/hunter-issue-agent-trigger.yml\0"
         )
 
     monkeypatch.setattr(hunter_pre_push.subprocess, "run", fake_run)
