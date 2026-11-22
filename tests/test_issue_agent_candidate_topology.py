@@ -28,11 +28,14 @@ is implemented these tests fail as tests rather than as collection errors.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import importlib
 import json
+import secrets
 import subprocess
 import sys
 import time
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -62,10 +65,14 @@ import hunter.automation.agent_fallback_runtime as fallback_runtime_module
 from hunter.automation.issue_agent_execution import (
     ISSUE_AGENT_AUTHORIZATION_LABEL,
     REPOSITORY_CHECKOUT_ENV,
+    IssueAgentAuthorizationError,
     IssueAgentExecutionLedger,
     SignedIssueAgentAuthorization,
+    derive_execution_target,
     issue_agent_document_id,
 )
+from hunter.automation.issue_agent_workspace import workspace_path
+from hunter.automation.workspace_authority import WorkspaceGrant, WorkspaceRegistry
 
 CANONICAL_REMOTE = f"https://github.com/{REPOSITORY}.git"
 ISSUE_TEXT = "src/hunter/example.py::apply_fix must preserve the governed authority boundary."
@@ -302,6 +309,44 @@ class Topology:
         key = _provision_authority(self.database, issue_agent_document_id(authorization), clock)
         environment = _environment(tmp_path, self.database, verification_key=_public_key_bytes(key))
         environment[REPOSITORY_CHECKOUT_ENV] = str(self.workspace_root)
+        # The real dispatch now requires an authenticated workspace grant.
+        # Provision the deterministic fake-GitHub topology from its signed
+        # authorization, rather than disabling production admission in tests.
+        try:
+            target = derive_execution_target(SignedIssueAgentAuthorization.from_json(document))
+        except IssueAgentAuthorizationError:
+            # Invalid signed scopes must still reach the real issuer's own
+            # pre-claim rejection path; never mint a grant for invalid input.
+            target = None
+        registry_key = secrets.token_bytes(32)
+        lease_token = secrets.token_hex(32)
+        checkpoint = f"signed-test-checkpoint:{_authorization_id(document)}"
+        registry_path = tmp_path / "workspace-authority.json"
+        if target is not None:
+            grant = WorkspaceGrant(
+                repository=target.repository,
+                issue=target.issue_number,
+                task_scope_digest=hashlib.sha256(document.encode()).hexdigest(),
+                workspace=str(workspace_path(self.workspace_root, target)),
+                branch=target.branch,
+                base_sha=target.base_sha,
+                head_sha=target.base_sha,
+                checkpoint=checkpoint,
+                lease_owner="test-trusted-issuer",
+                lease_token_digest=hashlib.sha256(lease_token.encode()).hexdigest(),
+                lease_expiry=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+                fencing=1,
+                next_action="execute",
+            )
+            WorkspaceRegistry(registry_path, authority_key=registry_key).write_cas(
+                expected_revision=None, grants={str(target.issue_number): grant}
+            )
+            environment.update(
+                HUNTER_WORKSPACE_REGISTRY_PATH=str(registry_path),
+                HUNTER_WORKSPACE_AUTHORITY_KEY_HEX=registry_key.hex(),
+                HUNTER_WORKSPACE_CHECKPOINT=checkpoint,
+                HUNTER_WORKSPACE_LEASE_TOKEN=lease_token,
+            )
         for name, value in environment.items():
             monkeypatch.setenv(name, value)
         self.configuration = issuer.IssuerConfiguration.from_environment(
