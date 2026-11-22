@@ -186,22 +186,21 @@ class IssueAgentWorkspaceRuntime:
         key_hex = self._environ.get("HUNTER_WORKSPACE_AUTHORITY_KEY_HEX", "")
         checkpoint = self._environ.get("HUNTER_WORKSPACE_CHECKPOINT", "")
         lease_token = self._environ.get("HUNTER_WORKSPACE_LEASE_TOKEN", "")
-        if any((registry_path, key_hex, checkpoint, lease_token)):
-            if not all((registry_path, key_hex, checkpoint, lease_token)):
-                raise WorkspaceAuthorityMismatch("incomplete trusted workspace admission configuration")
-            try:
-                key = bytes.fromhex(key_hex)
-            except ValueError:
-                raise WorkspaceAuthorityMismatch("invalid trusted workspace key") from None
-            WorkspaceRegistry(Path(registry_path), authority_key=key).admit(
-                issue=target.issue_number,
-                repository=self._repository,
-                workspace=workspace_path(self._root.resolve(), target),
-                branch=target.branch,
-                head_sha=target.base_sha,
-                checkpoint=checkpoint,
-                lease_token=lease_token,
-            )
+        if not all((registry_path, key_hex, checkpoint, lease_token)):
+            raise WorkspaceAuthorityMismatch("trusted workspace admission configuration required")
+        try:
+            key = bytes.fromhex(key_hex)
+        except ValueError:
+            raise WorkspaceAuthorityMismatch("invalid trusted workspace key") from None
+        WorkspaceRegistry(Path(registry_path), authority_key=key).admit(
+            issue=target.issue_number,
+            repository=self._repository,
+            workspace=workspace_path(self._root.resolve(), target),
+            branch=target.branch,
+            head_sha=target.base_sha,
+            checkpoint=checkpoint,
+            lease_token=lease_token,
+        )
         workspace = materialize_workspace(self._root, target, remote_url=self._remote_url)
         try:
             runtime = self._runtime_factory(

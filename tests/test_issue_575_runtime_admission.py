@@ -70,6 +70,31 @@ def test_dispatch_rejects_wrong_checkpoint_before_materialization(
     materialize.assert_not_called()
     env.pop("HUNTER_WORKSPACE_LEASE_TOKEN")
     runtime = IssueAgentWorkspaceRuntime(workspace_root=root, repository=target.repository, environ=env)
-    with pytest.raises(WorkspaceAuthorityMismatch, match="incomplete trusted workspace admission"):
+    with pytest.raises(WorkspaceAuthorityMismatch, match="trusted workspace admission configuration required"):
+        runtime.dispatch("signed", target)
+    materialize.assert_not_called()
+
+
+def test_missing_all_configuration_fails_closed_before_materialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = IssueAgentExecutionTarget(
+        authorization_id="hunter-issue-agent-authorization-v1:" + "a" * 64,
+        issue_number=575,
+        repository="fafa33/Project-Hunter",
+        branch="issue-575-aaaa",
+        base_ref="main",
+        base_sha="b" * 40,
+    )
+    materialize = Mock(side_effect=AssertionError("must not materialize"))
+    monkeypatch.setattr("hunter.automation.issue_agent_workspace.materialize_workspace", materialize)
+    monkeypatch.setattr(
+        "hunter.automation.issue_agent_workspace.AgentFallbackRuntimeSettings.from_environment",
+        lambda _: Mock(),
+    )
+    runtime = IssueAgentWorkspaceRuntime(
+        workspace_root=tmp_path / "workspaces", repository=target.repository, environ={}
+    )
+    with pytest.raises(WorkspaceAuthorityMismatch, match="trusted workspace admission configuration required"):
         runtime.dispatch("signed", target)
     materialize.assert_not_called()
