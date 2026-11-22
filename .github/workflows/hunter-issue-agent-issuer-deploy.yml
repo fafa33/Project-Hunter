@@ -65,43 +65,11 @@ jobs:
           set -euo pipefail
           python scripts/hunter_issue_agent_issuer.py --help
 
-      # Platform-specific deployment steps.
-      # Replace with your target platform (Cloud Run, Fly.io, Railway, etc.)
-      # The example below shows Google Cloud Run deployment using OIDC.
-      #
-      # - name: Authenticate to Google Cloud
-      #   uses: google-github-actions/auth@v2
-      #   with:
-      #     credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
-      #     project_id: ${{ secrets.GCP_PROJECT_ID }}
-      #
-      # - name: Deploy to Cloud Run
-      #   id: deploy
-      #   uses: google-github-actions/deploy-cloudrun@v2
-      #   with:
-      #     service: hunter-issue-agent-issuer-${{ env.ENVIRONMENT }}
-      #     region: us-central1
-      #     source: .
-      #     flags: >-
-      #       --port=8080
-      #       --memory=512Mi
-      #       --cpu=1
-      #       --min-instances=0
-      #       --max-instances=3
-      #       --timeout=300
-      #       --concurrency=10
-      #       --set-env-vars=HUNTER_ISSUE_AGENT_REPOSITORY=${{ github.repository }},HUNTER_ISSUE_AGENT_OWNER_LOGIN=${{ github.repository_owner }},HUNTER_ISSUE_AGENT_EVIDENCE_DB=/data/evidence.sqlite,HUNTER_ISSUE_AGENT_EXECUTION_BRANCH=issue-agent-execution,HUNTER_ISSUE_AGENT_REPO_DIR=/workspace,HUNTER_SOURCE_HANDLING_VERIFICATION_KEY=${{ secrets.HUNTER_SOURCE_HANDLING_VERIFICATION_KEY }},HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256=${{ secrets.HUNTER_SOURCE_HANDLING_VERIFICATION_KEY_SHA256 }},HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256=${{ secrets.HUNTER_SOURCE_HANDLING_GENESIS_RULE_SHA256 }},HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY=${{ secrets.HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY }},HUNTER_PROMPT_AUTOMATION_SIGNING_KEY=${{ secrets.HUNTER_PROMPT_AUTOMATION_SIGNING_KEY }},HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY=${{ secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_VERIFYING_KEY }},PYTHONPATH=/workspace/src
-      #       --service-account=${{ secrets.GCP_SERVICE_ACCOUNT_EMAIL }}
-      #       --vpc-connector=projects/${{ secrets.GCP_PROJECT_ID }}/locations/us-central1/connectors/hunter-vpc
-      #
-      # - name: Output issuer URL
-      #   run: |
-      #     echo "Issuer deployed to: ${{ steps.deploy.outputs.url }}"
-      #     echo "Configure HUNTER_ISSUE_AGENT_WEBHOOK_URL = ${{ steps.deploy.outputs.url }}/issue-agent/authorize"
-
-      - name: Placeholder - replace with your deployment target
+      # Issue #575: a green deployment must never be a template/no-op.
+      # A trusted, persistent self-hosted issuer and shared registry backend
+      # must be provisioned and proven before replacing this fail-closed gate.
+      - name: Refuse unconfigured issuer deployment
         run: |
-          echo "This workflow is a template. Replace the deployment steps with your platform."
-          echo "Required: a persistent HTTPS endpoint that runs scripts/hunter_issue_agent_issuer.py"
-          echo "The endpoint URL + /issue-agent/authorize must be set as HUNTER_ISSUE_AGENT_WEBHOOK_URL"
-          exit 0
+          echo "::error::Issuer deployment is not configured. No persistent shared Workspace Registry, trusted issuer endpoint, or hosted admission proof is provisioned."
+          echo "::error::Issue #575 must supply an approved shared authority deployment before enabling this workflow."
+          exit 1

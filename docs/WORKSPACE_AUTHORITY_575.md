@@ -24,3 +24,23 @@ checkpoint handoff, external launchers, publisher and CI enforcement must be
 validated before production rollout. Until then, hosted Issue Agent execution
 will deliberately refuse dispatch if the required authority is absent. The
 current isolated worktree and older worktrees must not be deleted or imported.
+
+## Shared-registry deployment gate (PR #785)
+
+The existing `WorkspaceRegistry` uses an HMAC-authenticated JSON file and a
+**host-local** `fcntl.flock`. It is safe for competing issuer processes on one
+trusted host and local durable storage, but is **not** a multi-host consensus
+backend. An ordinary per-runner path, ephemeral container volume, or shared
+network filesystem without a proven distributed lock/fencing contract MUST NOT
+be represented as globally authoritative.
+
+The issuer deployment workflow was previously a green no-op template. It now
+fails closed until the owner-approved self-hosted service and persistent shared
+authority are actually provisioned and a hosted canary proves exact-head,
+restart survival, duplicate admission rejection, and cross-worker fencing.
+Do not put HMAC keys, lease tokens, checkpoint contents, or registry files in
+public CI artifacts. Never use Railway for the replacement.
+
+**Current boundary:** one trusted host can safely share one registry path
+between processes, but no distributed backend or operational endpoint is
+provisioned. Issue #575 remains open; production-wide cutover is blocked.
