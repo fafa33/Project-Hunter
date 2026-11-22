@@ -44,3 +44,19 @@ public CI artifacts. Never use Railway for the replacement.
 **Current boundary:** one trusted host can safely share one registry path
 between processes, but no distributed backend or operational endpoint is
 provisioned. Issue #575 remains open; production-wide cutover is blocked.
+
+## Transactional backend implementation
+
+`src/hunter/automation/workspace_sqlite_backend.py` provides a durable
+transactional **single trusted host** SQLite backend. It supports authenticated
+grant reads, `BEGIN IMMEDIATE` exclusive issue/workspace insertion, ownership-
+bound lease renewal, restart persistence and tamper rejection. Tests cover
+reopening the database from a second process-equivalent client, duplicate
+issuance, conflicting workspace, expired/wrong-owner lease and tampering.
+
+**This is not yet the shared production authority**: it is not wired into the
+issuer/runtime/publisher transport, does not provide a network service or
+multi-host consensus, and has no deployed durable volume. Do not mount its
+SQLite file on NFS or treat it as a distributed lock. A single trusted service
+and authenticated remote admission API (or an approved transactional server DB)
+remain required before global cutover.
