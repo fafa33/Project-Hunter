@@ -15,6 +15,8 @@ from hunter.automation.workspace_sqlite_backend import WorkspaceSQLiteBackend
 
 
 def main() -> None:
+    # Restrict newly created SQLite files and journals to the trusted user.
+    os.umask(0o077)
     path = os.environ.get("HUNTER_WORKSPACE_SQLITE_PATH", "")
     key_hex = os.environ.get("HUNTER_WORKSPACE_AUTHORITY_KEY_HEX", "")
     reader = os.environ.get("HUNTER_WORKSPACE_READER_TOKEN", "")

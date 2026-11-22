@@ -162,3 +162,70 @@ def test_client_uses_single_http_backend_with_separate_credentials(tmp_path: Pat
         server.shutdown()
         server.server_close()
         thread.join(timeout=3)
+
+
+def test_client_fails_closed_during_outage_and_recovers_after_restart(tmp_path: Path) -> None:
+    from hunter.automation.workspace_authority_client import WorkspaceAuthorityClient
+
+    path = tmp_path / "authority.sqlite"
+    backend = WorkspaceSQLiteBackend(path, authority_key=b"k" * 32)
+    reader, writer = "r" * 40, "w" * 40
+    server = WorkspaceAuthorityHTTPServer(("127.0.0.1", 0), backend=backend, reader_token=reader, writer_token=writer)
+    port = server.server_port
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    env = {
+        "HUNTER_WORKSPACE_API_URL": f"http://127.0.0.1:{port}",
+        "HUNTER_WORKSPACE_READER_TOKEN": reader,
+        "HUNTER_WORKSPACE_WRITER_TOKEN": writer,
+    }
+    client = WorkspaceAuthorityClient(env)
+    now = datetime.now(UTC)
+    grant = WorkspaceGrant(
+        repository="fafa33/Project-Hunter",
+        issue=575,
+        task_scope_digest="a" * 64,
+        workspace=str(tmp_path / "work"),
+        branch="issue-575-aaaa",
+        base_sha="b" * 40,
+        head_sha="b" * 40,
+        checkpoint="signed-checkpoint",
+        lease_owner="issuer",
+        lease_token_digest=hashlib.sha256(b"lease").hexdigest(),
+        lease_expiry=(now + timedelta(minutes=30)).isoformat(),
+        fencing=1,
+        next_action="dispatch",
+    )
+    WorkspaceAuthorityClient(env, writer=True).issue_exclusive(grant)
+    assert client.read_grant(575) == grant
+    server.shutdown()
+    server.server_close()
+    thread.join(timeout=3)
+    with pytest.raises(WorkspaceAuthorityMismatch, match="unavailable"):
+        client.read_grant(575)
+    restarted = WorkspaceAuthorityHTTPServer(
+        ("127.0.0.1", port),
+        backend=WorkspaceSQLiteBackend(path, authority_key=b"k" * 32),
+        reader_token=reader,
+        writer_token=writer,
+    )
+    thread = threading.Thread(target=restarted.serve_forever, daemon=True)
+    thread.start()
+    try:
+        assert (
+            client.admit(
+                issue=575,
+                repository=grant.repository,
+                workspace=Path(grant.workspace),
+                branch=grant.branch,
+                head_sha=grant.head_sha,
+                base_sha=grant.base_sha,
+                checkpoint=grant.checkpoint,
+                lease_token="lease",
+            )
+            == grant
+        )
+    finally:
+        restarted.shutdown()
+        restarted.server_close()
+        thread.join(timeout=3)
