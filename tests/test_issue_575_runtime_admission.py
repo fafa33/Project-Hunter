@@ -10,7 +10,11 @@ from unittest.mock import Mock
 import pytest
 
 from hunter.automation.issue_agent_execution import IssueAgentExecutionTarget
-from hunter.automation.issue_agent_workspace import IssueAgentWorkspaceRuntime, workspace_path
+from hunter.automation.issue_agent_workspace import (
+    IssueAgentWorkspaceRuntime,
+    materialize_workspace,
+    workspace_path,
+)
 from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceGrant, WorkspaceRegistry
 
 
@@ -98,3 +102,22 @@ def test_missing_all_configuration_fails_closed_before_materialization(
     with pytest.raises(WorkspaceAuthorityMismatch, match="trusted workspace admission configuration required"):
         runtime.dispatch("signed", target)
     materialize.assert_not_called()
+
+
+def test_existing_authorized_workspace_is_never_destroyed(tmp_path: Path) -> None:
+    target = IssueAgentExecutionTarget(
+        authorization_id="hunter-issue-agent-authorization-v1:" + "a" * 64,
+        issue_number=575,
+        repository="fafa33/Project-Hunter",
+        branch="issue-575-aaaa",
+        base_ref="main",
+        base_sha="b" * 40,
+    )
+    root = tmp_path / "workspaces"
+    existing = workspace_path(root, target)
+    existing.mkdir(parents=True)
+    valuable = existing / "untracked-owner-work.txt"
+    valuable.write_text("preserve this checkpoint", encoding="utf-8")
+    with pytest.raises(WorkspaceAuthorityMismatch, match="reviewed recovery"):
+        materialize_workspace(root, target, remote_url="https://github.com/fafa33/Project-Hunter.git")
+    assert valuable.read_text(encoding="utf-8") == "preserve this checkpoint"

@@ -92,11 +92,13 @@ def materialize_workspace(workspace_root: Path, target: IssueAgentExecutionTarge
     root = workspace_root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     workspace = workspace_path(root, target)
-    if workspace.exists():
-        # A leftover from an interrupted process. The ledger guarantees this
-        # authorization never executed to completion here, so it is disposable.
-        shutil.rmtree(workspace)
-    workspace.mkdir()
+    # Issue #575: a valid grant is not authorization to destroy an existing
+    # workspace. A crashed process may leave uncommitted work or a lease whose
+    # recovery has not been adjudicated. Refuse instead of silently deleting.
+    try:
+        workspace.mkdir()
+    except FileExistsError:
+        raise WorkspaceAuthorityMismatch("existing workspace requires reviewed recovery") from None
     try:
         return _prepare_workspace(workspace, target, remote_url=remote_url)
     except BaseException:
