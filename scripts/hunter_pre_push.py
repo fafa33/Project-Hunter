@@ -190,14 +190,31 @@ def _run_workflow_trigger_contracts(head_sha: str) -> int:
     """Validate workflow-trigger invariants only when workflow definitions change."""
     base = provenance.resolve_governed_base(head_sha)
     changed = subprocess.run(
-        ("git", "diff", "--name-only", "--diff-filter=ACDMRTUXB", base, head_sha, "--"),
+        ("git", "diff", "--name-status", "-z", "--diff-filter=ACDMRTUXB", base, head_sha, "--"),
         capture_output=True,
-        text=True,
         check=False,
     )
     if changed.returncode:
         raise RuntimeError("workflow trigger contract diff is unavailable")
-    if not any(path.startswith(".github/workflows/") for path in changed.stdout.splitlines()):
+    # A rename/copy out of .github/workflows must still run the trigger
+    # contract tests: --name-only reports only the destination in that case.
+    fields = changed.stdout.split(b"\0")
+    if fields[-1:] == [b""]:
+        fields.pop()
+    paths: list[bytes] = []
+    index = 0
+    while index < len(fields):
+        status = fields[index]
+        width = 3 if status.startswith((b"R", b"C")) else 2
+        if (
+            not status
+            or status[:1] not in (b"A", b"C", b"D", b"M", b"R", b"T", b"U", b"X", b"B")
+            or index + width > len(fields)
+        ):
+            raise RuntimeError("workflow trigger contract diff is malformed")
+        paths.extend(fields[index + 1 : index + width])
+        index += width
+    if not any(path.startswith(b".github/workflows/") for path in paths):
         return 0
     return subprocess.run(
         (
