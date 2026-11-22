@@ -81,6 +81,7 @@ from hunter.automation.issue_agent_execution import (
 )
 from hunter.automation.issue_agent_workspace import IssueAgentWorkspaceRuntime
 from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
+from hunter.automation.workspace_provisioning import provision_verified_dispatch
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService
 from hunter.evidence_intelligence.pre_model import PreModelInvariantError
@@ -343,6 +344,27 @@ def prepare_authorization(
             target=target,
             dispatched_at=services.configuration.clock.now(),
         )
+        # Only the verified, durably dispatched authorization may mint a grant.
+        # A partial trusted issuer configuration fails closed. This is an
+        # incremental integration: deployment must provision the shared secret
+        # and durable checkpoint before enabling this path in production.
+        if any(
+            os.environ.get(name)
+            for name in (
+                "HUNTER_WORKSPACE_REGISTRY_PATH",
+                "HUNTER_WORKSPACE_AUTHORITY_KEY_HEX",
+                "HUNTER_WORKSPACE_CHECKPOINT",
+                "HUNTER_WORKSPACE_LEASE_TOKEN",
+            )
+        ):
+            provision_verified_dispatch(
+                target=target,
+                repository=services.configuration.repository,
+                workspace_root=services.configuration.repository_checkout,
+                trusted_environment=os.environ,
+                issuer_instance=services.configuration.instance_id,
+                now=services.configuration.clock.now(),
+            )
     except BaseException as error:
         _record_failure(services, authorization, error)
         raise
