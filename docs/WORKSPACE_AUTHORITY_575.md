@@ -60,3 +60,17 @@ multi-host consensus, and has no deployed durable volume. Do not mount its
 SQLite file on NFS or treat it as a distributed lock. A single trusted service
 and authenticated remote admission API (or an approved transactional server DB)
 remain required before global cutover.
+
+## Private HTTP transport (no paid API)
+
+`workspace_authority_http.py` exposes a loopback-only standard-library HTTP
+service backed by the same SQLite transactional store. Read and write Bearer
+credentials are distinct; the reader cannot issue or renew grants. No network
+port is publicly exposed. `scripts/hunter_workspace_authority_server.py`
+requires `HUNTER_WORKSPACE_SQLITE_PATH` (absolute),
+`HUNTER_WORKSPACE_AUTHORITY_KEY_HEX`, `HUNTER_WORKSPACE_READER_TOKEN`, and
+`HUNTER_WORKSPACE_WRITER_TOKEN`; optional `HUNTER_WORKSPACE_PORT` defaults to
+8765. Supply secrets through the trusted host environment, never GitHub logs.
+The API has not been exposed via Tailscale, deployed as a persistent service,
+or integrated with the existing runtime and publisher; those remain blocked
+until transport identity, checkpoint authority, and hosted tests are approved.
