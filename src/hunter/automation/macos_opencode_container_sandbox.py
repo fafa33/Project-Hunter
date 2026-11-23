@@ -14,6 +14,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from hunter.automation.issue_agent_roles import EDIT_DIRECTIVE
+
 
 class ContainerSandboxRefused(RuntimeError):
     pass
@@ -26,6 +28,63 @@ _VALUES = {
     "--dev": "/dev",
     "--tmpfs": "/tmp",  # NOSONAR python:S5443 - container mount target string, not host dir creation
 }
+_MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,200}$")
+_ALLOWED_AGENT = "build"
+_ALLOWED_FORMAT = "json"
+_ALLOWED_DIR = "/workspace"
+_ALLOWED_TASK_FILE = "/home/hunter/hunter-task.txt"
+
+
+def _validated_opencode_tail(command: list[str]) -> list[str]:
+    """Validate opencode run tail against the trusted Hunter invocation contract.
+
+    Returns a sanitized argv tail so untrusted CLI arguments are never forwarded
+    to the container process.
+    """
+
+    if not command or command[0] != "run":
+        raise ContainerSandboxRefused("unexpected provider command")
+    sanitized: list[str] = ["run"]
+    index = 1
+    while index < len(command):
+        arg = command[index]
+        if arg == "--dir":
+            if index + 1 >= len(command) or command[index + 1] != _ALLOWED_DIR:
+                raise ContainerSandboxRefused("unexpected provider working directory")
+            sanitized.extend(["--dir", _ALLOWED_DIR])
+            index += 2
+        elif arg == "--model":
+            if index + 1 >= len(command):
+                raise ContainerSandboxRefused("incomplete provider model argument")
+            raw_model = command[index + 1]
+            if not _MODEL.fullmatch(raw_model) or ".." in raw_model:
+                raise ContainerSandboxRefused("unexpected provider model identifier")
+            model = "".join(raw_model[i] for i in range(len(raw_model)))
+            sanitized.extend(["--model", model])
+            index += 2
+        elif arg == "--agent":
+            if index + 1 >= len(command) or command[index + 1] != _ALLOWED_AGENT:
+                raise ContainerSandboxRefused("unexpected provider agent")
+            sanitized.extend(["--agent", _ALLOWED_AGENT])
+            index += 2
+        elif arg == "--format":
+            if index + 1 >= len(command) or command[index + 1] != _ALLOWED_FORMAT:
+                raise ContainerSandboxRefused("unexpected provider format")
+            sanitized.extend(["--format", _ALLOWED_FORMAT])
+            index += 2
+        elif arg == "--file":
+            if index + 1 >= len(command) or command[index + 1] != _ALLOWED_TASK_FILE:
+                raise ContainerSandboxRefused("unexpected provider attachment path")
+            sanitized.extend(["--file", _ALLOWED_TASK_FILE])
+            index += 2
+        elif arg == EDIT_DIRECTIVE:
+            sanitized.append(EDIT_DIRECTIVE)
+            index += 1
+        elif arg.startswith("-"):
+            raise ContainerSandboxRefused("unexpected provider flag")
+        else:
+            raise ContainerSandboxRefused("unexpected provider argument")
+    return sanitized
 
 
 def translate(args: list[str], image: str) -> list[str]:
@@ -97,6 +156,7 @@ def translate(args: list[str], image: str) -> list[str]:
         or command[1] != "run"
     ):
         raise ContainerSandboxRefused("only image-owned OpenCode run is allowed")
+    opencode_tail = _validated_opencode_tail(command[1:])
     config_dir = credentials / ".config" / "opencode"
     config_dir.mkdir(parents=True, exist_ok=True)
     denied_shell = config_dir / "hunter-denied-shell"
@@ -149,7 +209,7 @@ def translate(args: list[str], image: str) -> list[str]:
         image,
         "/usr/local/bin/opencode",
         "--pure",
-        *command[1:],
+        *opencode_tail,
     ]
 
 
