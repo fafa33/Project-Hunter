@@ -17,7 +17,7 @@ from hunter.automation.workspace_grant_handoff import verify_grant_handoff
 def test_mac_publisher_signs_only_pinned_exact_run(monkeypatch):
     key = Ed25519PrivateKey.generate()
     digest = "a" * 64
-    authorization = "hunter-issue-agent-authorization-v1:" + digest
+    authorization = "hunter-issue-agent-authorization:" + digest
     grant = WorkspaceGrant(
         repository="fafa33/Project-Hunter",
         issue=575,

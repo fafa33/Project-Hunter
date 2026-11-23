@@ -16,7 +16,7 @@ def test_comment_transport_refuses_forgery_replay_and_ambiguity():
     key = Ed25519PrivateKey.generate()
     now = datetime.now(UTC)
     digest = "a" * 64
-    authorization = "hunter-issue-agent-authorization-v1:" + digest
+    authorization = "hunter-issue-agent-authorization:" + digest
     grant = WorkspaceGrant(
         repository="fafa33/Project-Hunter",
         issue=575,

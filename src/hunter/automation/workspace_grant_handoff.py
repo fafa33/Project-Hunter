@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceGrant
 
 _DOMAIN = b"hunter-workspace-grant-handoff-v1\x00"
+_AUTHORIZATION_PREFIXES = ("hunter-issue-agent-authorization:", "hunter-issue-agent-authorization-v1:")
 _FIELDS = frozenset({"version", "authorization_id", "run_id", "run_attempt", "grant", "signature"})
 
 
@@ -36,7 +37,7 @@ def sign_grant_handoff(
 ) -> bytes:
     """Only the trusted post-dispatch issuer may call this with a registry-issued grant."""
     grant.validate()
-    if authorization_id != "hunter-issue-agent-authorization-v1:" + grant.task_scope_digest:
+    if authorization_id not in tuple(prefix + grant.task_scope_digest for prefix in _AUTHORIZATION_PREFIXES):
         raise WorkspaceAuthorityMismatch("authorization/grant mismatch")
     if run_id <= 0 or run_attempt != 1:
         raise WorkspaceAuthorityMismatch("invalid bound run")
@@ -84,7 +85,7 @@ def verify_grant_handoff(
             raise ValueError("expired grant")
         if (
             body["authorization_id"] != authorization_id
-            or authorization_id != "hunter-issue-agent-authorization-v1:" + grant.task_scope_digest
+            or authorization_id not in tuple(prefix + grant.task_scope_digest for prefix in _AUTHORIZATION_PREFIXES)
             or body["run_id"] != run_id
             or body["run_attempt"] != run_attempt
             or grant.repository != repository
