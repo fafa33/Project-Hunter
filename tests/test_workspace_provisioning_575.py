@@ -75,6 +75,32 @@ def test_issuer_provisions_runtime_and_publisher_from_same_grant(tmp_path: Path)
         provision_verified_dispatch(**{**args, "trusted_environment": {}})
 
 
+def test_api_issuer_rejects_mixed_local_authority_before_network(tmp_path: Path) -> None:
+    target = IssueAgentExecutionTarget(
+        authorization_id="hunter-issue-agent-authorization-v1:" + "a" * 64,
+        issue_number=575,
+        repository="fafa33/Project-Hunter",
+        branch="issue-575-aaaaaaaaaaaaaaaa",
+        base_ref="main",
+        base_sha="b" * 40,
+    )
+    api_env = {
+        "HUNTER_WORKSPACE_API_URL": "http://127.0.0.1:8765",
+        "HUNTER_WORKSPACE_WRITER_TOKEN": "w" * 32,
+        "HUNTER_WORKSPACE_CHECKPOINT": "signed-checkpoint-1",
+        "HUNTER_WORKSPACE_LEASE_TOKEN": "issuer-secret-lease",
+    }
+    for forbidden in ("HUNTER_WORKSPACE_REGISTRY_PATH", "HUNTER_WORKSPACE_AUTHORITY_KEY_HEX"):
+        with pytest.raises(WorkspaceAuthorityMismatch, match="conflicting workspace authorities"):
+            provision_verified_dispatch(
+                target=target,
+                repository=target.repository,
+                workspace_root=tmp_path,
+                trusted_environment={**api_env, forbidden: "untrusted-local-authority"},
+                issuer_instance="trusted-issuer",
+            )
+
+
 def test_owned_lease_renews_without_changing_fence_or_lineage(tmp_path: Path) -> None:
     import hashlib
     from dataclasses import replace

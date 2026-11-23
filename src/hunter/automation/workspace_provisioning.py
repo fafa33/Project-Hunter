@@ -39,7 +39,7 @@ def provision_verified_dispatch(
     no independent claim, authorization, or alternate registry is created.
     """
     api_mode = bool(trusted_environment.get("HUNTER_WORKSPACE_API_URL"))
-    if api_mode and trusted_environment.get("HUNTER_WORKSPACE_REGISTRY_PATH"):
+    if api_mode and any(trusted_environment.get(name) for name in _AUTHORITY_KEYS[:2]):
         raise WorkspaceAuthorityMismatch("conflicting workspace authorities")
     values = [trusted_environment.get(name, "") for name in (_AUTHORITY_KEYS[2:] if api_mode else _AUTHORITY_KEYS)]
     if not all(values):
