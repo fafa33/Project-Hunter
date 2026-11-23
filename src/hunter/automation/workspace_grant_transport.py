@@ -17,6 +17,7 @@ from urllib.request import Request, urlopen
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceGrant
+from hunter.automation.workspace_grant_dispatch import comment_body as dispatch_comment_body
 from hunter.automation.workspace_grant_handoff import verify_grant_handoff
 
 _PREFIX = "hunter-workspace-grant-v1:"
@@ -137,6 +138,30 @@ def publish_signed_grant_comment(*, repository: str, issue: int, token: str, doc
                 raise WorkspaceAuthorityMismatch("GitHub grant receipt publication failed")
     except (HTTPError, URLError, TimeoutError, OSError):
         raise WorkspaceAuthorityMismatch("GitHub grant receipt publication unavailable") from None
+
+
+def publish_signed_dispatch_comment(*, repository: str, issue: int, token: str, document: bytes) -> None:
+    """Control-plane publisher: transport a K_AUTH-signed dispatch request, never grant authority."""
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}", repository) or issue <= 0 or not token:
+        raise WorkspaceAuthorityMismatch("invalid dispatch publisher configuration")
+    body = json.dumps({"body": dispatch_comment_body(document)}).encode("utf-8")
+    request = Request(
+        f"https://api.github.com/repos/{repository}/issues/{issue}/comments",
+        data=body,
+        method="POST",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            if response.status != 201:
+                raise WorkspaceAuthorityMismatch("GitHub dispatch publication failed")
+    except (HTTPError, URLError, TimeoutError, OSError):
+        raise WorkspaceAuthorityMismatch("GitHub dispatch publication unavailable") from None
 
 
 def verify_github_run(

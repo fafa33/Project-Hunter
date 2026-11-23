@@ -375,6 +375,8 @@ def prepare_authorization(
                 from hunter_workspace_grant_publish import publish
 
                 control_sha = os.environ.get("HUNTER_WORKSPACE_CONTROL_SHA") or os.environ.get("GITHUB_SHA", "")
+                from hunter.automation.issue_agent_state import ledger_ref
+
                 publish(
                     issue=authorization.issue_number,
                     authorization_id=authorization.authorization_id,
@@ -384,7 +386,7 @@ def prepare_authorization(
                     control_sha=control_sha or None,
                     base_sha=target.base_sha,
                     authorized_branch=target.branch,
-                    ledger_identity=f"ledger:{authorization.authorization_id}",
+                    ledger_identity=ledger_ref(authorization.issue_number),
                     correlation_store_path=os.environ.get("HUNTER_WORKSPACE_CORRELATION_DB"),
                 )
     except BaseException as error:

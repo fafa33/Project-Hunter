@@ -8,6 +8,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceGrant
 from hunter.automation.workspace_grant_correlation import CorrelationClaim, WorkspaceGrantCorrelationStore
+from hunter.automation.workspace_grant_dispatch import (
+    WorkspaceGrantDispatchRequest,
+    sign_dispatch_request,
+    verify_dispatch_request,
+)
+from hunter.automation.workspace_grant_dispatch import (
+    comment_body as dispatch_comment,
+)
 from hunter.automation.workspace_grant_handoff import sign_grant_handoff
 from hunter.automation.workspace_grant_transport import comment_body as grant_comment
 from hunter.automation.workspace_grant_transport import select_verified_grant
@@ -224,3 +232,193 @@ def test_mac_trust_or_clock_failure_fails_closed(tmp_path):
     )
     with pytest.raises(WorkspaceAuthorityMismatch):
         store.claim_or_get(claim, owner="w1", now=datetime.now())  # naive clock fails closed
+
+
+def _dispatch_request(**overrides):
+    from hunter.automation import issue_agent_state as state
+
+    base = dict(
+        repository="fafa33/Project-Hunter",
+        issue=575,
+        authorization_id="hunter-issue-agent-authorization-v1:" + "a" * 64,
+        ledger_identity=state.ledger_ref(575),
+        run_id=321,
+        run_attempt=1,
+        workflow_path=".github/workflows/hunter-issue-agent-trigger.yml",
+        control_sha="1" * 40,
+        base_sha="2" * 40,
+        authorized_branch="issue-575-a",
+        checkpoint="checkpoint-575",
+    )
+    base.update(overrides)
+    return WorkspaceGrantDispatchRequest(**base)
+
+
+def _load_worker():
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    scripts = str(root / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    path = root / "scripts" / "hunter_workspace_grant_worker.py"
+    spec = importlib.util.spec_from_file_location("hunter_workspace_grant_worker_575_test", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_k_auth_signed_dispatch_accepted_by_worker_decode():
+    k_auth = Ed25519PrivateKey.generate()
+    req = _dispatch_request()
+    doc = sign_dispatch_request(req, signing_key=k_auth)
+    worker = _load_worker()
+    decoded = worker._decode_dispatch_comments([{"body": dispatch_comment(doc)}], verification_key=k_auth.public_key())
+    assert len(decoded) == 1
+    assert decoded[0] == req
+
+
+def test_forged_or_wrong_key_dispatch_rejected():
+    k_auth = Ed25519PrivateKey.generate()
+    wrong = Ed25519PrivateKey.generate()
+    req = _dispatch_request()
+    doc = sign_dispatch_request(req, signing_key=k_auth)
+    with pytest.raises(WorkspaceAuthorityMismatch):
+        verify_dispatch_request(doc, verification_key=wrong.public_key())
+    tampered = json.loads(doc)
+    tampered["checkpoint"] = "evil"
+    with pytest.raises(WorkspaceAuthorityMismatch):
+        verify_dispatch_request(json.dumps(tampered).encode(), verification_key=k_auth.public_key())
+
+
+def test_unsigned_direct_dispatch_rejected(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    worker = _load_worker()
+    signing = Ed25519PrivateKey.generate()
+    signing_hex = signing.private_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PrivateFormat.Raw,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).hex()
+    auth = Ed25519PrivateKey.generate()
+    monkeypatch.setattr(
+        worker,
+        "load_configuration",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            workspace_grant_verifying_key=signing.public_key(),
+            authorization_verifying_key=auth.public_key()
+            .public_bytes(encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw)
+            .hex(),
+        ),
+    )
+    monkeypatch.setenv("HUNTER_WORKSPACE_GRANT_SIGNING_KEY", signing_hex)
+    monkeypatch.setenv("HUNTER_ISSUE_AGENT_REPOSITORY", "fafa33/Project-Hunter")
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "hunter_workspace_grant_worker.py",
+            "--issue",
+            "575",
+            "--workspace-root",
+            str(tmp_path),
+            "--correlation-db",
+            str(tmp_path / "corr.sqlite"),
+            "--authorization-id",
+            "hunter-issue-agent-authorization-v1:" + "a" * 64,
+        ],
+    )
+    with pytest.raises(WorkspaceAuthorityMismatch, match="direct unsigned dispatch is forbidden"):
+        worker.main()
+
+
+def _ledger_view_for(req, *, state_name="AUTHORIZED", active=None, evidence=None):
+    from hunter.automation import issue_agent_state as state
+
+    auth_id = req.authorization_id
+    ev = evidence or {
+        "base_sha": req.base_sha,
+        "control_sha": req.control_sha,
+        "execution_branch": req.authorized_branch,
+        "authorize_run_id": req.run_id,
+        "task_scope": {"base_sha": req.base_sha},
+    }
+    view = state.AuthorizationView(
+        authorization_id=auth_id,
+        state=state_name,
+        records=[{}],
+        evidence={state.AUTHORIZED: ev},
+    )
+    active_id = auth_id if active is None else active
+    return state.LedgerView(
+        repository_id=1,
+        issue_number=req.issue,
+        authorizations={auth_id: view},
+        claimed=[auth_id],
+        active=active_id,
+        head_record_digest="h" * 64,
+        next_seq=2,
+    )
+
+
+def _patch_ledger(monkeypatch, worker, ledger_view):
+    monkeypatch.setattr(worker.state, "GitLedgerStore", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(worker.control, "GitHubRest", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(worker.control, "run_provenance", lambda *_args, **_kwargs: (lambda *_a, **_k: True))
+    monkeypatch.setattr(worker.control, "load_ledger", lambda *_args, **_kwargs: ("head", ledger_view))
+
+
+def test_worker_rejects_forged_ledger_identity(monkeypatch):
+    worker = _load_worker()
+    req = _dispatch_request(ledger_identity="ledger:forged")
+    with pytest.raises(WorkspaceAuthorityMismatch, match="fabricated or non-canonical ledger identity"):
+        worker._verify_canonical_ledger(request=req, configuration=object(), token="tok")
+
+
+def test_worker_rejects_missing_ledger_record(monkeypatch):
+    from hunter.automation import issue_agent_state as state
+
+    worker = _load_worker()
+    req = _dispatch_request()
+    empty = state.LedgerView(1, req.issue, {}, [], None, None, 0)
+    _patch_ledger(monkeypatch, worker, empty)
+    with pytest.raises(WorkspaceAuthorityMismatch, match="not active on canonical ledger"):
+        worker._verify_canonical_ledger(request=req, configuration=object(), token="tok")
+
+
+def test_worker_rejects_revoked_or_superseded_authorization(monkeypatch):
+    worker = _load_worker()
+    req = _dispatch_request()
+    ledger_view = _ledger_view_for(req, active="other-auth")
+    _patch_ledger(monkeypatch, worker, ledger_view)
+    with pytest.raises(WorkspaceAuthorityMismatch, match="not active on canonical ledger"):
+        worker._verify_canonical_ledger(request=req, configuration=object(), token="tok")
+
+
+def test_worker_rejects_wrong_ledger_bindings(monkeypatch):
+    worker = _load_worker()
+    base = _dispatch_request()
+    for field, value in [
+        ("run_id", 999),
+        ("run_attempt", 2),
+        ("control_sha", "f" * 40),
+        ("base_sha", "e" * 40),
+        ("authorized_branch", "evil-branch"),
+    ]:
+        req = _dispatch_request(**{field: value})
+        # ledger has canonical/base bindings; dispatch is wrong
+        ledger_view = _ledger_view_for(base)
+        _patch_ledger(monkeypatch, worker, ledger_view)
+        with pytest.raises(WorkspaceAuthorityMismatch):
+            worker._verify_canonical_ledger(request=req, configuration=object(), token="tok")
+
+
+def test_worker_accepts_valid_authorized_ledger_record(monkeypatch):
+    worker = _load_worker()
+    req = _dispatch_request()
+    ledger_view = _ledger_view_for(req)
+    _patch_ledger(monkeypatch, worker, ledger_view)
+    worker._verify_canonical_ledger(request=req, configuration=object(), token="tok")

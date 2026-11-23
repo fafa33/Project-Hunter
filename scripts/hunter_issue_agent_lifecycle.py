@@ -1853,6 +1853,50 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
     (out / "handoff.sealed").write_bytes(sealed)
     (out / "prepared.json").write_text(prepared.to_json(), encoding="utf-8")
     (out / "recorded_at").write_text(context.recorded_at, encoding="utf-8")
+    # Smallest secure bridge: publish a K_AUTH-signed dispatch request as a
+    # GitHub message-carrier. Mac worker verifies K_AUTH signature with repo-
+    # pinned authorization key; Mac grant signing key stays on Mac only.
+    dispatch_path = out / "dispatch.comment"
+    dispatch_path.unlink(missing_ok=True)
+    checkpoint = os.environ.get("HUNTER_WORKSPACE_CHECKPOINT", "")
+    auth_key_hex = os.environ.get(trigger.SIGNING_KEY_ENV, "")
+    if not checkpoint:
+        raise LifecycleRefused(
+            "MISSING_CONFIGURATION",
+            "HUNTER_WORKSPACE_CHECKPOINT is required for workspace grant dispatch; "
+            "configure the canonical trusted checkpoint in the authorize environment",
+        )
+    if not auth_key_hex:
+        raise LifecycleRefused(
+            "MISSING_CONFIGURATION",
+            f"{trigger.SIGNING_KEY_ENV} is required to sign the workspace grant dispatch",
+        )
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from hunter.automation.issue_agent_execution import SignedIssueAgentAuthorization, derive_execution_target
+    from hunter.automation.workspace_grant_dispatch import WorkspaceGrantDispatchRequest, sign_dispatch_request
+    from hunter.automation.workspace_grant_dispatch import comment_body as dispatch_body
+
+    signed_auth = SignedIssueAgentAuthorization.from_json(document)
+    target = derive_execution_target(signed_auth)
+    req = WorkspaceGrantDispatchRequest(
+        repository=configuration.repository,
+        issue=target.issue_number,
+        authorization_id=target.authorization_id,
+        ledger_identity=state.ledger_ref(target.issue_number),
+        run_id=context.run_id,
+        run_attempt=context.run_attempt,
+        workflow_path=context.workflow_path,
+        control_sha=context.control_sha,
+        base_sha=target.base_sha,
+        authorized_branch=target.branch,
+        checkpoint=checkpoint,
+    )
+    dispatch_doc = sign_dispatch_request(
+        req, signing_key=Ed25519PrivateKey.from_private_bytes(bytes.fromhex(auth_key_hex))
+    )
+    dispatch_path.write_text(dispatch_body(dispatch_doc), encoding="utf-8")
     _output(
         authorization_id=prepared.authorization_id,
         issue=prepared.issue_number,
@@ -1860,6 +1904,7 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
         fallback_handoff_artifact=(
             state.fallback_handoff_artifact_name(prepared.authorization_id) if fallback_path.exists() else ""
         ),
+        dispatch_comment=str(dispatch_path) if dispatch_path.exists() else "",
     )
     return 0
 
@@ -1903,6 +1948,28 @@ def cmd_authorize_commit(configuration: control.Configuration, arguments: argpar
         context=_authorize_context(),
         state_store=_store(configuration, authenticated=True),
         source_handling_store=_store(configuration, authenticated=True),
+    )
+    dispatch_comment = out / "dispatch.comment"
+    if not dispatch_comment.exists():
+        raise LifecycleRefused(
+            "MISSING_CONFIGURATION",
+            "workspace grant dispatch comment missing; authorize-prepare must produce it before commit",
+        )
+    from hunter.automation.workspace_grant_dispatch import _PREFIX
+    from hunter.automation.workspace_grant_transport import publish_signed_dispatch_comment
+
+    body = dispatch_comment.read_text(encoding="utf-8")
+    if not body.startswith(_PREFIX):
+        raise LifecycleRefused("TRANSPORT_INTEGRITY_FAILED", "dispatch comment malformed")
+    # Rewrap as raw document for publisher helper by decoding the comment body.
+    import base64
+
+    document = base64.b64decode(body[len(_PREFIX) :], validate=True)
+    publish_signed_dispatch_comment(
+        repository=configuration.repository,
+        issue=prepared.issue_number,
+        token=os.environ.get("GITHUB_TOKEN", ""),
+        document=document,
     )
     print(f"AUTHORIZED {prepared.authorization_id} at {head}")
     return 0

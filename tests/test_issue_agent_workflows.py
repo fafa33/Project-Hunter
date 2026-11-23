@@ -57,6 +57,7 @@ DOMAIN_SECRETS = {
         "HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY",
         "HUNTER_SOURCE_HANDLING_SIGNING_KEY",
         "HUNTER_PROMPT_AUTOMATION_SIGNING_KEY",
+        "HUNTER_WORKSPACE_CHECKPOINT",
     },
     EXECUTOR: {"HUNTER_ISSUE_AGENT_HANDOFF_KEY", "HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY"},
     # ADR 0041 F3/F6: X_FB only. The plan session is owner-approved per run, so no provider key exists here.
@@ -427,9 +428,10 @@ def test_role_tokens_are_minimal() -> None:
     assert set(jobs["publish"]["permissions"].values()) == {"read"}
     for job_id, domain in LIFECYCLE_DOMAINS.items():
         if domain == CONTROL:
-            assert "write" not in {
-                v for k, v in jobs[job_id]["permissions"].items() if k not in ("contents", "actions")
-            }
+            allowed_writes = {"contents", "actions"}
+            if job_id == "authorize":
+                allowed_writes.add("issues")  # publishes K_AUTH-signed dispatch comment only
+            assert "write" not in {v for k, v in jobs[job_id]["permissions"].items() if k not in allowed_writes}
 
 
 def test_knowledge_workflow_refuses_fork_origin_workflow_runs() -> None:

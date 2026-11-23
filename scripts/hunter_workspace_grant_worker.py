@@ -11,20 +11,23 @@ trusted domain.
 from __future__ import annotations
 
 import argparse
+import base64
 import os
 from datetime import UTC, datetime
 from pathlib import Path
 
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
+from hunter.automation import issue_agent_control as control
+from hunter.automation import issue_agent_state as state
 from hunter.automation.issue_agent_control import load_configuration
 from hunter.automation.issue_agent_execution import IssueAgentExecutionTarget
 from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch
 from hunter.automation.workspace_authority_client import WorkspaceAuthorityClient
 from hunter.automation.workspace_grant_correlation import CorrelationClaim, WorkspaceGrantCorrelationStore
 from hunter.automation.workspace_grant_dispatch import _PREFIX as DISPATCH_PREFIX
-from hunter.automation.workspace_grant_dispatch import WorkspaceGrantDispatchRequest, verify_dispatch_request
+from hunter.automation.workspace_grant_dispatch import verify_dispatch_request
 from hunter.automation.workspace_grant_handoff import sign_grant_handoff, verify_grant_handoff
 from hunter.automation.workspace_grant_transport import (
     fetch_issue_grant_comments,
@@ -51,6 +54,57 @@ def _decode_dispatch_comments(comments: list[dict[str, object]], *, verification
     return requests
 
 
+def _verify_canonical_ledger(
+    *,
+    request,
+    configuration,
+    token: str,
+) -> None:
+    """Verify the exact canonical AUTHORIZED ledger record before any grant issuance."""
+    ledger_ref = state.ledger_ref(request.issue)
+    if request.ledger_identity != ledger_ref:
+        raise WorkspaceAuthorityMismatch("fabricated or non-canonical ledger identity")
+    auth_header = "AUTHORIZATION: basic " + base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    store = state.GitLedgerStore(f"https://github.com/{request.repository}.git", auth_header=auth_header)
+    github = control.GitHubRest(request.repository, token)
+    provenance = control.run_provenance(github, configuration)
+    try:
+        _head, view = control.load_ledger(store, configuration, provenance, request.issue)
+    except Exception as error:
+        if isinstance(error, WorkspaceAuthorityMismatch):
+            raise
+        raise WorkspaceAuthorityMismatch("canonical ledger verification failed") from None
+    if view.active != request.authorization_id:
+        raise WorkspaceAuthorityMismatch("authorization is not active on canonical ledger")
+    auth_view = view.authorizations.get(request.authorization_id)
+    if auth_view is None:
+        raise WorkspaceAuthorityMismatch("canonical authorization record missing")
+    if auth_view.state != state.AUTHORIZED:
+        raise WorkspaceAuthorityMismatch("authorization is not eligible for grant issuance")
+    if auth_view.terminal:
+        raise WorkspaceAuthorityMismatch("authorization is terminal or ineligible")
+    evidence = auth_view.evidence.get(state.AUTHORIZED)
+    if not isinstance(evidence, dict):
+        raise WorkspaceAuthorityMismatch("canonical AUTHORIZED evidence missing")
+    bindings = {
+        "base_sha": request.base_sha,
+        "control_sha": request.control_sha,
+        "execution_branch": request.authorized_branch,
+        "authorize_run_id": request.run_id,
+    }
+    for field, expected in bindings.items():
+        if evidence.get(field) != expected:
+            raise WorkspaceAuthorityMismatch(f"canonical ledger binding mismatch: {field}")
+    task_scope = evidence.get("task_scope")
+    if not isinstance(task_scope, dict) or task_scope.get("base_sha") != request.base_sha:
+        raise WorkspaceAuthorityMismatch("canonical ledger task scope mismatch")
+    if request.run_attempt != 1:
+        raise WorkspaceAuthorityMismatch("canonical ledger run attempt mismatch")
+    # The ledger record is state-signed and chain-verified; dispatch must not widen it.
+    if evidence.get("base_sha") != request.base_sha:
+        raise WorkspaceAuthorityMismatch("canonical ledger base binding mismatch")
+
+
 def process_dispatch(
     *,
     request,
@@ -60,6 +114,7 @@ def process_dispatch(
     correlation_store: WorkspaceGrantCorrelationStore,
     worker_owner: str,
     workspace_root: Path,
+    configuration,
     now: datetime | None = None,
 ) -> bytes | None:
     instant = now or datetime.now(UTC)
@@ -80,6 +135,8 @@ def process_dispatch(
         head_branch="main",
         head_sha=request.control_sha,
     )
+    # Canonical ledger evidence is mandatory before any privileged grant issuance.
+    _verify_canonical_ledger(request=request, configuration=configuration, token=token)
     claim = CorrelationClaim(
         repository=request.repository,
         issue=request.issue,
@@ -191,6 +248,10 @@ def main() -> int:
     pinned = load_configuration(Path(__file__).resolve().parents[1])
     if pinned.workspace_grant_verifying_key is None:
         raise WorkspaceAuthorityMismatch("repository-pinned workspace root missing")
+    # Dispatch requests are signed by K_AUTH (GitHub control domain). The Mac
+    # verifies them with the repo-pinned authorization key; the Mac grant
+    # signing key remains exclusively local for grant receipt publication.
+    auth_pub = Ed25519PublicKey.from_public_bytes(bytes.fromhex(pinned.authorization_verifying_key))
     signing_hex = env.get("HUNTER_WORKSPACE_GRANT_SIGNING_KEY", "")
     if len(signing_hex) != 64:
         raise WorkspaceAuthorityMismatch("trusted publication configuration incomplete")
@@ -207,45 +268,23 @@ def main() -> int:
     token = env.get("HUNTER_WORKSPACE_GITHUB_COMMENT_TOKEN", "")
     store = WorkspaceGrantCorrelationStore(Path(args.correlation_db))
     published = 0
-    direct = [
-        args.authorization_id,
-        args.run_id,
-        args.control_sha,
-        args.base_sha,
-        args.authorized_branch,
-        args.ledger_identity,
-        args.checkpoint,
-    ]
-    if any(direct):
-        if not all(direct):
-            raise WorkspaceAuthorityMismatch("incomplete direct correlation binding")
-        req = WorkspaceGrantDispatchRequest(
-            repository=repository,
-            issue=args.issue,
-            authorization_id=args.authorization_id,
-            ledger_identity=args.ledger_identity,
-            run_id=args.run_id,
-            run_attempt=args.run_attempt,
-            workflow_path=args.workflow_path,
-            control_sha=args.control_sha,
-            base_sha=args.base_sha,
-            authorized_branch=args.authorized_branch,
-            checkpoint=args.checkpoint,
+    # A caller-provided run/authorization tuple is not proof of an authorized
+    # dispatch. Only the signed GitHub transport may reach privileged issuance.
+    # In particular, do not turn CLI flags into a parallel authorization path.
+    if any(
+        (
+            args.authorization_id,
+            args.run_id,
+            args.control_sha,
+            args.base_sha,
+            args.authorized_branch,
+            args.ledger_identity,
+            args.checkpoint,
         )
-        if process_dispatch(
-            request=req,
-            environment=env,
-            signing_key=signing_key,
-            verification_key=pinned.workspace_grant_verifying_key,
-            correlation_store=store,
-            worker_owner=args.worker_owner,
-            workspace_root=Path(args.workspace_root),
-        ):
-            published += 1
-        print(f"published={published}")
-        return 0
+    ):
+        raise WorkspaceAuthorityMismatch("direct unsigned dispatch is forbidden")
     comments = fetch_issue_grant_comments(repository=repository, issue=args.issue, token=token)
-    requests = _decode_dispatch_comments(comments, verification_key=pinned.workspace_grant_verifying_key)
+    requests = _decode_dispatch_comments(comments, verification_key=auth_pub)
     for req in requests:
         if req.issue != args.issue:
             continue
@@ -257,6 +296,7 @@ def main() -> int:
             correlation_store=store,
             worker_owner=args.worker_owner,
             workspace_root=Path(args.workspace_root),
+            configuration=pinned,
         ):
             published += 1
     print(f"published={published}")
