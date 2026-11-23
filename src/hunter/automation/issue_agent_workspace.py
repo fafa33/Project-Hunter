@@ -201,7 +201,7 @@ class IssueAgentWorkspaceRuntime:
             except ValueError:
                 raise WorkspaceAuthorityMismatch("invalid trusted workspace key") from None
             registry = WorkspaceRegistry(Path(registry_path), authority_key=key)
-        registry.admit(
+        admitted = registry.admit(
             issue=target.issue_number,
             repository=self._repository,
             workspace=workspace_path(self._root.resolve(), target),
@@ -211,6 +211,10 @@ class IssueAgentWorkspaceRuntime:
             checkpoint=checkpoint,
             lease_token=lease_token,
         )
+        # The registry is issue-keyed, but each Issue may have successive
+        # authorizations. Never let an earlier grant admit a later execution.
+        if admitted.task_scope_digest != target.authorization_id.partition(":")[2]:
+            raise WorkspaceAuthorityMismatch("authorization identity differs")
         workspace = materialize_workspace(self._root, target, remote_url=self._remote_url)
         try:
             runtime = self._runtime_factory(

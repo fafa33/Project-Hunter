@@ -79,6 +79,58 @@ def test_dispatch_rejects_wrong_checkpoint_before_materialization(
     materialize.assert_not_called()
 
 
+def test_dispatch_rejects_prior_authorization_grant_before_materialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = IssueAgentExecutionTarget(
+        authorization_id="hunter-issue-agent-authorization-v1:" + "a" * 64,
+        issue_number=575,
+        repository="fafa33/Project-Hunter",
+        branch="issue-575-aaaa",
+        base_ref="main",
+        base_sha="b" * 40,
+    )
+    root = tmp_path / "workspaces"
+    token = "runtime-token"
+    key = b"z" * 32
+    registry_path = tmp_path / "registry.json"
+    grant = WorkspaceGrant(
+        repository=target.repository,
+        issue=575,
+        task_scope_digest="c" * 64,  # Previous authorization, same issue and branch.
+        workspace=str(workspace_path(root, target)),
+        branch=target.branch,
+        base_sha=target.base_sha,
+        head_sha=target.base_sha,
+        checkpoint="approved-checkpoint",
+        lease_owner="trusted-issuer",
+        lease_token_digest=hashlib.sha256(token.encode()).hexdigest(),
+        lease_expiry=(datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+        fencing=1,
+        next_action="execute",
+    )
+    WorkspaceRegistry(registry_path, authority_key=key).write_cas(expected_revision=None, grants={"575": grant})
+    materialize = Mock(side_effect=AssertionError("must not materialize"))
+    monkeypatch.setattr("hunter.automation.issue_agent_workspace.materialize_workspace", materialize)
+    monkeypatch.setattr(
+        "hunter.automation.issue_agent_workspace.AgentFallbackRuntimeSettings.from_environment",
+        lambda _: Mock(),
+    )
+    runtime = IssueAgentWorkspaceRuntime(
+        workspace_root=root,
+        repository=target.repository,
+        environ={
+            "HUNTER_WORKSPACE_REGISTRY_PATH": str(registry_path),
+            "HUNTER_WORKSPACE_AUTHORITY_KEY_HEX": key.hex(),
+            "HUNTER_WORKSPACE_CHECKPOINT": "approved-checkpoint",
+            "HUNTER_WORKSPACE_LEASE_TOKEN": token,
+        },
+    )
+    with pytest.raises(WorkspaceAuthorityMismatch, match="authorization identity differs"):
+        runtime.dispatch("signed", target)
+    materialize.assert_not_called()
+
+
 def test_missing_all_configuration_fails_closed_before_materialization(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
