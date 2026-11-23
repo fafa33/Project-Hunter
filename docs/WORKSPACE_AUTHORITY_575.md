@@ -89,3 +89,20 @@ configuration are still governed by their prior admission contracts. A remote
 runner needs a trusted, authenticated tunnel with its own loopback endpoint;
 no direct public HTTP exposure is permitted. A persistent service deployment,
 checkpoint signature and issuer/publisher trust-domain hardening remain gates.
+
+## GitHub-hosted signed Grant integration (PR #785, not yet activated)
+
+The signed Grant handoff contract binds authorization ID, run/attempt, repository,
+issue, branch, exact base/head SHA, checkpoint and expiry. The hosted executor
+checks it against the canonical authorization Ledger before invoking the model.
+The Ed25519 **public** verification key is accepted only from the pinned
+`workspace_grant_verifying_key` in `config/issue_agent_trust_roots.json`, not from
+an executor environment variable. When this root is provisioned, a missing
+`HUNTER_WORKSPACE_GRANT_FILE` or `HUNTER_WORKSPACE_CHECKPOINT` refuses execution.
+
+**Not a live transport:** the GitHub workflow does not yet deliver this file
+from the trusted Mac issuer. Do not provision the root on main until a verified
+Mac-side pull issuer, bound artifact delivery, exact-run replay prevention,
+and positive/negative hosted canaries exist. A public artifact alone is not
+proof of trusted issuer provenance. Never put a signing private key, Writer
+Token, registry secret or lease credential in an artifact.

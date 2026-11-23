@@ -239,6 +239,19 @@ def test_provisioned_trust_roots_load_exactly(tmp_path: Path) -> None:
     assert configuration.anchor == PIN and configuration.writer == rt.WRITER
 
 
+def test_workspace_grant_verifier_is_pinned_in_trust_roots(tmp_path: Path) -> None:
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    issuer_key = Ed25519PrivateKey.generate()
+    public = issuer_key.public_key().public_bytes_raw().hex()
+    configuration = control.load_configuration(write_roots(tmp_path, provisioned(workspace_grant_verifying_key=public)))
+    assert configuration.workspace_grant_verifying_key is not None
+    assert configuration.workspace_grant_verifying_key.public_bytes_raw().hex() == public
+    assert control.load_configuration(write_roots(tmp_path, provisioned())).workspace_grant_verifying_key is None
+    with pytest.raises(control.ControlRefused, match="MISSING_CONFIGURATION"):
+        control.load_configuration(write_roots(tmp_path, provisioned(workspace_grant_verifying_key="00" * 31)))
+
+
 @pytest.mark.parametrize(
     "document",
     [
