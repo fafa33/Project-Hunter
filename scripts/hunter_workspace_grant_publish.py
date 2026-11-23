@@ -18,7 +18,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch
 from hunter.automation.workspace_authority_client import WorkspaceAuthorityClient
 from hunter.automation.workspace_grant_handoff import sign_grant_handoff, verify_grant_handoff
-from hunter.automation.workspace_grant_transport import publish_signed_grant_comment
+from hunter.automation.workspace_grant_transport import publish_signed_grant_comment, verify_github_run
 
 
 def publish(*, issue: int, authorization_id: str, run_id: int, attempt: int) -> None:
@@ -72,6 +72,7 @@ def publish(*, issue: int, authorization_id: str, run_id: int, attempt: int) -> 
         base_sha=grant.base_sha,
         checkpoint=checkpoint,
     )
+    verify_github_run(repository=repository, run_id=run_id, token=token)
     publish_signed_grant_comment(repository=repository, issue=issue, token=token, document=receipt)
 
 

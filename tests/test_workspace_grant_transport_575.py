@@ -82,3 +82,46 @@ def test_fetch_transport_requires_trusted_target_and_token():
     ):
         with pytest.raises(WorkspaceAuthorityMismatch):
             fetch_issue_grant_comments(repository=repo, issue=issue, token=token)
+
+
+def test_run_lookup_refuses_forged_and_stale_runs(monkeypatch):
+    from unittest.mock import Mock
+
+    from hunter.automation.workspace_grant_transport import verify_github_run
+
+    valid = dict(
+        id=123,
+        run_attempt=1,
+        path=".github/workflows/hunter-issue-agent-trigger.yml@refs/heads/main",
+        head_branch="main",
+        status="in_progress",
+        repository={"full_name": "fafa33/Project-Hunter"},
+    )
+
+    def response(payload):
+        result = Mock()
+        result.status = 200
+        result.read.return_value = json.dumps(payload).encode()
+        result.__enter__ = Mock(return_value=result)
+        result.__exit__ = Mock(return_value=False)
+        return result
+
+    monkeypatch.setattr(
+        "hunter.automation.workspace_grant_transport.urlopen", lambda *_args, **_kwargs: response(valid)
+    )
+    kwargs = dict(repository="fafa33/Project-Hunter", run_id=123, token="token")
+    verify_github_run(**kwargs)
+    for change in (
+        dict(run_attempt=2),
+        dict(status="completed"),
+        dict(head_branch="attacker"),
+        dict(id=999),
+        dict(path=".github/workflows/other.yml@refs/heads/main"),
+        dict(repository={"full_name": "other/repo"}),
+    ):
+        monkeypatch.setattr(
+            "hunter.automation.workspace_grant_transport.urlopen",
+            lambda *_args, _payload={**valid, **change}, **_kwargs: response(_payload),
+        )
+        with pytest.raises(WorkspaceAuthorityMismatch):
+            verify_github_run(**kwargs)

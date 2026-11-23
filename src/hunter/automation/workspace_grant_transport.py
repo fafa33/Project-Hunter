@@ -137,3 +137,36 @@ def publish_signed_grant_comment(*, repository: str, issue: int, token: str, doc
                 raise WorkspaceAuthorityMismatch("GitHub grant receipt publication failed")
     except (HTTPError, URLError, TimeoutError, OSError):
         raise WorkspaceAuthorityMismatch("GitHub grant receipt publication unavailable") from None
+
+
+def verify_github_run(*, repository: str, run_id: int, token: str) -> None:
+    """Refuse caller-invented runs: require a live, first-attempt main lifecycle run."""
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}", repository) or run_id <= 0 or not token:
+        raise WorkspaceAuthorityMismatch("invalid workflow run lookup")
+    request = Request(
+        f"https://api.github.com/repos/{repository}/actions/runs/{run_id}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urlopen(request, timeout=10) as response:
+            if response.status != 200:
+                raise WorkspaceAuthorityMismatch("GitHub workflow run unavailable")
+            raw = response.read(32769)
+        if len(raw) > 32768:
+            raise WorkspaceAuthorityMismatch("oversized workflow run")
+        run = json.loads(raw)
+        if not isinstance(run, dict) or (
+            run.get("id") != run_id
+            or run.get("run_attempt") != 1
+            or run.get("path", "").split("@")[0] != ".github/workflows/hunter-issue-agent-trigger.yml"
+            or run.get("head_branch") != "main"
+            or run.get("status") not in ("queued", "in_progress", "waiting", "pending", "requested")
+            or run.get("repository", {}).get("full_name") != repository
+        ):
+            raise WorkspaceAuthorityMismatch("workflow run identity or status mismatch")
+    except (HTTPError, URLError, TimeoutError, OSError, ValueError, AttributeError, TypeError):
+        raise WorkspaceAuthorityMismatch("GitHub workflow run verification failed") from None
