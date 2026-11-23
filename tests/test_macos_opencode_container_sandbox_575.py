@@ -35,3 +35,8 @@ def test_mac_host_binary_is_not_mounted_into_container(tmp_path):
     result=translate(args,IMAGE)
     assert '/opt/hunter/bin/opencode' not in result
     assert result[-3:]==['/usr/local/bin/opencode','run','test']
+
+
+def test_local_immutable_image_id_is_accepted(tmp_path):
+    result = translate(argv(tmp_path), 'sha256:' + 'b'*64)
+    assert 'sha256:' + 'b'*64 in result

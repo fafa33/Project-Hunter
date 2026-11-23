@@ -21,7 +21,7 @@ _VALUES = {"--proc": "/proc", "--dev": "/dev", "--tmpfs": "/tmp"}
 
 
 def translate(args: list[str], image: str) -> list[str]:
-    if not _IMAGE.fullmatch(image):
+    if not (_IMAGE.fullmatch(image) or re.fullmatch(r"sha256:[0-9a-f]{64}", image)):
         raise ContainerSandboxRefused("provider image must be pinned by sha256 digest")
     flags: set[str] = set()
     values: dict[str, str] = {}
