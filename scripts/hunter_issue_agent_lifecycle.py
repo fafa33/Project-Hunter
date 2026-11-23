@@ -2023,6 +2023,7 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
     run_id, attempt, _ = _run_context()
     # Issue #772: consume the job-scoped read credential inside this trusted process,
     # before constructing or launching any untrusted model/container process.
+    grant_transport_token = os.environ.get(PROVENANCE_TOKEN_ENV, "").strip()
     access = _ledger_access(configuration)
     os.environ["HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"] = configuration.prompt_verifying_key
     model_secrets = _executor_model_secrets(tuple(arguments.model_argv), arguments.model_key_name)
@@ -2037,16 +2038,16 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
     grant_file = os.environ.get("HUNTER_WORKSPACE_GRANT_FILE", "")
     grant_checkpoint = os.environ.get("HUNTER_WORKSPACE_CHECKPOINT", "")
     if any((grant_file, grant_checkpoint, configuration.workspace_grant_verifying_key)):
-        if not all((grant_file, grant_checkpoint, configuration.workspace_grant_verifying_key)):
+        if not grant_checkpoint or configuration.workspace_grant_verifying_key is None:
             raise LifecycleRefused("WORKSPACE_AUTHORITY_MISMATCH", "incomplete hosted grant admission")
 
         from hunter.automation.workspace_grant_handoff import verify_grant_handoff
+        from hunter.automation.workspace_grant_transport import fetch_issue_grant_comments, select_verified_grant
 
         try:
             bound = roles._authorization(access, arguments.issue, arguments.authorization_id)
             authorized = bound.evidence[state.AUTHORIZED]
-            verify_grant_handoff(
-                Path(grant_file).read_bytes(),
+            binding = dict(
                 verification_key=configuration.workspace_grant_verifying_key,
                 authorization_id=arguments.authorization_id,
                 run_id=run_id,
@@ -2057,6 +2058,15 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
                 base_sha=authorized["base_sha"],
                 checkpoint=grant_checkpoint,
             )
+            if grant_file:
+                verify_grant_handoff(Path(grant_file).read_bytes(), **binding)
+            else:
+                comments = fetch_issue_grant_comments(
+                    repository=configuration.repository,
+                    issue=arguments.issue,
+                    token=grant_transport_token,
+                )
+                select_verified_grant(comments, **binding)
         except (OSError, ValueError, KeyError, TypeError):
             raise LifecycleRefused("WORKSPACE_AUTHORITY_MISMATCH", "hosted grant admission refused") from None
     outcome = roles.run_executor(
