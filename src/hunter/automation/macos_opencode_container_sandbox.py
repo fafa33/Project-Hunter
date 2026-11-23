@@ -66,9 +66,16 @@ def translate(args: list[str], image: str) -> list[str]:
             raise ContainerSandboxRefused("unexpected sandbox argument")
     if flags != _FLAGS or values != _VALUES or set(mounts) != {"/workspace", "/home/hunter"}:
         raise ContainerSandboxRefused("incomplete isolation contract")
-    workspace = Path(mounts["/workspace"]).resolve(strict=True)
-    credentials = Path(mounts["/home/hunter"]).resolve(strict=True)
-    if any(p.is_symlink() for p in (workspace, credentials, workspace.parent)) or workspace.name != "repo" or not workspace.parent.name.startswith("hunter-opencode-attempt-") or credentials != workspace.parent / "credential-home":
+    raw_workspace = Path(mounts["/workspace"])
+    raw_credentials = Path(mounts["/home/hunter"])
+    if not raw_workspace.is_absolute() or not raw_credentials.is_absolute():
+        raise ContainerSandboxRefused("attempt paths must be absolute")
+    for raw in (raw_workspace, raw_credentials):
+        if any(parent.is_symlink() for parent in (raw, *raw.parents)):
+            raise ContainerSandboxRefused("symlink in attempt mount path")
+    workspace = raw_workspace.resolve(strict=True)
+    credentials = raw_credentials.resolve(strict=True)
+    if workspace.name != "repo" or not workspace.parent.name.startswith("hunter-opencode-attempt-") or credentials != workspace.parent / "credential-home":
         raise ContainerSandboxRefused("attempt workspace or credential home is not isolated")
     if not workspace.is_dir() or not credentials.is_dir():
         raise ContainerSandboxRefused("attempt directories must exist")

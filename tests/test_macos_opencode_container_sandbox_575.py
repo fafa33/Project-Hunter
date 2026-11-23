@@ -59,3 +59,13 @@ def test_capabilities_fail_closed_on_missing_or_enabled_tools():
         bad[changed]=not bad[changed]
         with pytest.raises(ContainerSandboxRefused):verify_capabilities(json.dumps({'tools':bad}))
     with pytest.raises(ContainerSandboxRefused):verify_capabilities('{}')
+
+
+def test_reject_symlinked_credential_home(tmp_path):
+    args=argv(tmp_path)
+    source=Path(args[args.index('/home/hunter')-1])
+    real=source.with_name('real-credentials')
+    source.rename(real)
+    source.symlink_to(real, target_is_directory=True)
+    with pytest.raises(ContainerSandboxRefused, match='symlink'):
+        translate(args,IMAGE)
