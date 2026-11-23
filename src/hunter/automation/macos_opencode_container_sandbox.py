@@ -24,8 +24,8 @@ _FLAGS = {"--die-with-parent", "--new-session", "--unshare-pid", "--unshare-ipc"
 _VALUES = {
     "--proc": "/proc",
     "--dev": "/dev",
-    "--tmpfs": "/tmp",
-}  # NOSONAR python:S5443 - container mount target, not host directory creation
+    "--tmpfs": "/tmp",  # NOSONAR python:S5443 - container mount target string, not host dir creation
+}
 
 
 def translate(args: list[str], image: str) -> list[str]:
@@ -188,7 +188,7 @@ def main() -> int:
         return 2
     return subprocess.run(
         command, check=False, shell=False
-    ).returncode  # NOSONAR python:S603 - validated allowlist, shell=False
+    ).returncode  # NOSONAR python:S603 python:S2076 - validated allowlist, shell=False
 
 
 if __name__ == "__main__":
