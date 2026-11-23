@@ -106,3 +106,21 @@ Mac-side pull issuer, bound artifact delivery, exact-run replay prevention,
 and positive/negative hosted canaries exist. A public artifact alone is not
 proof of trusted issuer provenance. Never put a signing private key, Writer
 Token, registry secret or lease credential in an artifact.
+
+## macOS container isolation adapter (PR #785, not activated)
+
+The existing OpenCode adapter's bwrap-shaped sandbox contract can be carried by
+`scripts/hunter_macos_opencode_sandbox` using the fail-closed
+`hunter.automation.macos_opencode_container_sandbox` transport. The transport
+requires `HUNTER_MACOS_OPENCODE_IMAGE` to name a reviewed Linux OpenCode image
+**by sha256 digest**, maps only the per-attempt repository and credential home,
+and starts Docker with a read-only root, no capabilities, no-new-privileges,
+limited PIDs and memory. Host OpenCode is never bind-mounted into the image.
+Unexpected flags, host mounts, unpinned images and executable overrides fail
+closed. The existing canonical issuer, handoff, validator and publisher remain
+unchanged. This is **not** permission to activate a production issuer: the
+image must contain the reviewed/pinned OpenCode version, its tool-capability
+and denied-shell self-check must pass inside the container, and real signed
+checkpoint/lease and publication credentials must be provisioned. Docker
+availability alone does not satisfy those gates. No legacy Railway runtime is
+restored.

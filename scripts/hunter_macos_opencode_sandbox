@@ -1,0 +1,4 @@
+#!/bin/sh
+# Trusted launcher: all bwrap-style arguments are validated by the adapter.
+set -eu
+exec /usr/local/bin/python3 -m hunter.automation.macos_opencode_container_sandbox "$@"
