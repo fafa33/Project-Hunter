@@ -46,3 +46,16 @@ def test_probe_nonce_is_passed_to_actual_container(tmp_path,monkeypatch):
     monkeypatch.setenv('HUNTER_PROBE_NONCE','a'*32)
     command=translate(argv(tmp_path),IMAGE)
     assert 'HUNTER_PROBE_NONCE='+'a'*32 in command
+
+
+def test_capabilities_fail_closed_on_missing_or_enabled_tools():
+    import json
+    from hunter.automation.macos_opencode_container_sandbox import verify_capabilities
+    allowed={name:True for name in ('read','edit','glob','grep')}
+    allowed.update({name:False for name in ('webfetch','websearch','task','skill','question')})
+    verify_capabilities(json.dumps({'tools':allowed}))
+    for changed in ('webfetch','question','read'):
+        bad=dict(allowed)
+        bad[changed]=not bad[changed]
+        with pytest.raises(ContainerSandboxRefused):verify_capabilities(json.dumps({'tools':bad}))
+    with pytest.raises(ContainerSandboxRefused):verify_capabilities('{}')

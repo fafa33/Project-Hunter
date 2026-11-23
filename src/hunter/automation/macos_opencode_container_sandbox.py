@@ -89,10 +89,35 @@ def translate(args: list[str], image: str) -> list[str]:
     return ["docker", "run", "--rm", "--init", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=2g", f"--user={os.getuid()}:{os.getgid()}", "--tmpfs=/tmp:rw,nosuid,nodev,size=128m", "--mount", f"type=bind,src={workspace},dst=/workspace", "--mount", f"type=bind,src={credentials},dst=/home/hunter", "--workdir=/workspace", "--env", "HOME=/home/hunter", "--env", "SHELL=/home/hunter/.config/opencode/hunter-denied-shell", "--env", f"OPENCODE_CONFIG_CONTENT={config_json}", "--env", "OPENCODE_DISABLE_AUTOUPDATE=true", *probe_env, image, "/usr/local/bin/opencode", "--pure", *command[1:]]
 
 
+def verify_capabilities(payload: str) -> None:
+    try:
+        tools = json.loads(payload)["tools"]
+    except (ValueError, KeyError, TypeError) as error:
+        raise ContainerSandboxRefused("provider capability discovery malformed") from error
+    if not isinstance(tools, dict):
+        raise ContainerSandboxRefused("provider capabilities are malformed")
+    if any(tools.get(name) is not True for name in ("read", "edit", "glob", "grep")):
+        raise ContainerSandboxRefused("required provider tools are disabled")
+    if any(tools.get(name) is not False for name in ("webfetch", "websearch", "task", "skill", "question")):
+        raise ContainerSandboxRefused("forbidden provider tools are enabled or unknown")
+
+
 def main() -> int:
     try:
         command = translate(sys.argv[1:], os.environ.get("HUNTER_MACOS_OPENCODE_IMAGE", ""))
     except (ContainerSandboxRefused, OSError) as error:
+        print(f"governed container sandbox refused: {error}", file=sys.stderr)
+        return 2
+    # Resolve tools under the identical container, mounts, permissions and model
+    # configuration before permitting an agent run. A failed probe is not an opt-out.
+    binary = command.index("/usr/local/bin/opencode")
+    probe = [*command[:binary], "/usr/local/bin/opencode", "debug", "agent", "build", "--pure"]
+    try:
+        observed = subprocess.run(probe, check=False, capture_output=True, text=True, timeout=45)
+        if observed.returncode != 0:
+            raise ContainerSandboxRefused("provider capability discovery failed")
+        verify_capabilities(observed.stdout)
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired, ContainerSandboxRefused) as error:
         print(f"governed container sandbox refused: {error}", file=sys.stderr)
         return 2
     return subprocess.run(command, check=False).returncode
