@@ -15,7 +15,7 @@ def test_exact_contract_translates_to_read_only_restricted_container(tmp_path):
     assert result[0:2]==['docker','run']
     for item in ('--read-only','--cap-drop=ALL','--security-opt=no-new-privileges','--pids-limit=128'):
         assert item in result
-    assert result[-3:]==['/usr/local/bin/opencode','run','test']
+    assert result[-4:]==['/usr/local/bin/opencode','--pure','run','test']
 
 @pytest.mark.parametrize('change', ['image','mount','flag','binary','chdir'])
 def test_fail_closed_on_untrusted_configuration(tmp_path,change):
@@ -34,9 +34,15 @@ def test_mac_host_binary_is_not_mounted_into_container(tmp_path):
     args[-3]='/opt/hunter/bin/opencode'
     result=translate(args,IMAGE)
     assert '/opt/hunter/bin/opencode' not in result
-    assert result[-3:]==['/usr/local/bin/opencode','run','test']
+    assert result[-4:]==['/usr/local/bin/opencode','--pure','run','test']
 
 
 def test_local_immutable_image_id_is_accepted(tmp_path):
     result = translate(argv(tmp_path), 'sha256:' + 'b'*64)
     assert 'sha256:' + 'b'*64 in result
+
+
+def test_probe_nonce_is_passed_to_actual_container(tmp_path,monkeypatch):
+    monkeypatch.setenv('HUNTER_PROBE_NONCE','a'*32)
+    command=translate(argv(tmp_path),IMAGE)
+    assert 'HUNTER_PROBE_NONCE='+'a'*32 in command

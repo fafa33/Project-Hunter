@@ -7,6 +7,7 @@ image must contain the reviewed Linux OpenCode binary and its pinned runtime.
 from __future__ import annotations
 
 import os
+import json
 import re
 import subprocess
 import sys
@@ -74,7 +75,18 @@ def translate(args: list[str], image: str) -> list[str]:
     command = args[index:]
     if len(command) < 2 or command[0] not in {"/usr/local/bin/opencode", "/usr/bin/opencode", "/opt/hunter/bin/opencode"} or command[1] != "run":
         raise ContainerSandboxRefused("only image-owned OpenCode run is allowed")
-    return ["docker", "run", "--rm", "--init", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=2g", f"--user={os.getuid()}:{os.getgid()}", "--tmpfs=/tmp:rw,nosuid,nodev,size=128m", "--mount", f"type=bind,src={workspace},dst=/workspace", "--mount", f"type=bind,src={credentials},dst=/home/hunter", "--workdir=/workspace", "--env", "HOME=/home/hunter", image, "/usr/local/bin/opencode", *command[1:]]
+    config_dir = credentials / ".config" / "opencode"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    denied_shell = config_dir / "hunter-denied-shell"
+    denied_shell.write_text("#!/bin/sh\necho 'Hunter forbids shell execution' >&2\nexit 126\n", encoding="utf-8")
+    denied_shell.chmod(0o555)
+    config = {"permission": {"*": "deny", "external_directory": "deny", "read": "allow", "edit": "allow", "glob": "allow", "grep": "allow", "lsp": "allow", "bash": "allow"}, "shell": "/home/hunter/.config/opencode/hunter-denied-shell"}
+    config_json = json.dumps(config, sort_keys=True, separators=(",", ":"))
+    nonce = os.environ.get("HUNTER_PROBE_NONCE", "")
+    if nonce and not re.fullmatch(r"[0-9a-f]{32}", nonce):
+        raise ContainerSandboxRefused("invalid self-check nonce")
+    probe_env = ["--env", f"HUNTER_PROBE_NONCE={nonce}"] if nonce else []
+    return ["docker", "run", "--rm", "--init", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=128", "--memory=2g", f"--user={os.getuid()}:{os.getgid()}", "--tmpfs=/tmp:rw,nosuid,nodev,size=128m", "--mount", f"type=bind,src={workspace},dst=/workspace", "--mount", f"type=bind,src={credentials},dst=/home/hunter", "--workdir=/workspace", "--env", "HOME=/home/hunter", "--env", "SHELL=/home/hunter/.config/opencode/hunter-denied-shell", "--env", f"OPENCODE_CONFIG_CONTENT={config_json}", "--env", "OPENCODE_DISABLE_AUTOUPDATE=true", *probe_env, image, "/usr/local/bin/opencode", "--pure", *command[1:]]
 
 
 def main() -> int:

@@ -128,3 +128,18 @@ restored.
 ### Local image build receipt (2026-11-23)
 
 Built on the owner's Mac with `docker build --platform linux/amd64 -f docker/macos-opencode/Dockerfile -t hunter-opencode:1.18.30 .` using the existing verified `scripts/install_opencode_runtime.py` (release archive SHA-256 pinned in that script). The observed **local image ID** is `sha256:b8ed2bcaf8cda594fc63f8cb7709b92e8d8ce631d53623ebca4d45df5f2c959b`; the offline version probe returned `1.18.30`. This is not a registry manifest digest, and does not assert publication or a successful live agent run. The adapter accepts an exact local image ID (`sha256:...`) or a registry digest (`name@sha256:...`), never a mutable tag. Production activation remains blocked on the provider capability/shell self-check and signed Workspace admission and publication grants.
+
+### Live macOS Docker self-check (2026-11-23)
+
+The first live probe exposed a critical false positive: `HUNTER_PROBE_NONCE`
+was not forwarded to the container, so the shell created a different filename
+and the parent incorrectly reported success. After forwarding the nonce, the
+self-check correctly **failed closed** because the model executed `touch`.
+The adapter now supplies a deny-all-by-default OpenCode permission configuration,
+a non-executable shell policy implemented as an executable refusing shell wrapper,
+and `--pure`. A second real model probe returned `Hunter forbids shell execution`,
+created no nonce-bearing marker, and the canonical
+`opencode_provider_self_check` exited zero. This proves the tested forbidden
+shell attempt is denied for the pinned local image. It does **not** prove
+production issuer admission, all tool-capability restrictions, network policy,
+or GitHub publication readiness; those remain separate gates.
