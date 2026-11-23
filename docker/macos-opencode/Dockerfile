@@ -4,6 +4,7 @@ COPY scripts/install_opencode_runtime.py /tmp/install_opencode_runtime.py
 RUN python /tmp/install_opencode_runtime.py --destination /usr/local/bin/opencode \
     && rm /tmp/install_opencode_runtime.py \
     && mkdir -p /home/hunter /workspace \
-    && chmod 1777 /tmp
+    && useradd --system --uid 10001 --home-dir /home/hunter --shell /usr/sbin/nologin hunter
 ENV HOME=/home/hunter
 WORKDIR /workspace
+USER 10001

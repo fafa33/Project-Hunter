@@ -147,7 +147,7 @@ or GitHub publication readiness; those remain separate gates.
 ### Exact-run Mac publication adapter (staged, not a live cutover)
 
 The existing issuer's `prepare_authorization` now calls the Mac publisher **only
-when** its trusted process environment supplies `HUNTER_WORKSPACE_GITHUB_RUN_ID`
+when** its trusted process environment supplies `GITHUB_RUN_ID (GitHub-provided, API-verified)`
 after durable dispatch and successful atomic grant issuance. It passes the exact
 issued grant, not a reconstructed candidate. `HUNTER_WORKSPACE_GITHUB_RUN_ATTEMPT`
 must be 1. The publisher requires a private `HUNTER_WORKSPACE_GRANT_SIGNING_KEY`

@@ -139,10 +139,24 @@ def publish_signed_grant_comment(*, repository: str, issue: int, token: str, doc
         raise WorkspaceAuthorityMismatch("GitHub grant receipt publication unavailable") from None
 
 
-def verify_github_run(*, repository: str, run_id: int, token: str) -> None:
-    """Refuse caller-invented runs: require a live, first-attempt main lifecycle run."""
+def verify_github_run(
+    *,
+    repository: str,
+    run_id: int,
+    token: str,
+    run_attempt: int = 1,
+    workflow_path: str = ".github/workflows/hunter-issue-agent-trigger.yml",
+    head_branch: str | None = "main",
+    head_sha: str | None = None,
+    allowed_statuses: tuple[str, ...] = ("queued", "in_progress", "waiting", "pending", "requested"),
+) -> dict[str, Any]:
+    """Refuse caller-invented runs: require an exact, live, GitHub-origin run identity."""
     if not re.fullmatch(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}", repository) or run_id <= 0 or not token:
         raise WorkspaceAuthorityMismatch("invalid workflow run lookup")
+    if run_attempt != 1:
+        raise WorkspaceAuthorityMismatch("workflow run attempt mismatch")
+    if head_sha is not None and (len(head_sha) != 40 or any(c not in "0123456789abcdef" for c in head_sha)):
+        raise WorkspaceAuthorityMismatch("invalid workflow run head sha")
     request = Request(
         f"https://api.github.com/repos/{repository}/actions/runs/{run_id}",
         headers={
@@ -159,14 +173,22 @@ def verify_github_run(*, repository: str, run_id: int, token: str) -> None:
         if len(raw) > 32768:
             raise WorkspaceAuthorityMismatch("oversized workflow run")
         run = json.loads(raw)
-        if not isinstance(run, dict) or (
+        if not isinstance(run, dict):
+            raise WorkspaceAuthorityMismatch("workflow run identity or status mismatch")
+        path = run.get("path", "")
+        run_head = run.get("head_sha")
+        if (
             run.get("id") != run_id
-            or run.get("run_attempt") != 1
-            or run.get("path", "").split("@")[0] != ".github/workflows/hunter-issue-agent-trigger.yml"
-            or run.get("head_branch") != "main"
-            or run.get("status") not in ("queued", "in_progress", "waiting", "pending", "requested")
+            or run.get("run_attempt") != run_attempt
+            or path.split("@")[0] != workflow_path
+            or (head_branch is not None and run.get("head_branch") != head_branch)
+            or (head_sha is not None and run_head != head_sha)
+            or run.get("status") not in allowed_statuses
             or run.get("repository", {}).get("full_name") != repository
         ):
             raise WorkspaceAuthorityMismatch("workflow run identity or status mismatch")
+        if head_sha is not None and (not isinstance(run_head, str) or len(run_head) != 40):
+            raise WorkspaceAuthorityMismatch("workflow run identity or status mismatch")
+        return run
     except (HTTPError, URLError, TimeoutError, OSError, ValueError, AttributeError, TypeError):
         raise WorkspaceAuthorityMismatch("GitHub workflow run verification failed") from None

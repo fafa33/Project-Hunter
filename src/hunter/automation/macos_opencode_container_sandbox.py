@@ -21,7 +21,7 @@ class ContainerSandboxRefused(RuntimeError):
 
 _IMAGE = re.compile(r"^[a-zA-Z0-9._:/-]+@sha256:[0-9a-f]{64}$")
 _FLAGS = {"--die-with-parent", "--new-session", "--unshare-pid", "--unshare-ipc", "--unshare-uts"}
-_VALUES = {"--proc": "/proc", "--dev": "/dev", "--tmpfs": "/tmp"}
+_VALUES = {"--proc": "/proc", "--dev": "/dev", "--tmpfs": "/tmp"}  # NOSONAR: container mount targets
 
 
 def translate(args: list[str], image: str) -> list[str]:
@@ -173,14 +173,14 @@ def main() -> int:
     binary = command.index("/usr/local/bin/opencode")
     probe = [*command[:binary], "/usr/local/bin/opencode", "debug", "agent", "build", "--pure"]
     try:
-        observed = subprocess.run(probe, check=False, capture_output=True, text=True, timeout=45)
+        observed = subprocess.run(probe, check=False, capture_output=True, text=True, timeout=45, shell=False)
         if observed.returncode != 0:
             raise ContainerSandboxRefused("provider capability discovery failed")
         verify_capabilities(observed.stdout)
     except (OSError, ValueError, KeyError, subprocess.TimeoutExpired, ContainerSandboxRefused) as error:
         print(f"governed container sandbox refused: {error}", file=sys.stderr)
         return 2
-    return subprocess.run(command, check=False).returncode
+    return subprocess.run(command, check=False, shell=False).returncode
 
 
 if __name__ == "__main__":

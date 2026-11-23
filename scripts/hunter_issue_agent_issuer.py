@@ -368,17 +368,24 @@ def prepare_authorization(
                 issuer_instance=services.configuration.instance_id,
                 now=services.configuration.clock.now(),
             )
-            # Opt-in exact-run transport: never guess a run from the Issue timeline.
-            # Missing signing/transport configuration fails closed when enabled.
-            if os.environ.get("HUNTER_WORKSPACE_GITHUB_RUN_ID"):
+            # Exact-run transport: use GitHub-provided run identity only; never static caller-supplied env.
+            # Publisher verifies run identity via GitHub API and repo-pinned roots before publication.
+            run_id_raw = os.environ.get("GITHUB_RUN_ID", "")
+            if run_id_raw:
                 from hunter_workspace_grant_publish import publish
 
+                control_sha = os.environ.get("HUNTER_WORKSPACE_CONTROL_SHA") or os.environ.get("GITHUB_SHA", "")
                 publish(
                     issue=authorization.issue_number,
                     authorization_id=authorization.authorization_id,
-                    run_id=int(os.environ["HUNTER_WORKSPACE_GITHUB_RUN_ID"]),
-                    attempt=int(os.environ.get("HUNTER_WORKSPACE_GITHUB_RUN_ATTEMPT", "1")),
+                    run_id=int(run_id_raw),
+                    attempt=int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
                     grant=grant,
+                    control_sha=control_sha or None,
+                    base_sha=target.base_sha,
+                    authorized_branch=target.branch,
+                    ledger_identity=f"ledger:{authorization.authorization_id}",
+                    correlation_store_path=os.environ.get("HUNTER_WORKSPACE_CORRELATION_DB"),
                 )
     except BaseException as error:
         _record_failure(services, authorization, error)
