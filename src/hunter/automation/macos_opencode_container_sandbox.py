@@ -67,7 +67,7 @@ def translate(args: list[str], image: str) -> list[str]:
         raise ContainerSandboxRefused("incomplete isolation contract")
     workspace = Path(mounts["/workspace"]).resolve(strict=True)
     credentials = Path(mounts["/home/hunter"]).resolve(strict=True)
-    if workspace.is_symlink() or credentials.is_symlink() or workspace.name != "repo" or not workspace.parent.name.startswith("hunter-opencode-attempt-") or credentials != workspace.parent / "credential-home":
+    if any(p.is_symlink() for p in (workspace, credentials, workspace.parent)) or workspace.name != "repo" or not workspace.parent.name.startswith("hunter-opencode-attempt-") or credentials != workspace.parent / "credential-home":
         raise ContainerSandboxRefused("attempt workspace or credential home is not isolated")
     if not workspace.is_dir() or not credentials.is_dir():
         raise ContainerSandboxRefused("attempt directories must exist")
