@@ -21,7 +21,7 @@ from hunter.automation.workspace_grant_handoff import sign_grant_handoff, verify
 from hunter.automation.workspace_grant_transport import publish_signed_grant_comment, verify_github_run
 
 
-def publish(*, issue: int, authorization_id: str, run_id: int, attempt: int) -> None:
+def publish(*, issue: int, authorization_id: str, run_id: int, attempt: int, grant=None) -> None:
     if issue <= 0 or run_id <= 0 or attempt != 1:
         raise WorkspaceAuthorityMismatch("invalid exact-run grant publication")
     environment = os.environ
@@ -48,8 +48,16 @@ def publish(*, issue: int, authorization_id: str, run_id: int, attempt: int) -> 
     )
     if signer_public != pinned_public:
         raise WorkspaceAuthorityMismatch("grant signer does not match pinned root")
-    grant = WorkspaceAuthorityClient(environment).read_grant(issue)
-    if grant.repository != repository or grant.checkpoint != checkpoint or grant.next_action != "dispatch":
+    # Issuer passes the exact grant returned by its atomic dispatch issuance.
+    # The CLI independently reads the same authority when invoked out of process.
+    if grant is None:
+        grant = WorkspaceAuthorityClient(environment).read_grant(issue)
+    if (
+        grant.issue != issue
+        or grant.repository != repository
+        or grant.checkpoint != checkpoint
+        or grant.next_action != "dispatch"
+    ):
         raise WorkspaceAuthorityMismatch("registry grant not eligible for publication")
     if datetime.fromisoformat(grant.lease_expiry) <= datetime.now(UTC):
         raise WorkspaceAuthorityMismatch("registry lease expired")

@@ -143,3 +143,23 @@ created no nonce-bearing marker, and the canonical
 shell attempt is denied for the pinned local image. It does **not** prove
 production issuer admission, all tool-capability restrictions, network policy,
 or GitHub publication readiness; those remain separate gates.
+
+### Exact-run Mac publication adapter (staged, not a live cutover)
+
+The existing issuer's `prepare_authorization` now calls the Mac publisher **only
+when** its trusted process environment supplies `HUNTER_WORKSPACE_GITHUB_RUN_ID`
+after durable dispatch and successful atomic grant issuance. It passes the exact
+issued grant, not a reconstructed candidate. `HUNTER_WORKSPACE_GITHUB_RUN_ATTEMPT`
+must be 1. The publisher requires a private `HUNTER_WORKSPACE_GRANT_SIGNING_KEY`
+matching the repository-pinned public root, a scoped
+`HUNTER_WORKSPACE_GITHUB_COMMENT_TOKEN`, and the existing authority checkpoint.
+It verifies the live GitHub workflow run before posting the signed, non-secret
+receipt. Missing or inconsistent configuration refuses publication.
+
+**Operational blocker:** no trusted automatic source of the exact GitHub run ID
+has yet been connected to the Mac process; no production signing key/root or
+comment credential is provisioned. Do **not** set a static run ID in the issuer
+service or activate a live trigger. This opt-in adapter is not a proven
+GitHub-to-Mac pull transport. Positive/negative hosted canaries, durable
+run-to-authorization correlation and owner-approved trust-root provisioning
+remain mandatory before closing Issue #575.

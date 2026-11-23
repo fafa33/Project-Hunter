@@ -360,7 +360,7 @@ def prepare_authorization(
                 "HUNTER_WORKSPACE_LEASE_TOKEN",
             )
         ):
-            provision_verified_dispatch(
+            grant = provision_verified_dispatch(
                 target=target,
                 repository=services.configuration.repository,
                 workspace_root=services.configuration.repository_checkout,
@@ -368,6 +368,18 @@ def prepare_authorization(
                 issuer_instance=services.configuration.instance_id,
                 now=services.configuration.clock.now(),
             )
+            # Opt-in exact-run transport: never guess a run from the Issue timeline.
+            # Missing signing/transport configuration fails closed when enabled.
+            if os.environ.get("HUNTER_WORKSPACE_GITHUB_RUN_ID"):
+                from hunter_workspace_grant_publish import publish
+
+                publish(
+                    issue=authorization.issue_number,
+                    authorization_id=authorization.authorization_id,
+                    run_id=int(os.environ["HUNTER_WORKSPACE_GITHUB_RUN_ID"]),
+                    attempt=int(os.environ.get("HUNTER_WORKSPACE_GITHUB_RUN_ATTEMPT", "1")),
+                    grant=grant,
+                )
     except BaseException as error:
         _record_failure(services, authorization, error)
         raise
