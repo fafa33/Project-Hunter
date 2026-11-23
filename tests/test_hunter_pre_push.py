@@ -397,7 +397,7 @@ def test_push_safety_gates_are_bounded_and_black_matches_trusted_contract(monkey
     assert hunter_pre_push._run_push_safety_lane() == 0
     assert observed["timeout"] == 180
     black = dict(observed["gates"])["Black"]
-    assert black == ("black", "--check", "--diff", "--workers", "1", ".")
+    assert black == ("black", "--check", "--diff", "--workers", "4", ".")
     assert dict(hunter_pr_preflight.PUSH_SAFETY_GATES)["Black"] == ("black", "--check", "--diff", ".")
 
 

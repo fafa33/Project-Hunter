@@ -169,7 +169,7 @@ def _run_push_safety_lane() -> int:
     # on an unchanged file. Preserve the full repository check and trusted
     # quality contract; serialize only this local pre-push Black invocation.
     push_gates = tuple(
-        (name, (*command[:-1], "--workers", "1", command[-1])) if name == "Black" else (name, command)
+        (name, (*command[:-1], "--workers", "4", command[-1])) if name == "Black" else (name, command)
         for name, command in preflight.PUSH_SAFETY_GATES
     )
     exit_code, _report = preflight.run_aggregate_gates(push_gates, timeout_seconds=180)
