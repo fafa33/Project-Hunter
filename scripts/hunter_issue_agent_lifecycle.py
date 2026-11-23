@@ -2032,6 +2032,36 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
 
         key = next(iter(model_secrets.values()))
         probe = lambda: probe_provider(KILO_PROBE_URL, api_key=key)  # noqa: E731 - trusted step, no model input
+    # Issue #575: optional hosted receipt admission is fail-closed and
+    # ledger-bound; this does not replace the canonical authorization ledger.
+    grant_file = os.environ.get("HUNTER_WORKSPACE_GRANT_FILE", "")
+    grant_key = os.environ.get("HUNTER_WORKSPACE_GRANT_VERIFYING_KEY", "")
+    grant_checkpoint = os.environ.get("HUNTER_WORKSPACE_CHECKPOINT", "")
+    if any((grant_file, grant_key, grant_checkpoint)):
+        if not all((grant_file, grant_key, grant_checkpoint)):
+            raise LifecycleRefused("WORKSPACE_AUTHORITY_MISMATCH", "incomplete hosted grant admission")
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+        from hunter.automation.workspace_grant_handoff import verify_grant_handoff
+
+        try:
+            bound = roles._authorization(access, arguments.issue, arguments.authorization_id)
+            authorized = bound.evidence[state.AUTHORIZED]
+            public = Ed25519PublicKey.from_public_bytes(bytes.fromhex(grant_key))
+            verify_grant_handoff(
+                Path(grant_file).read_bytes(),
+                verification_key=public,
+                authorization_id=arguments.authorization_id,
+                run_id=run_id,
+                run_attempt=attempt,
+                repository=configuration.repository,
+                issue=arguments.issue,
+                branch=authorized["execution_branch"],
+                base_sha=authorized["base_sha"],
+                checkpoint=grant_checkpoint,
+            )
+        except (OSError, ValueError, KeyError, TypeError):
+            raise LifecycleRefused("WORKSPACE_AUTHORITY_MISMATCH", "hosted grant admission refused") from None
     outcome = roles.run_executor(
         issue=arguments.issue,
         authorization_id=arguments.authorization_id,
