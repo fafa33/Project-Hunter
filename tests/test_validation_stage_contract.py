@@ -135,7 +135,12 @@ def test_pre_push_declares_and_runs_no_full_repository_suite(monkeypatch: pytest
     monkeypatch.setattr(preflight, "run_aggregate_gates", record)
 
     assert hunter_pre_push._run_push_safety_lane() == 0
-    assert executed == [tuple(gate) for gate in preflight.PUSH_SAFETY_GATES]
+    expected = [
+        (name, (*command[:-1], "--workers", "4", command[-1])) if name == "Black" else (name, command)
+        for name, command in preflight.PUSH_SAFETY_GATES
+    ]
+    assert executed == expected
+    assert dict(preflight.PUSH_SAFETY_GATES)["Black"] == ("black", "--check", "--diff", ".")
     assert preflight.PYTEST_GATE not in executed
 
 
