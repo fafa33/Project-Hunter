@@ -25,5 +25,6 @@
     "verification_key_sha256": "875c7b8f081100bb1c336f1310f56d5d725e4097cac650a700e67d515dd84fea",
     "genesis_rule_sha256": "41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a"
   },
-  "fallback_handoff_recipient": "611764d51f59e6ae150e39cd5c35b61bcedaf51475376cc2f30d0f566e09e474"
+  "fallback_handoff_recipient": "611764d51f59e6ae150e39cd5c35b61bcedaf51475376cc2f30d0f566e09e474",
+  "workspace_grant_verifying_key": "afc6f2e71b40fb6c4768c6d61f6be0b0f995a19bfd3de16c163eca4187243efe"
 }
