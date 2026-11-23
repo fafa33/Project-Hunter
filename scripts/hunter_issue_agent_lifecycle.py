@@ -2035,22 +2035,19 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
     # Issue #575: optional hosted receipt admission is fail-closed and
     # ledger-bound; this does not replace the canonical authorization ledger.
     grant_file = os.environ.get("HUNTER_WORKSPACE_GRANT_FILE", "")
-    grant_key = os.environ.get("HUNTER_WORKSPACE_GRANT_VERIFYING_KEY", "")
     grant_checkpoint = os.environ.get("HUNTER_WORKSPACE_CHECKPOINT", "")
-    if any((grant_file, grant_key, grant_checkpoint)):
-        if not all((grant_file, grant_key, grant_checkpoint)):
+    if any((grant_file, grant_checkpoint, configuration.workspace_grant_verifying_key)):
+        if not all((grant_file, grant_checkpoint, configuration.workspace_grant_verifying_key)):
             raise LifecycleRefused("WORKSPACE_AUTHORITY_MISMATCH", "incomplete hosted grant admission")
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
         from hunter.automation.workspace_grant_handoff import verify_grant_handoff
 
         try:
             bound = roles._authorization(access, arguments.issue, arguments.authorization_id)
             authorized = bound.evidence[state.AUTHORIZED]
-            public = Ed25519PublicKey.from_public_bytes(bytes.fromhex(grant_key))
             verify_grant_handoff(
                 Path(grant_file).read_bytes(),
-                verification_key=public,
+                verification_key=configuration.workspace_grant_verifying_key,
                 authorization_id=arguments.authorization_id,
                 run_id=run_id,
                 run_attempt=attempt,
