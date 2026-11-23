@@ -165,7 +165,14 @@ def _run_push_safety_lane() -> int:
     are reported together in seconds instead of behind sequential restarts.
     The full repository test suite is deliberately not among them.
     """
-    exit_code, _report = preflight.run_aggregate_gates(preflight.PUSH_SAFETY_GATES, timeout_seconds=180)
+    # The Mac push hook has shown nondeterministic Black multiprocessing results
+    # on an unchanged file. Preserve the full repository check and trusted
+    # quality contract; serialize only this local pre-push Black invocation.
+    push_gates = tuple(
+        (name, (*command[:-1], "--workers", "1", command[-1])) if name == "Black" else (name, command)
+        for name, command in preflight.PUSH_SAFETY_GATES
+    )
+    exit_code, _report = preflight.run_aggregate_gates(push_gates, timeout_seconds=180)
     return exit_code
 
 
