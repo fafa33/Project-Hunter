@@ -122,10 +122,16 @@ class CandidateDiscoveryEngine:
             )
             self.repository.save_run(run)
             return run
+        next_cursor: int | None = None
         try:
-            raw_candidates = self.providers[provider].discover(
-                limit=limit or self.config.provider(provider).limit or 250,
-            )
+            budget = limit or self.config.provider(provider).limit or 250
+            source = self.providers[provider]
+            if isinstance(source, (CoinGeckoDiscoveryProvider, GeckoTerminalDiscoveryProvider)) and limit is None:
+                raw_candidates, next_cursor = source.discover_batch(
+                    limit=budget, cursor=self.repository.discovery_page_cursor(provider)
+                )
+            else:
+                raw_candidates = source.discover(limit=budget)
         except ProviderUnavailableError as exc:
             run = DiscoveryRun(
                 run_id=identity("candidate-discovery-run", {"provider": provider, "started_at": started_at}),
@@ -154,7 +160,10 @@ class CandidateDiscoveryEngine:
             message=f"synced {len(candidates)} candidates",
         )
         self.repository.save_run(run)
-        self.repository.save_checkpoint(provider, str(len(candidates)), run.status)
+        if next_cursor is not None:
+            self.repository.save_checkpoint(provider, f"page:{next_cursor}", run.status)
+        elif not isinstance(self.providers[provider], (CoinGeckoDiscoveryProvider, GeckoTerminalDiscoveryProvider)):
+            self.repository.save_checkpoint(provider, str(len(candidates)), run.status)
         return run
 
     def screen_candidates(self, *, limit: int = 1000) -> tuple[CandidateScreeningResult, ...]:

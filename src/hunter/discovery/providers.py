@@ -49,21 +49,26 @@ class CoinGeckoDiscoveryProvider:
     sleeper: Callable[[float], None] = time.sleep
 
     def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
+        return self.discover_batch(limit=limit, cursor=0)[0][:limit]
+
+    def discover_batch(self, *, limit: int, cursor: int) -> tuple[tuple[DiscoveredCandidate, ...], int]:
         rows: list[DiscoveredCandidate] = []
         pages = max(1, (max(1, limit) + self.per_page - 1) // self.per_page)
-        for page in range(1, pages + 1):
+        for page in range(cursor + 1, cursor + pages + 1):
             payload = self._get(
                 "/coins/markets",
                 {
                     "vs_currency": "usd",
                     "order": "market_cap_desc",
-                    "per_page": min(self.per_page, max(1, limit)),
+                    "per_page": self.per_page,
                     "page": page,
                     "sparkline": "false",
                 },
             )
             if not isinstance(payload, list):
                 raise ProviderUnavailableError("CoinGecko discovery response must be a list")
+            if not payload:
+                return tuple(rows), 0
             for item in payload:
                 if not isinstance(item, dict):
                     continue
@@ -87,9 +92,9 @@ class CoinGeckoDiscoveryProvider:
                         },
                     )
                 )
-                if len(rows) >= limit:
-                    return tuple(rows)
-        return tuple(rows)
+            if len(payload) < self.per_page:
+                return tuple(rows), 0
+        return tuple(rows), cursor + pages
 
     def _get(self, path: str, params: dict[str, object]) -> object:
         query = urllib.parse.urlencode({key: value for key, value in params.items() if value is not None})
@@ -172,9 +177,37 @@ class GeckoTerminalDiscoveryProvider:
     sleeper: Callable[[float], None] = time.sleep
 
     def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
-        payload = self._get("/networks/trending_pools", {"include": "base_token,quote_token", "page": 1})
+        return self._pool_page("/networks/trending_pools", 1)[:limit]
+
+    def discover_batch(self, *, limit: int, cursor: int) -> tuple[tuple[DiscoveredCandidate, ...], int]:
+        # Rotate across the provider's network catalogue, not only trending pools.
+        catalogue_page, network_index, pool_page = cursor // 1000000 + 1, (cursor // 1000) % 1000, cursor % 1000 + 1
+        catalogue = self._get("/networks", {"page": catalogue_page})
+        networks = catalogue.get("data") if isinstance(catalogue, dict) else None
+        if not isinstance(networks, list):
+            raise ProviderUnavailableError("GeckoTerminal network catalogue unavailable")
+        if not networks:
+            return (), 0
+        if network_index >= len(networks):
+            return (), catalogue_page * 1000000
+        network = networks[network_index]
+        network_id = network.get("id") if isinstance(network, dict) else None
+        if not isinstance(network_id, str) or not network_id:
+            raise ProviderUnavailableError("GeckoTerminal network identity unavailable")
+        path = f"/networks/{urllib.parse.quote(network_id, safe='')}/pools"
+        rows = self._pool_page(path, pool_page)
+        # Public endpoint pagination is bounded; do not claim exhaustive coverage.
+        next_cursor = (
+            (catalogue_page - 1) * 1000000 + (network_index + 1) * 1000 if not rows or pool_page >= 10 else cursor + 1
+        )
+        return rows, next_cursor
+
+    def _pool_page(self, path: str, page: int) -> tuple[DiscoveredCandidate, ...]:
+        payload = self._get(path, {"include": "base_token,quote_token", "page": page})
         if not isinstance(payload, dict):
             raise ProviderUnavailableError("GeckoTerminal discovery response must be an object")
+        if payload.get("data") == [] and not payload.get("included"):
+            return ()
         included = payload.get("included")
         if not isinstance(included, list):
             raise ProviderUnavailableError("GeckoTerminal discovery response missing included tokens")
@@ -222,8 +255,6 @@ class GeckoTerminalDiscoveryProvider:
                     },
                 )
             )
-            if len(rows) >= limit:
-                return tuple(rows)
         return tuple(rows)
 
     def _get(self, path: str, params: dict[str, object]) -> object:

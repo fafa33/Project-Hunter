@@ -545,6 +545,12 @@ class CandidateRegistryRepository:
             ).fetchall()
             return tuple(_queue_entry_from_row(row) for row in rows)
 
+    def discovery_page_cursor(self, provider: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT cursor FROM checkpoints WHERE provider = ?", (provider,)).fetchone()
+        value = str(row["cursor"]) if row else ""
+        return int(value[5:]) if value.startswith("page:") and value[5:].isdigit() else 0
+
     def save_checkpoint(self, provider: str, cursor: str, status: str) -> None:
         with self._connect() as conn:
             conn.execute(

@@ -812,3 +812,30 @@ def test_gecko_fallback_and_contract_bound_link_corroboration(monkeypatch) -> No
     )["verified_official_links"] == ("https://example.org",)
     payloads["/api/v3/coins/solana/contract/AbC"] = {"platforms": {"solana": "abc"}}
     assert not provider._corroborated_links("solana", "AbC", ("https://example.org",))
+
+
+def test_market_scan_resumes_persisted_page_and_wraps(tmp_path, monkeypatch) -> None:
+    from hunter.discovery.providers import CoinGeckoDiscoveryProvider
+
+    pages = []
+
+    def fetch(self, path, params):
+        page = params["page"]
+        pages.append(page)
+        return [{"id": f"asset-{page}-{i}", "name": f"Asset {page}-{i}"} for i in range(2)] if page < 3 else []
+
+    monkeypatch.setattr(CoinGeckoDiscoveryProvider, "_get", fetch)
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(providers={})
+    provider = CoinGeckoDiscoveryProvider(per_page=2)
+    # One bounded page per normal cycle.
+    from unittest.mock import patch
+
+    with patch.object(DiscoveryConfig, "provider") as configured:
+        configured.return_value.limit = 2
+        for _ in range(4):
+            engine = CandidateDiscoveryEngine(repository, config, providers={"coingecko": provider})
+            engine.sync(provider="coingecko")
+    assert pages == [1, 2, 3, 1]
+    assert repository.stats().total_candidates == 4
+    assert repository.discovery_page_cursor("coingecko") == 1
