@@ -178,3 +178,41 @@ def test_interprocess_cas_only_one_writer_wins(tmp_path: Path) -> None:
     assert results.count("success") == 1
     assert results.count("stale") == 7
     assert WorkspaceRegistry(path, authority_key=key).read()["revision"] == 2
+
+
+def test_publisher_consumes_same_authenticated_grant(tmp_path: Path) -> None:
+    g, token = grant(tmp_path)
+    registry = WorkspaceRegistry(tmp_path / "authority.json", authority_key=b"a" * 32)
+    registry.write_cas(expected_revision=None, grants={"575": g})
+    assert (
+        registry.admit_publication(
+            issue=g.issue,
+            repository=g.repository,
+            branch=g.branch,
+            base_sha=g.base_sha,
+            checkpoint=g.checkpoint,
+            lease_token=token,
+        )
+        == g
+    )
+    for changed in ({"base_sha": "f" * 40}, {"branch": "foreign"}, {"checkpoint": "stale"}):
+        kwargs = dict(
+            issue=g.issue,
+            repository=g.repository,
+            branch=g.branch,
+            base_sha=g.base_sha,
+            checkpoint=g.checkpoint,
+            lease_token=token,
+        )
+        kwargs.update(changed)
+        with pytest.raises(WorkspaceAuthorityMismatch, match="publication lineage differs"):
+            registry.admit_publication(**kwargs)
+    with pytest.raises(WorkspaceAuthorityMismatch, match="publication lease token"):
+        registry.admit_publication(
+            issue=g.issue,
+            repository=g.repository,
+            branch=g.branch,
+            base_sha=g.base_sha,
+            checkpoint=g.checkpoint,
+            lease_token="wrong",
+        )

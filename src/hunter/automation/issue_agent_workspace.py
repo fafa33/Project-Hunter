@@ -41,6 +41,7 @@ from hunter.automation.issue_agent_execution import (
     issue_agent_execution_branch,
 )
 from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceRegistry
+from hunter.automation.workspace_authority_client import WorkspaceAuthorityClient
 
 _REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _GIT_TIMEOUT_SECONDS = 600
@@ -92,11 +93,13 @@ def materialize_workspace(workspace_root: Path, target: IssueAgentExecutionTarge
     root = workspace_root.resolve()
     root.mkdir(parents=True, exist_ok=True)
     workspace = workspace_path(root, target)
-    if workspace.exists():
-        # A leftover from an interrupted process. The ledger guarantees this
-        # authorization never executed to completion here, so it is disposable.
-        shutil.rmtree(workspace)
-    workspace.mkdir()
+    # Issue #575: a valid grant is not authorization to destroy an existing
+    # workspace. A crashed process may leave uncommitted work or a lease whose
+    # recovery has not been adjudicated. Refuse instead of silently deleting.
+    try:
+        workspace.mkdir()
+    except FileExistsError:
+        raise WorkspaceAuthorityMismatch("existing workspace requires reviewed recovery") from None
     try:
         return _prepare_workspace(workspace, target, remote_url=remote_url)
     except BaseException:
@@ -186,13 +189,19 @@ class IssueAgentWorkspaceRuntime:
         key_hex = self._environ.get("HUNTER_WORKSPACE_AUTHORITY_KEY_HEX", "")
         checkpoint = self._environ.get("HUNTER_WORKSPACE_CHECKPOINT", "")
         lease_token = self._environ.get("HUNTER_WORKSPACE_LEASE_TOKEN", "")
-        if not all((registry_path, key_hex, checkpoint, lease_token)):
-            raise WorkspaceAuthorityMismatch("trusted workspace admission configuration required")
-        try:
-            key = bytes.fromhex(key_hex)
-        except ValueError:
-            raise WorkspaceAuthorityMismatch("invalid trusted workspace key") from None
-        WorkspaceRegistry(Path(registry_path), authority_key=key).admit(
+        if self._environ.get("HUNTER_WORKSPACE_API_URL"):
+            if registry_path or key_hex or not all((checkpoint, lease_token)):
+                raise WorkspaceAuthorityMismatch("conflicting or incomplete workspace authority")
+            registry = WorkspaceAuthorityClient(self._environ)
+        else:
+            if not all((registry_path, key_hex, checkpoint, lease_token)):
+                raise WorkspaceAuthorityMismatch("trusted workspace admission configuration required")
+            try:
+                key = bytes.fromhex(key_hex)
+            except ValueError:
+                raise WorkspaceAuthorityMismatch("invalid trusted workspace key") from None
+            registry = WorkspaceRegistry(Path(registry_path), authority_key=key)
+        admitted = registry.admit(
             issue=target.issue_number,
             repository=self._repository,
             workspace=workspace_path(self._root.resolve(), target),
@@ -202,6 +211,10 @@ class IssueAgentWorkspaceRuntime:
             checkpoint=checkpoint,
             lease_token=lease_token,
         )
+        # The registry is issue-keyed, but each Issue may have successive
+        # authorizations. Never let an earlier grant admit a later execution.
+        if admitted.task_scope_digest != target.authorization_id.partition(":")[2]:
+            raise WorkspaceAuthorityMismatch("authorization identity differs")
         workspace = materialize_workspace(self._root, target, remote_url=self._remote_url)
         try:
             runtime = self._runtime_factory(

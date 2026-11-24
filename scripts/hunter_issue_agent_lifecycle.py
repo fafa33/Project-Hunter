@@ -1853,6 +1853,50 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
     (out / "handoff.sealed").write_bytes(sealed)
     (out / "prepared.json").write_text(prepared.to_json(), encoding="utf-8")
     (out / "recorded_at").write_text(context.recorded_at, encoding="utf-8")
+    # Smallest secure bridge: publish a K_AUTH-signed dispatch request as a
+    # GitHub message-carrier. Mac worker verifies K_AUTH signature with repo-
+    # pinned authorization key; Mac grant signing key stays on Mac only.
+    dispatch_path = out / "dispatch.comment"
+    dispatch_path.unlink(missing_ok=True)
+    checkpoint = os.environ.get("HUNTER_WORKSPACE_CHECKPOINT", "")
+    auth_key_hex = os.environ.get(trigger.SIGNING_KEY_ENV, "")
+    if not checkpoint:
+        raise LifecycleRefused(
+            "MISSING_CONFIGURATION",
+            "HUNTER_WORKSPACE_CHECKPOINT is required for workspace grant dispatch; "
+            "configure the canonical trusted checkpoint in the authorize environment",
+        )
+    if not auth_key_hex:
+        raise LifecycleRefused(
+            "MISSING_CONFIGURATION",
+            f"{trigger.SIGNING_KEY_ENV} is required to sign the workspace grant dispatch",
+        )
+
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    from hunter.automation.issue_agent_execution import SignedIssueAgentAuthorization, derive_execution_target
+    from hunter.automation.workspace_grant_dispatch import WorkspaceGrantDispatchRequest, sign_dispatch_request
+    from hunter.automation.workspace_grant_dispatch import comment_body as dispatch_body
+
+    signed_auth = SignedIssueAgentAuthorization.from_json(document)
+    target = derive_execution_target(signed_auth)
+    req = WorkspaceGrantDispatchRequest(
+        repository=configuration.repository,
+        issue=target.issue_number,
+        authorization_id=target.authorization_id,
+        ledger_identity=state.ledger_ref(target.issue_number),
+        run_id=context.run_id,
+        run_attempt=context.run_attempt,
+        workflow_path=context.workflow_path,
+        control_sha=context.control_sha,
+        base_sha=target.base_sha,
+        authorized_branch=target.branch,
+        checkpoint=checkpoint,
+    )
+    dispatch_doc = sign_dispatch_request(
+        req, signing_key=Ed25519PrivateKey.from_private_bytes(bytes.fromhex(auth_key_hex))
+    )
+    dispatch_path.write_text(dispatch_body(dispatch_doc), encoding="utf-8")
     _output(
         authorization_id=prepared.authorization_id,
         issue=prepared.issue_number,
@@ -1860,6 +1904,7 @@ def cmd_authorize_prepare(configuration: control.Configuration, arguments: argpa
         fallback_handoff_artifact=(
             state.fallback_handoff_artifact_name(prepared.authorization_id) if fallback_path.exists() else ""
         ),
+        dispatch_comment=str(dispatch_path) if dispatch_path.exists() else "",
     )
     return 0
 
@@ -1903,6 +1948,28 @@ def cmd_authorize_commit(configuration: control.Configuration, arguments: argpar
         context=_authorize_context(),
         state_store=_store(configuration, authenticated=True),
         source_handling_store=_store(configuration, authenticated=True),
+    )
+    dispatch_comment = out / "dispatch.comment"
+    if not dispatch_comment.exists():
+        raise LifecycleRefused(
+            "MISSING_CONFIGURATION",
+            "workspace grant dispatch comment missing; authorize-prepare must produce it before commit",
+        )
+    from hunter.automation.workspace_grant_dispatch import _PREFIX
+    from hunter.automation.workspace_grant_transport import publish_signed_dispatch_comment
+
+    body = dispatch_comment.read_text(encoding="utf-8")
+    if not body.startswith(_PREFIX):
+        raise LifecycleRefused("TRANSPORT_INTEGRITY_FAILED", "dispatch comment malformed")
+    # Rewrap as raw document for publisher helper by decoding the comment body.
+    import base64
+
+    document = base64.b64decode(body[len(_PREFIX) :], validate=True)
+    publish_signed_dispatch_comment(
+        repository=configuration.repository,
+        issue=prepared.issue_number,
+        token=os.environ.get("GITHUB_TOKEN", ""),
+        document=document,
     )
     print(f"AUTHORIZED {prepared.authorization_id} at {head}")
     return 0
@@ -2020,9 +2087,10 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
     from hunter.automation.issue_agent_kilo_container import KiloContainerIsolation
     from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
 
-    run_id, attempt, _ = _run_context()
+    run_id, attempt, control_sha = _run_context()
     # Issue #772: consume the job-scoped read credential inside this trusted process,
     # before constructing or launching any untrusted model/container process.
+    grant_transport_token = os.environ.get(PROVENANCE_TOKEN_ENV, "").strip()
     access = _ledger_access(configuration)
     os.environ["HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY"] = configuration.prompt_verifying_key
     model_secrets = _executor_model_secrets(tuple(arguments.model_argv), arguments.model_key_name)
@@ -2032,6 +2100,65 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
 
         key = next(iter(model_secrets.values()))
         probe = lambda: probe_provider(KILO_PROBE_URL, api_key=key)  # noqa: E731 - trusted step, no model input
+    # Issue #575: optional hosted receipt admission is fail-closed and
+    # ledger-bound; this does not replace the canonical authorization ledger.
+    grant_file = os.environ.get("HUNTER_WORKSPACE_GRANT_FILE", "")
+    grant_checkpoint = os.environ.get("HUNTER_WORKSPACE_CHECKPOINT", "")
+    if any((grant_file, grant_checkpoint, configuration.workspace_grant_verifying_key)):
+        if configuration.workspace_grant_verifying_key is None:
+            raise LifecycleRefused("WORKSPACE_AUTHORITY_MISMATCH", "incomplete hosted grant admission")
+
+        from hunter.automation.workspace_grant_handoff import verify_grant_handoff
+        from hunter.automation.workspace_grant_transport import fetch_issue_grant_comments, select_verified_grant
+
+        try:
+            bound = roles._authorization(access, arguments.issue, arguments.authorization_id)
+            authorized = bound.evidence[state.AUTHORIZED]
+            if not grant_checkpoint:
+                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+                from hunter.automation.workspace_grant_dispatch import select_dispatch_checkpoint
+
+                comments = fetch_issue_grant_comments(
+                    repository=configuration.repository, issue=arguments.issue, token=grant_transport_token
+                )
+                grant_checkpoint = select_dispatch_checkpoint(
+                    comments,
+                    verification_key=Ed25519PublicKey.from_public_bytes(
+                        bytes.fromhex(configuration.authorization_verifying_key)
+                    ),
+                    repository=configuration.repository,
+                    issue=arguments.issue,
+                    authorization_id=arguments.authorization_id,
+                    run_id=run_id,
+                    run_attempt=attempt,
+                    control_sha=control_sha,
+                    base_sha=authorized["base_sha"],
+                    authorized_branch=authorized["execution_branch"],
+                    ledger_identity=state.ledger_ref(arguments.issue),
+                )
+            binding = dict(
+                verification_key=configuration.workspace_grant_verifying_key,
+                authorization_id=arguments.authorization_id,
+                run_id=run_id,
+                run_attempt=attempt,
+                repository=configuration.repository,
+                issue=arguments.issue,
+                branch=authorized["execution_branch"],
+                base_sha=authorized["base_sha"],
+                checkpoint=grant_checkpoint,
+            )
+            if grant_file:
+                verify_grant_handoff(Path(grant_file).read_bytes(), **binding)
+            else:
+                comments = fetch_issue_grant_comments(
+                    repository=configuration.repository,
+                    issue=arguments.issue,
+                    token=grant_transport_token,
+                )
+                select_verified_grant(comments, **binding)
+        except (OSError, ValueError, KeyError, TypeError):
+            raise LifecycleRefused("WORKSPACE_AUTHORITY_MISMATCH", "hosted grant admission refused") from None
     outcome = roles.run_executor(
         issue=arguments.issue,
         authorization_id=arguments.authorization_id,

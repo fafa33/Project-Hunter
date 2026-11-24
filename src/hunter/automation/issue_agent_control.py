@@ -166,6 +166,7 @@ class Configuration:
     source_handling: SourceHandlingRoot
     #: ADR 0041 F3: the distinct fallback recipient (``X_FB``). Absent → no fallback is ever bound or admitted.
     fallback_handoff_recipient: X25519PublicKey | None = None
+    workspace_grant_verifying_key: Ed25519PublicKey | None = None
 
     @property
     def trust(self) -> state.TrustRoots:
@@ -216,8 +217,13 @@ def load_configuration(checkout: Path) -> Configuration:
         "prompt_verifying_key",
         "source_handling",
     }
-    if set(document) - {"fallback_handoff_recipient"} != expected:
+    if set(document) - {"fallback_handoff_recipient", "workspace_grant_verifying_key"} != expected:
         raise _missing("the trust roots document carries unknown or missing fields")
+    workspace_grant_key = None
+    if "workspace_grant_verifying_key" in document:
+        workspace_grant_key = Ed25519PublicKey.from_public_bytes(
+            _raw_key(document["workspace_grant_verifying_key"], "workspace_grant_verifying_key")
+        )
     fallback_recipient = None
     if "fallback_handoff_recipient" in document:
         raw = _raw_key(document["fallback_handoff_recipient"], "fallback_handoff_recipient")
@@ -267,6 +273,7 @@ def load_configuration(checkout: Path) -> Configuration:
         prompt_verifying_key=document["prompt_verifying_key"],
         source_handling=SourceHandlingRoot(**operator),
         fallback_handoff_recipient=fallback_recipient,
+        workspace_grant_verifying_key=workspace_grant_key,
     )
 
 

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Trusted launcher: all bwrap-style arguments are validated by the adapter.
+set -eu
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PYTHONPATH="$(dirname "$SCRIPT_DIR")/src${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+exec /usr/local/bin/python3 -m hunter.automation.macos_opencode_container_sandbox "$@"

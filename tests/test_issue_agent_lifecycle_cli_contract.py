@@ -227,7 +227,9 @@ def test_the_model_command_reaches_the_executor_unchanged(monkeypatch: pytest.Mo
     key = Ed25519PrivateKey.from_private_bytes(bytes(32)).public_key()
     public_hex = key.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
     monkeypatch.setenv("HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY", "unset")  # restored on teardown; cmd_execute writes it
-    configuration = type("C", (), {"prompt_verifying_key": public_hex, "result_recipient": object()})()
+    configuration = type(
+        "C", (), {"prompt_verifying_key": public_hex, "workspace_grant_verifying_key": "", "result_recipient": object()}
+    )()
     with pytest.raises(RuntimeError, match="model command is captured"):
         lifecycle.cmd_execute(configuration, arguments)  # type: ignore[arg-type]
     assert seen["config"].model_argv == tuple(argv[argv.index("--model-argv") + 1 :])
@@ -278,7 +280,9 @@ def test_execute_advisory_is_visible_without_a_result(
     key = Ed25519PrivateKey.from_private_bytes(bytes(32)).public_key()
     public_hex = key.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
     monkeypatch.setenv("HUNTER_PROMPT_AUTOMATION_VERIFYING_KEY", "unset")
-    config = type("C", (), {"prompt_verifying_key": public_hex, "result_recipient": object()})()
+    config = type(
+        "C", (), {"prompt_verifying_key": public_hex, "workspace_grant_verifying_key": "", "result_recipient": object()}
+    )()
     args = lifecycle.parse_arguments(_execute_argv())
     args.authorization_id = "hunter-issue-agent-authorization:" + "a" * 64
     args.out = str(tmp_path / "result.sealed")

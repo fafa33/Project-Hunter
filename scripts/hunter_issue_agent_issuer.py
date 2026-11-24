@@ -81,6 +81,9 @@ from hunter.automation.issue_agent_execution import (
 )
 from hunter.automation.issue_agent_workspace import IssueAgentWorkspaceRuntime
 from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
+from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceRegistry
+from hunter.automation.workspace_authority_client import WorkspaceAuthorityClient
+from hunter.automation.workspace_provisioning import provision_verified_dispatch
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService
 from hunter.evidence_intelligence.pre_model import PreModelInvariantError
@@ -343,6 +346,49 @@ def prepare_authorization(
             target=target,
             dispatched_at=services.configuration.clock.now(),
         )
+        # Only the verified, durably dispatched authorization may mint a grant.
+        # A partial trusted issuer configuration fails closed. This is an
+        # incremental integration: deployment must provision the shared secret
+        # and durable checkpoint before enabling this path in production.
+        if any(
+            os.environ.get(name)
+            for name in (
+                "HUNTER_WORKSPACE_API_URL",
+                "HUNTER_WORKSPACE_REGISTRY_PATH",
+                "HUNTER_WORKSPACE_AUTHORITY_KEY_HEX",
+                "HUNTER_WORKSPACE_CHECKPOINT",
+                "HUNTER_WORKSPACE_LEASE_TOKEN",
+            )
+        ):
+            grant = provision_verified_dispatch(
+                target=target,
+                repository=services.configuration.repository,
+                workspace_root=services.configuration.repository_checkout,
+                trusted_environment=os.environ,
+                issuer_instance=services.configuration.instance_id,
+                now=services.configuration.clock.now(),
+            )
+            # Exact-run transport: use GitHub-provided run identity only; never static caller-supplied env.
+            # Publisher verifies run identity via GitHub API and repo-pinned roots before publication.
+            run_id_raw = os.environ.get("GITHUB_RUN_ID", "")
+            if run_id_raw:
+                from hunter_workspace_grant_publish import publish
+
+                control_sha = os.environ.get("HUNTER_WORKSPACE_CONTROL_SHA") or os.environ.get("GITHUB_SHA", "")
+                from hunter.automation.issue_agent_state import ledger_ref
+
+                publish(
+                    issue=authorization.issue_number,
+                    authorization_id=authorization.authorization_id,
+                    run_id=int(run_id_raw),
+                    attempt=int(os.environ.get("GITHUB_RUN_ATTEMPT", "1")),
+                    grant=grant,
+                    control_sha=control_sha or None,
+                    base_sha=target.base_sha,
+                    authorized_branch=target.branch,
+                    ledger_identity=ledger_ref(authorization.issue_number),
+                    correlation_store_path=os.environ.get("HUNTER_WORKSPACE_CORRELATION_DB"),
+                )
     except BaseException as error:
         _record_failure(services, authorization, error)
         raise
@@ -483,6 +529,38 @@ def _run_lease_renewer(
                     prepared.authorization,
                     health_at=services.configuration.clock.now(),
                 )
+                registry_path = os.environ.get("HUNTER_WORKSPACE_REGISTRY_PATH", "")
+                api_mode = bool(os.environ.get("HUNTER_WORKSPACE_API_URL"))
+                if registry_path or api_mode:
+                    key_hex = os.environ.get("HUNTER_WORKSPACE_AUTHORITY_KEY_HEX", "")
+                    lease_token = os.environ.get("HUNTER_WORKSPACE_LEASE_TOKEN", "")
+                    try:
+                        if api_mode:
+                            if registry_path or key_hex:
+                                raise WorkspaceAuthorityMismatch("conflicting renewal authorities")
+                            workspace_registry = WorkspaceAuthorityClient(os.environ, writer=True)
+                        else:
+                            key = bytes.fromhex(key_hex)
+                            workspace_registry = WorkspaceRegistry(Path(registry_path), authority_key=key)
+                        workspace_registry.renew_owned_lease(
+                            issue=prepared.target.issue_number,
+                            owner=services.configuration.instance_id,
+                            lease_token=lease_token,
+                            now=services.configuration.clock.now(),
+                        )
+                    except (OSError, ValueError, WorkspaceAuthorityMismatch) as error:
+                        # Filesystem-backed authority writes may raise OSError
+                        # (ENOSPC, EACCES, fsync). Never kill the shared renewer.
+                        # Never silently continue treating a stale workspace
+                        # lease as renewable. The runtime itself also checks
+                        # the exact active grant before any provider launch.
+                        logger.error(
+                            "workspace lease renewal refused for issue %s: %s", prepared.target.issue_number, error
+                        )
+                        # Workspace admission remains fail-closed independently.
+                        # Keep the live provider registered so its execution-ledger
+                        # lease continues to renew and shutdown still joins it.
+                        # An authority outage must not orphan a running worker.
             except IssueAgentExecutionError as error:
                 logger.warning(
                     "execution %s is no longer renewable by this instance: %s",

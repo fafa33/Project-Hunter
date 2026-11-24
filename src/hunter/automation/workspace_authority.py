@@ -159,6 +159,85 @@ class WorkspaceRegistry:
             raise WorkspaceAuthorityMismatch("lease expired")
         return grant
 
+    def admit_publication(
+        self,
+        *,
+        issue: int,
+        repository: str,
+        branch: str,
+        base_sha: str,
+        checkpoint: str,
+        lease_token: str,
+        now: datetime | None = None,
+    ) -> WorkspaceGrant:
+        """Publisher's read-only check against the SAME trusted registry.
+
+        Publication is a distinct operation from execution: the candidate HEAD
+        is produced after validation, so only the authorized base lineage and
+        branch are matched here. Exact candidate HEAD proof stays with the
+        existing canonical publication receipt authority.
+        """
+        registry = self.read()
+        raw = registry["grants"].get(str(issue))
+        if not isinstance(raw, dict):
+            raise WorkspaceAuthorityMismatch("unregistered publication issue")
+        try:
+            grant = WorkspaceGrant(**raw)
+        except TypeError:
+            raise WorkspaceAuthorityMismatch("invalid publication grant") from None
+        grant.validate()
+        if (
+            grant.issue != issue
+            or grant.repository != repository
+            or grant.branch != branch
+            or grant.base_sha != base_sha
+            or grant.checkpoint != checkpoint
+        ):
+            raise WorkspaceAuthorityMismatch("publication lineage differs")
+        if not hmac.compare_digest(grant.lease_token_digest, hashlib.sha256(lease_token.encode()).hexdigest()):
+            raise WorkspaceAuthorityMismatch("publication lease token")
+        instant = now or datetime.now(UTC)
+        if instant.tzinfo is None or datetime.fromisoformat(grant.lease_expiry) <= instant:
+            raise WorkspaceAuthorityMismatch("publication lease expired")
+        return grant
+
+    def issue_exclusive(self, grant: WorkspaceGrant) -> int:
+        """Atomic issuer-only insertion; no read-then-write ownership race."""
+        with self._writer_lock():
+            if self.path.exists():
+                old = self.read()
+                grants = {key: WorkspaceGrant(**value) for key, value in old["grants"].items()}
+                expected_revision = old["revision"]
+            else:
+                grants = {}
+                expected_revision = None
+            if str(grant.issue) in grants:
+                raise WorkspaceAuthorityMismatch("existing issue requires governed lease handoff")
+            grants[str(grant.issue)] = grant
+            return self._write_cas_locked(expected_revision=expected_revision, grants=grants)
+
+    def renew_owned_lease(
+        self, *, issue: int, owner: str, lease_token: str, now: datetime, duration_seconds: int = 1800
+    ) -> int:
+        """Extend only an active matching lease, without changing lineage/fence."""
+        from dataclasses import replace
+        from datetime import timedelta
+
+        if now.tzinfo is None or duration_seconds < 1:
+            raise WorkspaceAuthorityMismatch("invalid lease renewal time")
+        with self._writer_lock():
+            old = self.read()
+            grants = {key: WorkspaceGrant(**value) for key, value in old["grants"].items()}
+            current = grants.get(str(issue))
+            if current is None or current.lease_owner != owner:
+                raise WorkspaceAuthorityMismatch("lease renewal ownership")
+            if not hmac.compare_digest(current.lease_token_digest, hashlib.sha256(lease_token.encode()).hexdigest()):
+                raise WorkspaceAuthorityMismatch("lease renewal token")
+            if datetime.fromisoformat(current.lease_expiry) <= now:
+                raise WorkspaceAuthorityMismatch("expired lease cannot renew")
+            grants[str(issue)] = replace(current, lease_expiry=(now + timedelta(seconds=duration_seconds)).isoformat())
+            return self._write_cas_locked(expected_revision=old["revision"], grants=grants)
+
     def write_cas(self, *, expected_revision: int | None, grants: dict[str, WorkspaceGrant]) -> int:
         """Serialized interprocess CAS; never accepts a self-asserted hash as authority."""
         with self._writer_lock():

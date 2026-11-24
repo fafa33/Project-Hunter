@@ -126,6 +126,7 @@ jobs:
     permissions:
       contents: write
       actions: read
+      issues: write
       pull-requests: read
     outputs:
       issue: ${{ steps.prepare.outputs.issue }}
@@ -163,6 +164,7 @@ jobs:
           HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
           HUNTER_SOURCE_HANDLING_SIGNING_KEY: ${{ secrets.HUNTER_SOURCE_HANDLING_SIGNING_KEY }}
           HUNTER_PROMPT_AUTOMATION_SIGNING_KEY: ${{ secrets.HUNTER_PROMPT_AUTOMATION_SIGNING_KEY }}
+          HUNTER_WORKSPACE_CHECKPOINT: ${{ secrets.HUNTER_WORKSPACE_CHECKPOINT }}
           REMEDIATION_AUTHORIZATION: ${{ inputs.remediation_authorization }}
         run: |
           set -euo pipefail
@@ -196,6 +198,7 @@ jobs:
       - name: Claim on the anchored ledger (AUTHORIZED)
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_AUTHORIZATION_SIGNING_KEY }}
           HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
           HUNTER_SOURCE_HANDLING_SIGNING_KEY: ${{ secrets.HUNTER_SOURCE_HANDLING_SIGNING_KEY }}
           ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}

@@ -96,6 +96,7 @@ class _Harness:
         self.anchored: list[int] = []
         self.tmp = tmp_path
         monkeypatch.setenv(trigger.SIGNING_KEY_ENV, ISSUER_KEY_HEX)
+        monkeypatch.setenv("HUNTER_WORKSPACE_CHECKPOINT", "test-checkpoint-575")
         monkeypatch.setattr(lifecycle, "_run_context", lambda: (100, 1, "c" * 40))
         monkeypatch.setattr(lifecycle, "_export_public_trust", lambda _configuration: None)
         monkeypatch.setattr(lifecycle, "_github", lambda _configuration, **_kw: object())
