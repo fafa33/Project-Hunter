@@ -431,11 +431,71 @@ def test_m3_trusted_publisher_receipt_is_checkout_free_and_job_bound() -> None:
     assert "/jobs?per_page=100&filter=all" in step["run"]
     assert "sha256=" in step["run"]
     assert "run_attempt" in step["run"]
-    # GitHub can rerun a publisher with a prior validation job still present.
-    # Do not mint a fresh-attempt proof by borrowing the older job.
-    assert 'validation_attempt != attempt and result == "success"' in step["run"]
-    assert "trusted validation job did not run in this workflow attempt" in step["run"]
-    # Regression on the actual embedded publisher code, without GitHub writes.
-    # Two validation jobs in one run must select the latest attempt's job;
-    # replayed success from a prior attempt must fail closed.
-    assert 'validation_attempt = max(int(job["run_attempt"]) for job in jobs)' in step["run"]
+    assert 'job.get("run_attempt") == attempt' in step["run"]
+
+
+def test_trusted_publisher_waits_for_exact_attempt_terminal_evidence(monkeypatch) -> None:
+    import io
+    import time
+    import urllib.request
+
+    import pytest
+    import yaml
+
+    workflow = yaml.safe_load(
+        (Path(__file__).parents[1] / ".github/workflows/hunter-trusted-preflight-upgrade.yml").read_text()
+    )
+    script = workflow["jobs"]["publish-proof"]["steps"][0]["run"].split("python - <<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
+    for key, value in {
+        "VALIDATION_RESULT": "success",
+        "RUN_ID": "3760",
+        "RUN_ATTEMPT": "2",
+        "GH_REPO": "fafa33/Project-Hunter",
+        "GITHUB_TOKEN": "test",
+        "HEAD_SHA": HEAD_A,
+        "PR_NUMBER": "376",
+        "RUN_URL": "https://github.com/fafa33/Project-Hunter/actions/runs/3760",
+    }.items():
+        monkeypatch.setenv(key, value)
+    old = {
+        "name": "Trusted Candidate Preflight Validation",
+        "run_id": 3760,
+        "run_attempt": 1,
+        "id": 11,
+        "status": "completed",
+        "conclusion": "success",
+    }
+    current = dict(old, run_attempt=2, id=12, status="in_progress", conclusion=None)
+    done = dict(current, status="completed", conclusion="success")
+    for snapshots, expected in [
+        ([[old], [old, current], [old, done]], True),
+        ([[old]] * 5, False),
+        ([[old, current]] * 5, False),
+        ([[old, dict(done, conclusion="failure")]], False),
+        ([[done, done]], False),
+    ]:
+        reads = iter(snapshots)
+        posts = []
+        sleeps = []
+
+        def fake_open(request, timeout, posts=posts, reads=reads):
+            if request.get_method() == "POST":
+                posts.append(json.loads(request.data))
+                response = io.BytesIO(b"{}")
+                response.status = 201
+                return response
+            jobs = next(reads)
+            return io.BytesIO(json.dumps({"jobs": jobs, "total_count": len(jobs)}).encode())
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_open)
+        monkeypatch.setattr(time, "sleep", sleeps.append)
+        if expected:
+            exec(compile(script, "trusted-publisher", "exec"), {})
+            assert len(posts) == 1
+            assert "attempt=2; validation=2; job=12;" in posts[0]["description"]
+            assert sleeps == [5, 5]
+        else:
+            with pytest.raises(RuntimeError):
+                exec(compile(script, "trusted-publisher", "exec"), {})
+            assert not posts
+            assert len(sleeps) <= 4

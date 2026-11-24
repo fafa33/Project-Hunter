@@ -1209,8 +1209,8 @@
       "source": "Issue #587 / PR #786, hosted workflow run 45363081133 attempt 2: the status publisher emitted attempt=2 with validation_attempt=1 and job_id=138337775808 even though attempt-2 validation job 138355137709 completed successfully. The canonical governance consumer correctly rejected the stale validation identity and kept the PR blocked.",
       "classification": "systemic",
       "guard_boundary": "trusted exact-head proof publisher, before committing any status for a rerun attempt",
-      "guard": "For a successful new workflow attempt, the publisher must find exactly one successful validation job from that same attempt. A proof based on any earlier attempt, including a successful earlier job, fails closed without publishing a fresh success; an exact attempt/job/digest and GitHub-origin receipt are still mandatory. The existing governance consumer must never be weakened to accept mismatched attempt evidence.",
-      "test": "tests/test_pr376_prevention_regressions.py::test_m3_trusted_publisher_receipt_is_checkout_free_and_job_bound; tests/test_pr376_prevention_regressions.py::test_m3_trusted_receipt_binds_job_attempt_and_digest",
+      "guard": "Run 45376425177 attempt 1 reproduced the API visibility race: validation completed at 10:47:18Z but publisher failed three seconds later. Publisher observes at most five snapshots with five-second intervals and five-second request timeouts, requires complete job listing and unique same-attempt terminal evidence, and refuses contradictory terminal outcomes or ambiguous identity. Earlier attempts cannot authorize publication. Governance remains unchanged.",
+      "test": "tests/test_pr376_prevention_regressions.py::test_m3_trusted_publisher_receipt_is_checkout_free_and_job_bound; tests/test_pr376_prevention_regressions.py::test_trusted_publisher_waits_for_exact_attempt_terminal_evidence; tests/test_pr376_prevention_regressions.py::test_m3_trusted_receipt_binds_job_attempt_and_digest",
       "status": "guarded"
     }
   ],

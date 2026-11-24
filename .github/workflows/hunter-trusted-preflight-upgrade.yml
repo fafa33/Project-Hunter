@@ -155,6 +155,7 @@ jobs:
           import hashlib
           import json
           import os
+          import time
           import urllib.request
 
           result = os.environ["VALIDATION_RESULT"]
@@ -170,32 +171,31 @@ jobs:
               "Accept": "application/vnd.github+json",
               "X-GitHub-Api-Version": "2022-11-28",
           }
-          with urllib.request.urlopen(urllib.request.Request(jobs_url, headers=headers), timeout=30) as response:
-              jobs_payload = json.load(response)
-          if not isinstance(jobs_payload.get("jobs"), list) or int(jobs_payload.get("total_count", -1)) > 100:
-              raise RuntimeError("trusted validation job evidence incomplete")
-          jobs = [job for job in jobs_payload["jobs"]
-                  if job.get("name") == "Trusted Candidate Preflight Validation"
-                  and int(job.get("run_attempt") or 0) <= attempt]
-          if not jobs:
-              raise RuntimeError("trusted validation job missing")
-          # Reruns may reuse an older validation job. A new run_attempt is
-          # not evidence that validation was re-executed; bind the receipt to
-          # the latest completed validation job that actually exists.
-          validation_attempt = max(int(job["run_attempt"]) for job in jobs)
-          jobs = [job for job in jobs if int(job["run_attempt"]) == validation_attempt]
-          if len(jobs) != 1 or int(jobs[0].get("run_id") or 0) != run_id:
-              raise RuntimeError("trusted validation job identity is ambiguous")
-          if validation_attempt != attempt and result == "success":
-              # A whole-run rerun without a matching validator must not
-              # republish an earlier job as a fresh exact-attempt proof.
-              raise RuntimeError("trusted validation job did not run in this workflow attempt")
-          job = jobs[0]
-          conclusion = str(job.get("conclusion") or "unknown")
-          if result == "success" and (job.get("status") != "completed" or conclusion != "success"):
-              raise RuntimeError("trusted job evidence contradicts successful result")
-          if result != "success" and conclusion == "success":
-              raise RuntimeError("trusted job evidence contradicts failed result")
+          # The jobs API can lag behind needs.validate-candidate.result.
+          # Wait only for exact-attempt terminal evidence; never borrow old jobs.
+          for observation in range(5):
+              with urllib.request.urlopen(urllib.request.Request(jobs_url, headers=headers), timeout=5) as response:
+                  jobs_payload = json.load(response)
+              records = jobs_payload.get("jobs")
+              count = jobs_payload.get("total_count")
+              if not isinstance(records, list) or type(count) is not int or count != len(records) or count > 100:
+                  raise RuntimeError("trusted validation job evidence incomplete")
+              jobs = [job for job in records
+                      if job.get("name") == "Trusted Candidate Preflight Validation"
+                      and job.get("run_attempt") == attempt]
+              if len(jobs) > 1 or any(job.get("run_id") != run_id for job in jobs):
+                  raise RuntimeError("trusted validation job identity is ambiguous")
+              if jobs and jobs[0].get("status") == "completed" and jobs[0].get("conclusion"):
+                  job = jobs[0]
+                  conclusion = job["conclusion"]
+                  if (result == "success") != (conclusion == "success"):
+                      raise RuntimeError("trusted job evidence contradicts validation result")
+                  validation_attempt = attempt
+                  break
+              if observation < 4:
+                  time.sleep(5)
+          else:
+              raise RuntimeError("trusted exact-attempt terminal validation evidence unavailable")
           outcome = "timeout" if conclusion == "timed_out" else state
           claims = {
               "schema": "hunter.trusted-candidate-outcome/1",
