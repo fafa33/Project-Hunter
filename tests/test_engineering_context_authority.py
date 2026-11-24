@@ -479,3 +479,13 @@ def test_issue_496_final_compaction_keeps_exact_file_id_and_boundary(tmp_path: P
     assert "elided_family_ids" not in first
     assert any("title" not in item for item in rendered)
     assert len(json.dumps(rendered, sort_keys=True, separators=(",", ":")).encode()) <= 4_500
+
+
+def test_trusted_publisher_learning_is_selected_for_exact_workflow() -> None:
+    context = EngineeringContextAuthority().compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        scope=_scope(".github/workflows/hunter-trusted-preflight-upgrade.yml"),
+    )
+    families = context["applicable_defect_families"]
+    assert isinstance(families, list)
+    assert any(family["id"] == "DFF-014" for family in families)
