@@ -30,6 +30,7 @@ from hunter.discovery.capacity import (
 )
 from hunter.discovery.configuration import DiscoveryConfig, DiscoveryProviderConfig
 from hunter.discovery.providers import (
+    GECKOTERMINAL_FREE_MAX_PAGE,
     CoinGeckoDiscoveryProvider,
     DexEnrichmentResult,
     DexScreenerDiscoveryProvider,
@@ -647,8 +648,8 @@ def test_discovery_automation_install_is_idempotent(tmp_path) -> None:
     status = discovery_automation_status(config_path)
 
     assert first == second
-    assert status["installed_jobs"] == 4
-    assert status["expected_jobs"] == 4
+    assert status["installed_jobs"] == 5
+    assert status["expected_jobs"] == 5
 
 
 def _provider(provider: StaticDiscoveryProvider) -> DiscoveryProvider:
@@ -1493,13 +1494,21 @@ def test_corroboration_requests_share_the_capacity_ledger(tmp_path, monkeypatch)
 def test_canonical_automation_config_carries_free_capacity_observation_metadata() -> None:
     payload = yaml.safe_load(Path("configs/automation.yaml").read_text(encoding="utf-8"))
     jobs = payload["jobs"] if isinstance(payload, dict) and isinstance(payload.get("jobs"), list) else []
-    job = next((item for item in jobs if isinstance(item, dict) and item.get("job_id") == "discovery-market-run"), None)
+    by_id = {
+        str(item.get("job_id")): item for item in jobs if isinstance(item, dict) and isinstance(item.get("job_id"), str)
+    }
+    job = by_id.get("discovery-market-run")
+    backfill = by_id.get("discovery-market-run-backfill")
 
-    assert job is not None
+    assert job is not None and backfill is not None
     metadata = job.get("metadata") or {}
     assert metadata.get("free_capacity_observation_window_hours") == 24
-    assert metadata.get("discovery_modes") == ["backfill", "incremental"]
+    assert metadata.get("discovery_modes") == ["incremental"]
     assert metadata.get("no_parallel_daemon") is True
+    assert metadata.get("indefinite_operation") is True
+    assert (job.get("schedule") or {}).get("expression") == "*/15 * * * *"
+    assert (backfill.get("schedule") or {}).get("expression") == "0 * * * *"
+    assert (backfill.get("metadata") or {}).get("bounded_contracts_per_cycle") == 5
 
 
 def test_geckoterminal_fair_rotation_changes_network_order_between_passes(monkeypatch) -> None:
@@ -1636,3 +1645,116 @@ def test_dex_enrichment_modes_control_refresh_of_contracts_with_market_evidence(
     assert backfill.status == "succeeded"
     assert selected[-2:] == [("eth", "0xaaa"), ("eth", "0xbbb")]
     assert "mode=backfill" in backfill.message
+
+
+def test_geckoterminal_free_page_cap_never_requests_page_eleven(monkeypatch) -> None:
+    api = _FakeGeckoApi(
+        {1: [{"id": "eth"}]},
+        {
+            ("eth", page): _gecko_pool_payload("eth", f"0xpool{page}", f"0xtoken{page}")
+            for page in range(1, GECKOTERMINAL_FREE_MAX_PAGE + 1)
+        },
+    )
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    result = GeckoTerminalDiscoveryProvider().discover_scan(state=None, budget=ScanBudget(max_requests=15))
+
+    pool_pages = [page for path, page in api.calls if path.startswith("/networks/") and path.endswith("/pools")]
+    assert pool_pages and max(pool_pages) <= GECKOTERMINAL_FREE_MAX_PAGE
+    assert 11 not in pool_pages
+    assert any(
+        item.get("reason") == "free_api_page_cap" and item.get("scope") == "network_pools"
+        for item in result.state["inaccessible_scope"]
+    )
+    assert result.state["pool_page"] <= GECKOTERMINAL_FREE_MAX_PAGE
+
+
+def test_geckoterminal_stale_over_cap_checkpoint_advances_without_retry() -> None:
+    state: dict[str, Any] = {
+        "pool_page": 11,
+        "network_index": 0,
+        "catalogue_page": 1,
+        "catalogue_fetched": True,
+        "catalogue_complete": False,
+        "seen_contracts": [],
+        "observed_pools": 0,
+        "passes": 0,
+        "last_error": "GeckoTerminal discovery unavailable: HTTP 401",
+    }
+    recovered = GeckoTerminalDiscoveryProvider._normalise_state(state)
+
+    assert recovered["pool_page"] == 1
+    assert recovered["network_index"] == 1
+    assert any(item.get("reason") == "free_api_page_cap" for item in recovered["inaccessible_scope"])
+
+
+def test_read_only_discovery_executor_isolated_from_privileged_operations(monkeypatch) -> None:
+    from hunter.automation.models import AutomationPipelinePlan, AutomationReplayContext
+    from hunter.data_ops import READ_ONLY_DISCOVERY_OPERATIONS, ReadOnlyDiscoveryExecutor
+    from hunter.intelligence.fusion.models import FusionTarget
+    from hunter.plugins.contracts import PipelineContext
+
+    executor = ReadOnlyDiscoveryExecutor()
+    routed: list[tuple[str, str]] = []
+
+    def discovery(plan: AutomationPipelinePlan, context: PipelineContext) -> PipelineContext:
+        routed.append(("discovery", plan.target.target_id))
+        return context
+
+    def pipeline(plan: AutomationPipelinePlan, context: PipelineContext) -> PipelineContext:
+        routed.append(("pipeline", plan.target.target_id))
+        return context
+
+    monkeypatch.setattr(executor, "_discovery", discovery)
+    monkeypatch.setattr(executor, "_pipeline", pipeline)
+    context = PipelineContext()
+
+    def plan_for(target_id: str) -> AutomationPipelinePlan:
+        return AutomationPipelinePlan(
+            job_id="test",
+            job_kind="ingest_project_data",
+            target=FusionTarget(target_type=cast(Any, "operation"), target_id=target_id),
+            run_type="scheduled",
+            selected_engines=(),
+            run_intelligence=False,
+            run_fusion=False,
+            run_opportunity_timing=False,
+            run_investment_committee=False,
+            persistence_policy="atomic",
+            replay=AutomationReplayContext(mode="current", as_of=None),
+        )
+
+    for operation in sorted(READ_ONLY_DISCOVERY_OPERATIONS):
+        executor(plan_for(operation), context)
+    executor(plan_for("coingecko_market_sync"), context)
+
+    assert routed == [
+        ("discovery", "discovery_market_run"),
+        ("discovery", "discovery_market_run_backfill"),
+        ("discovery", "discovery_queue_refresh"),
+        ("discovery", "discovery_screen"),
+        ("pipeline", "coingecko_market_sync"),
+    ]
+
+
+def test_automation_start_defaults_to_indefinite_operation(tmp_path, monkeypatch) -> None:
+    import hunter.cli as cli
+
+    config_path = tmp_path / "automation.yaml"
+    config_path.write_text("enabled: true\npolling_interval_seconds: 0\njobs: []\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class CapturingScheduler:
+        def __init__(self, jobs: object, runner: object, *, polling_interval_seconds: int) -> None:
+            captured["jobs"] = jobs
+
+        def run_loop(self, *, max_iterations: int | None = None) -> None:
+            captured["max_iterations"] = max_iterations
+
+    monkeypatch.setattr(cli, "AutomationScheduler", CapturingScheduler)
+
+    assert cli.main(["--config", str(config_path), "automation", "start"]) == 0
+    assert captured["max_iterations"] is None

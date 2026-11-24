@@ -8,6 +8,7 @@ import yaml
 DISCOVERY_JOB_IDS = (
     "discovery-source-health",
     "discovery-market-run",
+    "discovery-market-run-backfill",
     "discovery-candidate-screening",
     "discovery-queue-refresh",
 )
@@ -45,15 +46,29 @@ def _discovery_jobs() -> tuple[dict[str, Any], ...]:
         _job(
             "discovery-market-run",
             "Global discovery market run",
-            "every_6_hours",
+            "cron",
             "discovery_market_run",
             {
                 "free_capacity_observation_window_hours": 24,
-                "discovery_modes": ["backfill", "incremental"],
+                "discovery_modes": ["incremental"],
                 "budget_aware_resumable": True,
                 "fair_network_rotation": True,
                 "no_parallel_daemon": True,
+                "indefinite_operation": True,
             },
+            expression="*/15 * * * *",
+        ),
+        _job(
+            "discovery-market-run-backfill",
+            "Bounded discovery market backfill",
+            "cron",
+            "discovery_market_run_backfill",
+            {
+                "discovery_modes": ["backfill"],
+                "bounded_contracts_per_cycle": 5,
+                "does_not_starve_incremental": True,
+            },
+            expression="0 * * * *",
         ),
         _job("discovery-candidate-screening", "Discovery candidate screening", "every_6_hours", "discovery_screen"),
         _job("discovery-queue-refresh", "Discovery queue refresh", "every_6_hours", "discovery_queue_refresh"),
@@ -66,13 +81,18 @@ def _job(
     schedule_type: str,
     operation: str,
     metadata: dict[str, Any] | None = None,
+    *,
+    expression: str | None = None,
 ) -> dict[str, Any]:
+    schedule: dict[str, Any] = {"type": schedule_type}
+    if expression is not None:
+        schedule["expression"] = expression
     return {
         "job_id": job_id,
         "name": name,
         "enabled": True,
         "job_kind": "ingest_project_data",
-        "schedule": {"type": schedule_type},
+        "schedule": schedule,
         "timezone": "UTC",
         "target": {"type": "operation", "id": operation},
         "run_type": "scheduled",

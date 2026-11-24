@@ -446,11 +446,22 @@ class CandidateDiscoveryEngine:
                         "observed_pools",
                         "new_pools",
                         "last_error",
+                        "inaccessible_scope",
                         "updated_at",
                     )
                 },
             },
             "unsupported_scope": [
+                *(
+                    {
+                        "provider": "geckoterminal",
+                        "scope": str(item.get("scope") or "unspecified"),
+                        "reason": str(item.get("reason") or "inaccessible"),
+                        "page": item.get("page"),
+                    }
+                    for item in (scan.get("inaccessible_scope") or [])
+                    if isinstance(item, dict)
+                ),
                 {
                     "provider": "dexscreener",
                     "scope": "token_profile_and_boost_feed",

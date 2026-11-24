@@ -67,6 +67,7 @@ from hunter.dashboard.exceptions import DashboardPersistenceError
 from hunter.dashboard_api import build_dashboard_api, render_dashboard_api
 from hunter.data_ops import (
     DATA_OPS_JOB_IDS,
+    ReadOnlyDiscoveryExecutor,
     data_ops_failures,
     data_ops_history,
     data_ops_status,
@@ -202,7 +203,12 @@ def main(argv: list[str] | None = None) -> int:
     automation = sub.add_parser("automation")
     automation_sub = automation.add_subparsers(dest="automation_command")
     start = automation_sub.add_parser("start")
-    start.add_argument("--max-iterations", type=int, default=1)
+    start.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="bounded diagnostic limit; omit for indefinite operation",
+    )
     automation_sub.add_parser("status")
     automation_sub.add_parser("list-jobs")
     show_job = automation_sub.add_parser("show-job")
@@ -806,7 +812,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 1
     config = load_automation_config(Path(args.config))
-    runner = AutomationJobRunner()
+    runner = AutomationJobRunner(pipeline_executor=ReadOnlyDiscoveryExecutor())
     scheduler = AutomationScheduler(config.jobs, runner, polling_interval_seconds=config.polling_interval_seconds)
     if args.automation_command == "list-jobs":
         for job in config.jobs:

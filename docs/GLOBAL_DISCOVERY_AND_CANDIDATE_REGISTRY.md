@@ -171,10 +171,21 @@ unprocessed. The batch path does not re-fetch CoinGecko or GeckoTerminal for the
 contract.
 
 GeckoTerminal catalogue enumeration rotates the network order after each completed
-catalogue pass so repeated bounded runs do not permanently starve later networks. There
-is no parallel discovery daemon: the existing `discovery-market-run` automation job is
-the single bounded, resumable runner and carries metadata for a 24-hour free-capacity
-observation window.
+catalogue pass so repeated bounded runs do not permanently starve later networks. The
+free public API rejects page numbers above 10 with HTTP 401 (`Upgrade to Analyst plan or
+above`); that is a plan restriction, not a rate limit. Scanner state therefore caps both
+catalogue and per-network pool pagination at 10, records the unreachable page as
+`free_api_page_cap`, and advances to the next network instead of retrying an unauthorized
+request. A stale persisted checkpoint above page 10 is normalized to the next network.
+
+There is no parallel discovery daemon: the existing `discovery-market-run` automation job
+is the single resumable runner, scheduled every 15 minutes for incremental discovery and
+carrying metadata for a 24-hour free-capacity observation window. A separate bounded
+`discovery-market-run-backfill` job runs hourly with at most five contracts per cycle, so
+historical refresh cannot starve incremental discovery. `automation start` has no finite
+iteration default; the LaunchAgent omits `--max-iterations` for indefinite operation. The
+scheduler executor routes only allowlisted read-only discovery operations to the candidate
+implementation; unrelated operation and analytical jobs stay on the legacy executor.
 
 ## Coverage
 

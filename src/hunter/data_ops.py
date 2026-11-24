@@ -13,6 +13,7 @@ import yaml
 
 from hunter.acquisition.repositories import FileAcquisitionRepository
 from hunter.automation import AutomationJobRunner, AutomationScheduler, load_automation_config
+from hunter.automation.execution import AutomationPipelineExecutor
 from hunter.automation.models import AutomationPipelinePlan
 from hunter.persistence.models import QuerySpec
 from hunter.persistence.sql import RepositoryFactory, SessionFactory, create_schema, create_sqlite_engine
@@ -34,9 +35,22 @@ DATA_OPS_JOB_IDS = (
     "dataops-committee-evaluation",
 )
 
+# Only these read-only local discovery commands may be dispatched by an
+# unmerged candidate runtime. Every other operation stays on the legacy
+# pipeline executor so pre-merge code cannot reach publication, trading, or
+# privileged data-ops paths.
+READ_ONLY_DISCOVERY_OPERATIONS = frozenset(
+    {
+        "discovery_market_run",
+        "discovery_market_run_backfill",
+        "discovery_screen",
+        "discovery_queue_refresh",
+    }
+)
+
 OPERATION_COMMANDS: dict[str, tuple[str, ...]] = {
     "discovery_market_run": ("discovery", "run", "--limit", "250"),
-    "discovery_market_run_backfill": ("discovery", "run", "--mode", "backfill", "--limit", "250"),
+    "discovery_market_run_backfill": ("discovery", "run", "--mode", "backfill", "--limit", "5"),
     "discovery_screen": ("discovery", "screen"),
     "discovery_queue_refresh": ("discovery", "queue", "refresh"),
     "coingecko_market_sync": ("coingecko", "sync"),
@@ -50,6 +64,27 @@ OPERATION_COMMANDS: dict[str, tuple[str, ...]] = {
     "market_validation_run": ("market-validation", "run"),
     "committee_evaluation": ("committee", "evaluate"),
 }
+
+
+class ReadOnlyDiscoveryExecutor:
+    """Route allowlisted discovery operations locally; keep all other jobs legacy.
+
+    The scheduler's default executor runs the analytical pipeline. Using it for
+    operation-target jobs would silently skip discovery, while routing every
+    operation through ``DataOpsExecutor`` would expose privileged commands to
+    unmerged code. This composite keeps the original behavior for unrelated
+    jobs and enables only the authorized read-only discovery commands.
+    """
+
+    def __init__(self) -> None:
+        self._discovery = DataOpsExecutor()
+        self._pipeline = AutomationPipelineExecutor()
+
+    def __call__(self, plan: AutomationPipelinePlan, context: PipelineContext) -> PipelineContext:
+        operation = str(plan.target.metadata.get("operation") or plan.target.target_id)
+        if plan.target.target_type == "operation" and operation in READ_ONLY_DISCOVERY_OPERATIONS:
+            return self._discovery(plan, context)
+        return self._pipeline(plan, context)
 
 
 @dataclass(frozen=True)

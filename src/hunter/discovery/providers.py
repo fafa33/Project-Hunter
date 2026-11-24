@@ -16,6 +16,11 @@ from typing import Any, Protocol
 from hunter.acquisition.exceptions import ProviderUnavailableError
 from hunter.discovery.capacity import CapacityLedger, endpoint_for_url
 
+# GeckoTerminal's free public API rejects page numbers above 10 with HTTP 401
+# ("Upgrade to Analyst plan or above"). This is a documented-by-response free
+# plan restriction, not a rate limit: requests above the cap are never retried.
+GECKOTERMINAL_FREE_MAX_PAGE = 10
+
 
 @dataclass(frozen=True)
 class DiscoveredCandidate:
@@ -314,7 +319,17 @@ class GeckoTerminalDiscoveryProvider:
                         scan["catalogue_complete"] = False
                         scan["catalogue_fetched"] = False
                     elif scan["catalogue_fetched"]:
-                        scan["catalogue_page"] = int(scan["catalogue_page"]) + 1
+                        if int(scan["catalogue_page"]) >= GECKOTERMINAL_FREE_MAX_PAGE:
+                            scan["catalogue_complete"] = True
+                            catalogue_record = {
+                                "scope": "network_catalogue",
+                                "page": int(scan["catalogue_page"]) + 1,
+                                "reason": "free_api_page_cap",
+                            }
+                            if catalogue_record not in scan["inaccessible_scope"]:
+                                scan["inaccessible_scope"].append(catalogue_record)
+                        else:
+                            scan["catalogue_page"] = int(scan["catalogue_page"]) + 1
                         scan["catalogue_fetched"] = False
                     scan["network_ids"] = []
                     scan["network_index"] = 0
@@ -356,10 +371,19 @@ class GeckoTerminalDiscoveryProvider:
                     key = (str(metadata.get("chain") or ""), str(metadata.get("contract_address") or ""))
                     if all(key):
                         seen_contracts.add(key)
-                if page_pools:
+                if page_pools and int(scan["pool_page"]) < GECKOTERMINAL_FREE_MAX_PAGE:
                     scan["pool_page"] = int(scan["pool_page"]) + 1
                 else:
-                    # Empty page ends this network; do not advance past a failed page.
+                    if page_pools:
+                        record = {
+                            "scope": "network_pools",
+                            "network_id": network_id,
+                            "page": GECKOTERMINAL_FREE_MAX_PAGE + 1,
+                            "reason": "free_api_page_cap",
+                        }
+                        if record not in scan["inaccessible_scope"]:
+                            scan["inaccessible_scope"].append(record)
+                    # Empty page or the free pagination cap ends this network.
                     scan["network_index"] = int(scan["network_index"]) + 1
                     scan["pool_page"] = 1
                 if max_candidates is not None and len(rows) >= max(1, max_candidates):
@@ -374,6 +398,7 @@ class GeckoTerminalDiscoveryProvider:
                 break
 
         scan["seen_contracts"] = [list(key) for key in sorted(seen_contracts)[: max(0, self.seen_contract_limit)]]
+        scan["inaccessible_scope"] = list(scan["inaccessible_scope"])[-200:]
         scan["observed_pools"] = int(scan["observed_pools"]) + len(pool_observations)
         scan["updated_at"] = timestamp
         return ProviderScanResult(
@@ -402,6 +427,31 @@ class GeckoTerminalDiscoveryProvider:
         scan.setdefault("passes", 0)
         scan.setdefault("rotation_seed", 0)
         scan.setdefault("last_error", None)
+        scan.setdefault("inaccessible_scope", [])
+        try:
+            catalogue_page = int(scan.get("catalogue_page", 1))
+        except (TypeError, ValueError):
+            catalogue_page = 1
+        if catalogue_page > GECKOTERMINAL_FREE_MAX_PAGE:
+            scan["catalogue_page"] = 1
+            scan["catalogue_complete"] = True
+            scan["catalogue_fetched"] = False
+        try:
+            pool_page = int(scan.get("pool_page", 1))
+        except (TypeError, ValueError):
+            pool_page = 1
+        if pool_page > GECKOTERMINAL_FREE_MAX_PAGE:
+            # A pre-cap checkpoint must never re-issue the page that returned 401.
+            scan["network_index"] = int(scan.get("network_index", 0)) + 1
+            scan["pool_page"] = 1
+            record = {
+                "scope": "network_pools",
+                "network_id": "resumed_checkpoint",
+                "page": pool_page,
+                "reason": "free_api_page_cap",
+            }
+            if record not in scan["inaccessible_scope"]:
+                scan["inaccessible_scope"].append(record)
         return scan
 
     def _pool_page(

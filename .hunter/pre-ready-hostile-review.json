@@ -3,25 +3,25 @@
     "acceptance_criteria": [
       {
         "criterion": "Free-provider capacity is inventoried with explicit provenance and observed consumption is persisted without paid API use.",
-        "evidence": "configs/discovery_capacity.yaml separates official_documentation, owner_specified and not_documented limits and leaves undocumented monthly credits null. src/hunter/discovery/capacity.py and repository.py add additive capacity_requests/capacity_cooldowns/capacity_cooldown_events tables with rolling-window reservation, bounded Retry-After, cooldowns and retry-safe dedup. The post-remediation live package /Users/farhadafshari/hunter-587-live-evidence/capacity-evidence-manifest-final.json records 80 to 126 persisted requests and now includes coins_contract and geckoterminal token corroboration calls. Only free endpoints were called; no paid API consideration was made.",
+        "evidence": "configs/discovery_capacity.yaml separates official_documentation, owner_specified and not_documented limits and leaves undocumented monthly credits null. Additive capacity tables persist requests, retries, throttles and cooldowns. The live evidence manifest /Users/farhadafshari/hunter-587-live-evidence/capacity-evidence-manifest-final.json records persisted free-provider consumption; no paid API was used. The new scheduler exposes only allowlisted read-only discovery operations and no privileged path.",
         "id": "AC-587-01",
         "verdict": "satisfied"
       },
       {
         "criterion": "Global discovery uses bounded, resumable free capacity and truthful DexScreener batching without a parallel daemon.",
-        "evidence": "DexScreener enrichment uses GET /tokens/v1 with at most 30 exact addresses per request, full canonical DexScreener chainId values verified against live responses (ethereum, polygon, avalanche, arbitrum, optimism, base, bsc, solana), and registry chain names retained for contract identity. Budget truncation is reported as partial with processed/unprocessed counts; backfill disables dedup so refresh actually re-reads contracts. GeckoTerminal rotates catalogue networks, and the existing discovery-market-run job in configs/automation.yaml carries the 24-hour observation metadata with no new daemon. Focused regressions cover batching, truncation, dedup, modes and automation metadata.",
+        "evidence": "The existing scheduler now runs discovery-market-run every 15 minutes for incremental discovery and a bounded discovery-market-run-backfill hourly with at most five contracts per cycle, so backfill cannot starve incremental work. automation start has no finite iteration default. ReadOnlyDiscoveryExecutor routes only the four allowlisted discovery operations locally and leaves every other operation and analytical job on the legacy executor. GeckoTerminal catalogue and pool pagination are capped at the free-plan page 10, inaccessible scope is recorded, and stale over-cap checkpoints advance without retrying the HTTP 401 page.",
         "id": "AC-587-02",
         "verdict": "satisfied"
       },
       {
         "criterion": "Coverage and evidence telemetry use real denominators and never claim unmeasured global coverage or stale market evidence.",
-        "evidence": "global_coverage uses CoinGecko /coins/list for the accessible universe, the enumerated GeckoTerminal catalogue for networks, and leaves pool coverage null because no global pool denominator exists. Fresh market evidence now requires a provider-reported market timestamp inside 24 hours rather than a generic source sync time. The final live evidence reports 21258 accessible assets, 5247 matched assets, 0.246825 universe coverage, and an in-progress 24-hour observation window explicitly not claimed complete. Tests pin null pool coverage and stale-evidence rejection.",
+        "evidence": "global_coverage uses real denominators, leaves global pool coverage null, and now reports GeckoTerminal free_api_page_cap scope through scan_progress and unsupported_scope. Fresh market evidence still requires a provider-reported timestamp inside 24 hours rather than a generic sync time. Focused tests pin null pool coverage, stale-evidence rejection, page-cap behavior and checker recovery.",
         "id": "AC-587-03",
         "verdict": "satisfied"
       },
       {
         "criterion": "Verification is sufficient and governance is preserved before the single signed commit and push.",
-        "evidence": "Focused suite tests/test_global_discovery_candidate_registry.py: 50 passed after all remediation; Black, Ruff and the full-repository MyPy gate (1075 source files, no issues) pass. A final pre-push blocker -- a strict-typing error in a new test -- was corrected with a typed cast and all gates re-verified. A read-only adversarial review found chain-ID, error-handling, freshness, truncation, ledger and dedup defects; each was fixed with regression coverage in this candidate. The exact-head pre-ready review request is regenerated from this fresh judgement, not from prior reviewer authority. PR #788 remains Draft; no merge, new PR, CI loop, parallel daemon or paid API use was performed. Hosted gates are re-read after the single push.",
+        "evidence": "A fresh exact-head hostile review judgement is regenerated for this staged candidate; the canonical writer finalizer mints the request against the staged tree and the pre-push boundary enforces exact HEAD, clean tree, signatures and deterministic gates. Focused suite tests/test_global_discovery_candidate_registry.py passes 54 tests; Black, Ruff and focused MyPy pass. No merge, new PR, CI rerun loop, parallel daemon or paid API use is performed; PR #788 remains Draft until owner approval.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -43,72 +43,72 @@
     "base_sha": "a4a9b9e173bb15afaed2c162bda9708e93eb2411",
     "defect_families": [
       {
-        "evidence": "The 24-hour freshness cutoff is sampled from the runtime UTC clock in global_coverage; market observation times come from provider payload fields and are parsed defensively. Capacity cooldown and rolling-window times are runtime-generated in capacity.py, and a bounded Retry-After is clamped before sleeping. No caller-supplied timestamp can move an admission, ordering, budget or coverage cutoff. Focused regressions include stale-market-evidence rejection and bounded Retry-After.",
+        "evidence": "Runtime UTC clocks continue to bound freshness, Retry-After and cooldown windows. Stale GeckoTerminal checkpoints are normalized deterministically from persisted state; no caller-supplied timestamp or page number can authorize an unauthorized request or move a coverage cutoff. Focused tests cover stale-evidence rejection and over-cap checkpoint recovery.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "try_reserve_capacity and set_capacity_cooldown use BEGIN IMMEDIATE so dedup lookup, rolling-window count and insert observe one SQLite snapshot; completion is keyed by a unique reservation id. Backfill dedup suppression is passed explicitly at request construction rather than inferred across two reads. capacity.py and repository.py regressions cover retry dedup and cooldown persistence.",
+        "evidence": "Capacity reservation and cooldown writes keep BEGIN IMMEDIATE snapshot semantics; completion remains keyed by a unique reservation id. Scheduler state is persisted in the existing automation repository, and discovery cursors remain in the additive discovery registry. No schema replacement or competing writer was introduced.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Dex batch rows retain the registry chain for provider id, slug, contract namespace and identity merging; the full DexScreener chainId is used only for the URL and response filtering. normalize_contract_address is applied to exact provider addresses before grouping, and no caller-selected identity can override a repository-assigned candidate id. Mode tests pin contract selection by existing identity.",
+        "evidence": "DexScreener batch identity handling is unchanged: registry chain names remain in provider ids and contract namespaces while canonical chainIds are used only in request paths and response filtering. No executor routing change can override candidate identity or source attribution.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Unknown or unconfigured providers fall back to an explicitly disabled provider config; absent capacity inventory entries have not_documented provenance and null numeric limits rather than permissive defaults. Budget exhaustion raises CapacityBudgetExhausted, which is now recorded as an unavailable run. No missing endpoint row is treated as unlimited permission.",
+        "evidence": "Unknown operations and providers still fall back to explicitly non-permissive behavior. The composite executor defaults every non-allowlisted plan to the legacy analytical executor; GeckoTerminal pages above 10 are never requested, and HTTP 401 is not treated as a retryable rate limit.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Capacity observations are written only to additive dedicated tables with explicit provider/endpoint/fingerprint/reservation fields; no credential, token or excluded payload is nested into candidate metadata. Coverage telemetry is derived from persisted registry state, not from hidden metadata channels. No persistence restriction was weakened.",
+        "evidence": "Only additive capacity and discovery tables are written; no credential, token or excluded payload is placed in candidate metadata. The read-only deployment config points to the existing durable registry and does not alter unrelated production databases.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Rolling-window budgets are derived from persisted attempted_at rows with deterministic wait calculation; reservations use unique ids and retries reuse the original dedup key, so restart or repeat does not double-count a successful call. Batch truncation is reported from per-request accounting rather than retrying indefinitely. Focused tests cover retry dedup, truncation and fair rotation.",
+        "evidence": "Rolling-window budgets, retries and dedup keys remain deterministic. The GeckoTerminal page cap and stale checkpoint normalization prevent retry storms against a free-plan restriction, while hourly bounded backfill and 15-minute incremental jobs cannot overlap on the same job target.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "This exact-head review request is regenerated from a fresh judgement over the staged base-to-candidate content; no previous authorizer or request blob is reused. The refresh binds per-file blob transitions and refuses stale content. No connector or admission authorization code was modified.",
+        "evidence": "This exact-head review request is regenerated from a fresh judgement over the staged base-to-candidate content; no previous authorizer, reviewer authority or request blob is reused. The writer finalizer binds per-file blob transitions from the staged index and refuses stale content.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "The governed review request is refreshed before the final signed commit and the pre-commit writer finalizer re-verifies it against the staged head. Independent hosted review authority is not asserted by the writer; findings are empty and no readiness or merge claim is made. PR #788 remains Draft.",
+        "evidence": "The governed request is refreshed before the signed commit by the repository writer finalizer. No independent hosted review authority is asserted; the findings list is empty and no merge or readiness claim is made. PR #788 remains Draft.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "The canonical pre-push hook and repository-owned push tool remain enabled and are the only publication path. The first push attempt failed closed on a strict-typing gate before any ref update; no partial push occurred. Focused tests are diagnostic; the hosted exact-head full proof is not replaced or bypassed. No workflow, required check, ruleset or validation receipt authority was changed. The branch is pushed once to the existing PR head with no forced update.",
+        "evidence": "The canonical pre-push hook and repository-owned push tool remain the only publication path, with exact HEAD, clean tree, signed commit and deterministic gate enforcement. This judgement is prepared before any push of the new head; no remote ref update or bypass is claimed here.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "The review artifact remains at the tracked path .hunter/pre-ready-hostile-review.json and is produced/verified by the canonical consumer scripts/hunter_pre_ready_review.py; no lookalike or unloadable governance path was introduced. The temporary judgement file is outside the committed change set.",
+        "evidence": "The review artifact remains at the tracked path .hunter/pre-ready-hostile-review.json and is produced and verified by scripts/hunter_pre_ready_review.py. The temporary judgement file is untracked and is removed before the governed push.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Deterministic regressions use monkeypatched clocks, payloads, urlopen and temporary SQLite repositories; no test asserts on a live Issue body, remote API response or live endpoint. The live free-API runs are recorded separately as attributable machine-readable evidence in /Users/farhadafshari/hunter-587-live-evidence and are never used as deterministic test assertions.",
+        "evidence": "Deterministic regressions use monkeypatched clocks, payloads, urlopen, executor delegates and temporary SQLite repositories; no test asserts on a live Issue body or live provider response. The focused suite reports 54 passed after the scheduling, executor and page-cap changes.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "The regenerated .hunter/pre-ready-hostile-review.json binds its own claims digest and review_target_digest; scripts/hunter_pre_ready_review.py re-derives both from exact-head git evidence before any claim is believed. The artifact was produced by the canonical tool, not hand-edited, and a forged or stale edit would fail structural verification.",
+        "evidence": "The regenerated review artifact binds its own claims digest and review_target_digest; the canonical tool re-derives both from exact staged-head git evidence before any claim is believed. A stale or hand-edited artifact fails structural verification.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "The review request is minted by the repository-owned writer tool through the authorized writer channel and records no caller-chosen writer identity or external proof. It carries an empty findings list and makes no trusted-review or readiness assertion; hosted governance authenticates the writer from its own trusted evidence.",
+        "evidence": "The request is minted by the repository-owned writer tool through the governed writer channel and records no caller-chosen writer identity or external proof. It carries empty findings and makes no trusted-review or readiness assertion.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "The review request is regenerated after the strict-typing remediation and bound to the exact candidate head; the commit-time writer finalizer re-verifies staged content and the pre-push receipt gate refuses a stale or inherited receipt. The first push attempt failed closed on MyPy before any ref update, so no stale artifact was published.",
+        "evidence": "The review request is regenerated for this staged exact head; the commit-time finalizer re-verifies staged content and the pre-push receipt gate refuses a stale or inherited receipt. No stale artifact is published.",
         "family": "DFF-012",
         "outcome": "clear"
       }
@@ -129,31 +129,31 @@
         "status": "added"
       },
       {
-        "blob_sha": "3c98cb055619ff2a39378389939f83ed0092184e",
+        "blob_sha": "41c8fc16f09ca82a24720df7b19934c5bf4f4ad6",
         "path": "configs/automation.yaml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "e125803360f953cf0f841b440b45b5fe73e46e1a",
+        "blob_sha": "317f1bbe47dfc6f254c786775641c2e6d6b67e0d",
         "path": "docs/GLOBAL_DISCOVERY_AND_CANDIDATE_REGISTRY.md",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "5c43c8670aa75a86717c71f28661d034219c7b95",
+        "blob_sha": "8dbf629e0a3e3d0c52e30c7c51c3627a59482b55",
         "path": "src/hunter/cli.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "ee152d5dbe994657271b7c43519d46f97bac2abf",
+        "blob_sha": "919b353ba820d302b2c0773cc9b7983dadbbba95",
         "path": "src/hunter/data_ops.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "cc7fb2464832320663486bcf89f714aa1a697c3d",
+        "blob_sha": "4356e4b5ae10de24e53b55d998089bf3cc48edf3",
         "path": "src/hunter/discovery/automation.py",
         "previous_path": "",
         "status": "modified"
@@ -165,7 +165,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "671179dd3159a7c494c60740a0c9a6c1833439f5",
+        "blob_sha": "247cb7bb6d8b86511e4b0303a7e7761dc84d7ebb",
         "path": "src/hunter/discovery/engine.py",
         "previous_path": "",
         "status": "modified"
@@ -177,7 +177,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "efd7eb249b89f2a02f624df1e38f68a45755e314",
+        "blob_sha": "5bc485b3af9d5bdc8614300b1ee25f1bfc1f2845",
         "path": "src/hunter/discovery/providers.py",
         "previous_path": "",
         "status": "modified"
@@ -189,17 +189,17 @@
         "status": "modified"
       },
       {
-        "blob_sha": "14e6bb8d6e2b98868a0a321a8f6db6a3fcda720b",
+        "blob_sha": "089782a898a97928f10aece902d2ce62f6e5c863",
         "path": "tests/test_global_discovery_candidate_registry.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "2adf148e907752f6818ba065ba2924699159d4f90b282e0623be8f27209e290c"
+    "review_target_digest": "64a0cd2b1bb0dfc6775fdf360878d7c40b419ba18ff21d23620f8329eebdb16b"
   },
-  "review_id": "e00e21a9ffe3b5559dd90e7bdf484e1714e34da601ab979a10e4b01505cd96b7",
+  "review_id": "790dd8758de8ab7d4303df62c5b532a1d75aca9c816c1b907c298843e82b0353",
   "review_request": {
-    "claims_id": "e00e21a9ffe3b5559dd90e7bdf484e1714e34da601ab979a10e4b01505cd96b7",
+    "claims_id": "790dd8758de8ab7d4303df62c5b532a1d75aca9c816c1b907c298843e82b0353",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
