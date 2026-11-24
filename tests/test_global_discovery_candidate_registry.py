@@ -488,6 +488,8 @@ def test_dexscreener_provider_normalizes_profiles_and_boosts(monkeypatch) -> Non
     second_metadata = rows[1].metadata or {}
     assert first_metadata["contract_address"] == "0xtoken"
     assert second_metadata["boost_amount"] == 10
+    assert second_metadata["contract_address"] == "So111"
+    assert rows[1].provider_id == "solana:So111"
 
 
 def test_registry_has_indexed_lookup_surfaces(tmp_path) -> None:
@@ -664,3 +666,43 @@ def _urlopen_by_path(payloads: dict[str, object]):
         return _JsonResponse(payloads[path])
 
     return opener
+
+
+def test_solana_case_sensitive_addresses_survive_discovery_and_registry(tmp_path, monkeypatch) -> None:
+    addresses = ("AbC123", "aBc123")
+    payload = {
+        "data": [],
+        "included": [
+            {"id": f"solana_{address}", "type": "token", "attributes": {"name": "Token", "address": address}}
+            for address in addresses
+        ],
+    }
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen(payload))
+    gecko = GeckoTerminalDiscoveryProvider().discover(limit=10)
+    assert [(row.metadata or {})["contract_address"] for row in gecko] == list(addresses)
+    assert len({row.slug for row in gecko}) == 2
+    profiles = {
+        "/token-profiles/latest/v1": [{"chainId": "solana", "tokenAddress": address} for address in addresses],
+        "/token-boosts/top/v1": [],
+    }
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen_by_path(profiles))
+    dex = DexScreenerDiscoveryProvider().discover(limit=10)
+    assert [(row.metadata or {})["contract_address"] for row in dex] == list(addresses)
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    engine = CandidateDiscoveryEngine(
+        repository,
+        DiscoveryConfig(providers={}),
+        providers={
+            "geckoterminal": StaticDiscoveryProvider("geckoterminal", gecko),
+            "dexscreener": StaticDiscoveryProvider("dexscreener", dex),
+        },
+    )
+    for _ in range(2):
+        engine.sync(provider="geckoterminal", limit=10)
+        engine.sync(provider="dexscreener", limit=10)
+    assert repository.stats().total_candidates == 2
+    for address in addresses:
+        candidate = repository.find_by_identifier("contract:solana", address)
+        assert candidate is not None
+        assert {source.provider for source in candidate.sources} == {"geckoterminal", "dexscreener"}
+    assert repository.find_by_identifier("contract:solana", "abc123") is None

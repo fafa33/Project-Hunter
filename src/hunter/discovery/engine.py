@@ -22,6 +22,8 @@ from hunter.discovery.providers import (
     DiscoveredCandidate,
     DiscoveryProvider,
     GeckoTerminalDiscoveryProvider,
+    contract_slug,
+    normalize_contract_address,
 )
 from hunter.discovery.repository import CandidateRegistryRepository
 from hunter.execution.identity import identity
@@ -293,8 +295,8 @@ class CandidateDiscoveryEngine:
             )
         ]
         metadata = candidate.metadata or {}
-        contract_address = str(metadata.get("contract_address") or "").strip().lower()
         chain = str(metadata.get("chain") or candidate.primary_chain or "").strip().lower()
+        contract_address = normalize_contract_address(metadata.get("contract_address"), chain)
         if chain and contract_address:
             identifiers.append(
                 CandidateIdentifier(
@@ -332,7 +334,7 @@ class CandidateDiscoveryEngine:
         lifecycle = "screenable" if len(identifiers) >= self.config.minimum_screening_identifiers else "identified"
         return CandidateRecord(
             candidate_id=candidate_id,
-            slug=candidate.slug,
+            slug=contract_slug(chain, contract_address) if chain and contract_address else candidate.slug,
             name=candidate.name,
             symbol=candidate.symbol,
             sector=candidate.sector,
@@ -388,8 +390,8 @@ class CandidateDiscoveryEngine:
 
     def _candidate_id_for_provider_candidate(self, candidate: DiscoveredCandidate) -> str:
         metadata = candidate.metadata or {}
-        contract_address = str(metadata.get("contract_address") or "").strip().lower()
         chain = str(metadata.get("chain") or candidate.primary_chain or "").strip().lower()
+        contract_address = normalize_contract_address(metadata.get("contract_address"), chain)
         if chain and contract_address:
             existing = self.repository.find_by_identifier(f"contract:{chain}", contract_address)
             if existing:
