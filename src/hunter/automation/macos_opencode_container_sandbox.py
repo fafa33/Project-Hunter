@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from hunter.automation.issue_agent_roles import EDIT_DIRECTIVE
+from hunter.automation.opencode_provider_self_check import PROBE_PROMPT
 
 
 class ContainerSandboxRefused(RuntimeError):
@@ -79,6 +80,9 @@ def _validated_opencode_tail(command: list[str]) -> list[str]:
             index += 2
         elif arg == EDIT_DIRECTIVE:
             sanitized.append(EDIT_DIRECTIVE)
+            index += 1
+        elif arg == PROBE_PROMPT:
+            sanitized.append(PROBE_PROMPT)
             index += 1
         elif arg.startswith("-"):
             raise ContainerSandboxRefused("unexpected provider flag")

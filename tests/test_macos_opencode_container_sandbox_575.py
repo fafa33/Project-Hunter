@@ -164,3 +164,9 @@ def test_rejects_command_injection_via_appended_shell_tokens(tmp_path):
     # Must not forward arbitrary argv that could be interpreted as flags/options.
     with pytest.raises(ContainerSandboxRefused):
         translate(argv(tmp_path, EDIT_DIRECTIVE, "--attach", "/etc/shadow"), IMAGE)
+
+
+def test_canonical_probe_prompt_is_accepted(tmp_path):
+    from hunter.automation.opencode_provider_self_check import PROBE_PROMPT
+
+    assert translate(argv(tmp_path, "--model", "provider/model", PROBE_PROMPT), IMAGE)[-1] == PROBE_PROMPT

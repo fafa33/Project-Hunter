@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import base64
 import os
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -268,6 +269,7 @@ def main() -> int:
     token = env.get("HUNTER_WORKSPACE_GITHUB_COMMENT_TOKEN", "")
     store = WorkspaceGrantCorrelationStore(Path(args.correlation_db))
     published = 0
+    refused = 0
     # A caller-provided run/authorization tuple is not proof of an authorized
     # dispatch. Only the signed GitHub transport may reach privileged issuance.
     # In particular, do not turn CLI flags into a parallel authorization path.
@@ -288,19 +290,24 @@ def main() -> int:
     for req in requests:
         if req.issue != args.issue:
             continue
-        if process_dispatch(
-            request=req,
-            environment=env,
-            signing_key=signing_key,
-            verification_key=pinned.workspace_grant_verifying_key,
-            correlation_store=store,
-            worker_owner=args.worker_owner,
-            workspace_root=Path(args.workspace_root),
-            configuration=pinned,
-        ):
-            published += 1
+        try:
+            if process_dispatch(
+                request=req,
+                environment=env,
+                signing_key=signing_key,
+                verification_key=pinned.workspace_grant_verifying_key,
+                correlation_store=store,
+                worker_owner=args.worker_owner,
+                workspace_root=Path(args.workspace_root),
+                configuration=pinned,
+            ):
+                published += 1
+        except WorkspaceAuthorityMismatch as error:
+            # A refused request never grants authority; continue scanning signed requests.
+            print(f"dispatch refused: run={req.run_id}: {error}", file=sys.stderr)
+            refused += 1
     print(f"published={published}")
-    return 0
+    return int(refused > 0 and published == 0)
 
 
 if __name__ == "__main__":

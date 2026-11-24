@@ -50,9 +50,9 @@ def test_comment_transport_refuses_forgery_replay_and_ambiguity():
     )
     assert b"private-lease" not in document
     assert select_verified_grant([{"body": "other"}, receipt], **kwargs) == grant
+    assert select_verified_grant([receipt, receipt], **kwargs) == grant
     for comments in (
         [],
-        [receipt, receipt],
         [{"body": comment_body(document) + "!"}],
         [{"body": comment_body(document).replace("a", "z", 1)}],
     ):

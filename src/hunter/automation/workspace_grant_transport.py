@@ -49,7 +49,7 @@ def select_verified_grant(
     """Refuse missing, forged, expired, or ambiguous receipts; never trust comment author."""
     if len(comments) > _MAX_COMMENTS:
         raise WorkspaceAuthorityMismatch("comment transport bound exceeded")
-    matching: list[WorkspaceGrant] = []
+    matching: dict[bytes, WorkspaceGrant] = {}
     for item in comments:
         body = item.get("body")
         if not isinstance(body, str) or not body.startswith(_PREFIX):
@@ -67,24 +67,22 @@ def select_verified_grant(
         # Other runs can share the Issue timeline. Their receipts are not candidates.
         if decoded.get("run_id") != run_id or decoded.get("authorization_id") != authorization_id:
             continue
-        matching.append(
-            verify_grant_handoff(
-                document,
-                verification_key=verification_key,
-                authorization_id=authorization_id,
-                run_id=run_id,
-                run_attempt=run_attempt,
-                repository=repository,
-                issue=issue,
-                branch=branch,
-                base_sha=base_sha,
-                checkpoint=checkpoint,
-                now=now,
-            )
+        matching[document] = verify_grant_handoff(
+            document,
+            verification_key=verification_key,
+            authorization_id=authorization_id,
+            run_id=run_id,
+            run_attempt=run_attempt,
+            repository=repository,
+            issue=issue,
+            branch=branch,
+            base_sha=base_sha,
+            checkpoint=checkpoint,
+            now=now,
         )
     if len(matching) != 1:
         raise WorkspaceAuthorityMismatch("missing or ambiguous signed grant transport")
-    return matching[0]
+    return next(iter(matching.values()))
 
 
 def fetch_issue_grant_comments(*, repository: str, issue: int, token: str) -> list[dict[str, Any]]:
