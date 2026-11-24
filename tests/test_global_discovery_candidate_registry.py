@@ -663,7 +663,7 @@ def _urlopen(payload: object):
 def _urlopen_by_path(payloads: dict[str, object]):
     def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
         path = urllib.parse.urlparse(request.full_url).path
-        return _JsonResponse(payloads[path])
+        return _JsonResponse(payloads.get(path, []) if path.startswith("/token-pairs/v1/") else payloads[path])
 
     return opener
 
@@ -706,3 +706,65 @@ def test_solana_case_sensitive_addresses_survive_discovery_and_registry(tmp_path
         assert candidate is not None
         assert {source.provider for source in candidate.sources} == {"geckoterminal", "dexscreener"}
     assert repository.find_by_identifier("contract:solana", "abc123") is None
+
+
+def test_dex_market_evidence_matches_exact_base_contract(monkeypatch) -> None:
+    profiles = {
+        "/token-profiles/latest/v1": [
+            {"chainId": "solana", "tokenAddress": "AbC", "links": [{"url": "https://example.invalid"}]}
+        ],
+        "/token-boosts/top/v1": [],
+    }
+
+    def pair(address, liquidity, chain="solana"):
+        return {
+            "chainId": chain,
+            "pairAddress": address,
+            "baseToken": {"address": address, "name": "Real", "symbol": "REAL"},
+            "liquidity": {"usd": liquidity},
+            "volume": {"h24": 42},
+            "marketCap": 1000,
+            "fdv": 2000,
+        }
+
+    profiles["/token-pairs/v1/solana/AbC"] = [
+        pair("abc", 9999),
+        pair("AbC", 9999, "base"),
+        pair("AbC", 100),
+        pair("AbC", 200),
+    ]
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen_by_path(profiles))
+    row = DexScreenerDiscoveryProvider().discover(limit=1)[0]
+    assert row.name == "Real" and row.symbol == "REAL"
+    assert row.metadata is not None
+    assert row.metadata["liquidity_usd"] == 200
+    assert row.metadata["volume_usd"] == 42
+    assert row.metadata["market_cap"] == 1000
+    assert row.metadata["fdv"] == 2000
+    assert row.metadata["claimed_links"] == ("https://example.invalid",)
+    assert "official_links" not in row.metadata
+
+
+def test_paid_boost_is_not_market_evidence(tmp_path) -> None:
+    from hunter.discovery.engine import _has_market_or_protocol_measure
+    from hunter.discovery.identity import _has_official_domain
+
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    engine = CandidateDiscoveryEngine(repository, DiscoveryConfig(providers={}))
+    row = DiscoveredCandidate(
+        provider="dexscreener",
+        provider_id="solana:AbC",
+        slug="token",
+        name="Token",
+        metadata={
+            "chain": "solana",
+            "contract_address": "AbC",
+            "boost_amount": 100,
+            "official_links": ["https://example.invalid"],
+        },
+    )
+    from datetime import UTC, datetime
+
+    candidate = engine._provider_candidate(row, observed_at=datetime.now(UTC))
+    assert not _has_market_or_protocol_measure(candidate)
+    assert not _has_official_domain(candidate)

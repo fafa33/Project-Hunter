@@ -272,7 +272,7 @@ def _related_ticker_candidates(
 
 
 def _has_official_domain(candidate: CandidateRecord) -> bool:
-    links = candidate.metadata.get("official_links")
+    links = candidate.metadata.get("verified_official_links")
     return isinstance(links, (list, tuple)) and any(str(link).strip() for link in links)
 
 

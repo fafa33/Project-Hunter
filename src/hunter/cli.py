@@ -1405,7 +1405,7 @@ def _discovery_market_metrics(candidates: tuple[CandidateRecord, ...]) -> dict[s
 
 
 def _has_official_link(candidate: CandidateRecord) -> bool:
-    links = candidate.metadata.get("official_links")
+    links = candidate.metadata.get("verified_official_links")
     return isinstance(links, (list, tuple)) and any(str(link).strip() for link in links)
 
 

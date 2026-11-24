@@ -551,7 +551,6 @@ def _has_market_or_protocol_measure(candidate: CandidateRecord) -> bool:
         "volume",
         "volume_usd",
         "reserve_usd",
-        "boost_amount",
     }
     return any(candidate.metadata.get(key) not in {None, ""} for key in keys)
 

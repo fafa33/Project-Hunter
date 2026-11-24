@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 import urllib.error
 import urllib.parse
@@ -270,13 +271,14 @@ class DexScreenerDiscoveryProvider:
                     continue
                 seen.add(key)
                 links = item.get("links") if isinstance(item.get("links"), list) else []
+                market = self._market_evidence(chain, address)
                 rows.append(
                     DiscoveredCandidate(
                         provider=self.name,
                         provider_id=f"{chain}:{address}",
                         slug=contract_slug(chain, address),
-                        name=_dexscreener_name(item, chain, address),
-                        symbol=None,
+                        name=market.pop("token_name", None) or _dexscreener_name(item, chain, address),
+                        symbol=market.pop("token_symbol", None),
                         sector="dex_market",
                         primary_chain=chain,
                         candidate_type="token",
@@ -291,13 +293,51 @@ class DexScreenerDiscoveryProvider:
                             "icon": item.get("icon"),
                             "boost_amount": item.get("amount"),
                             "boost_total_amount": item.get("totalAmount"),
-                            "official_links": tuple(_dexscreener_links(links)),
+                            "claimed_links": tuple(_dexscreener_links(links)),
+                            **market,
                         },
                     )
                 )
                 if len(rows) >= limit:
                     return tuple(rows)
         return tuple(rows)
+
+    def _market_evidence(self, chain: str, address: str) -> dict[str, Any]:
+        path = f"/token-pairs/v1/{urllib.parse.quote(chain, safe='')}/{urllib.parse.quote(address, safe='')}"
+        try:
+            payload = self._get(path)
+        except (ProviderUnavailableError, ValueError):
+            return {"market_evidence_status": "unavailable"}
+        if not isinstance(payload, list):
+            return {"market_evidence_status": "unavailable"}
+        matches = []
+        for pair in payload:
+            if not isinstance(pair, dict) or pair.get("chainId") != chain:
+                continue
+            token = pair.get("baseToken")
+            if not isinstance(token, dict) or normalize_contract_address(token.get("address"), chain) != address:
+                continue
+            liquidity = pair.get("liquidity")
+            amount = _market_number(liquidity.get("usd")) if isinstance(liquidity, dict) else None
+            if amount is not None and amount > 0 and pair.get("pairAddress"):
+                matches.append((amount, str(pair["pairAddress"]), pair))
+        if not matches:
+            return {"market_evidence_status": "no_matching_liquid_base_pair"}
+        liquidity_usd, pair_address, pair = max(matches, key=lambda item: (item[0], item[1]))
+        token = pair["baseToken"]
+        volume = pair.get("volume")
+        return {
+            "market_evidence_status": "observed",
+            "market_evidence_url": self.base_url.rstrip("/") + path,
+            "market_pair_address": pair_address,
+            "token_name": str(token.get("name") or "").strip() or None,
+            "token_symbol": str(token.get("symbol") or "").strip().upper() or None,
+            "liquidity_usd": liquidity_usd,
+            "volume_usd": _market_number(volume.get("h24")) if isinstance(volume, dict) else None,
+            "market_cap": _market_number(pair.get("marketCap")),
+            "fdv": _market_number(pair.get("fdv")),
+            "price_usd": _market_number(pair.get("priceUsd")),
+        }
 
     def _get(self, path: str) -> object:
         url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
@@ -412,6 +452,16 @@ def _pool_volume(payload: object) -> object:
     if isinstance(payload, dict):
         return payload.get("h24") or payload.get("24h")
     return None
+
+
+def _market_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        number = float(value)
+    except (ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) and number >= 0 else None
 
 
 def _dexscreener_links(links: list[object]) -> tuple[str, ...]:
