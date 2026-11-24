@@ -679,7 +679,7 @@ def test_solana_case_sensitive_addresses_survive_discovery_and_registry(tmp_path
     }
     monkeypatch.setattr(urllib.request, "urlopen", _urlopen(payload))
     gecko = GeckoTerminalDiscoveryProvider().discover(limit=10)
-    assert [row.metadata["contract_address"] for row in gecko] == list(addresses)
+    assert [(row.metadata or {})["contract_address"] for row in gecko] == list(addresses)
     assert len({row.slug for row in gecko}) == 2
     profiles = {
         "/token-profiles/latest/v1": [{"chainId": "solana", "tokenAddress": address} for address in addresses],
@@ -687,7 +687,7 @@ def test_solana_case_sensitive_addresses_survive_discovery_and_registry(tmp_path
     }
     monkeypatch.setattr(urllib.request, "urlopen", _urlopen_by_path(profiles))
     dex = DexScreenerDiscoveryProvider().discover(limit=10)
-    assert [row.metadata["contract_address"] for row in dex] == list(addresses)
+    assert [(row.metadata or {})["contract_address"] for row in dex] == list(addresses)
     repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
     engine = CandidateDiscoveryEngine(
         repository,
