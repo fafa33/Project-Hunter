@@ -296,6 +296,10 @@ class Topology:
     """The production issuer composition over one durable authority database."""
 
     def __init__(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, document: str) -> None:
+        # This topology exercises the local issuer, not hosted receipt publication.
+        # The outer CI job's identity is unrelated to this synthetic authorization.
+        monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+        monkeypatch.delenv("GITHUB_RUN_ATTEMPT", raising=False)
         self.document = document
         self.marker = _provider_environment(monkeypatch, tmp_path)
         self.database = tmp_path / "evidence.sqlite"
