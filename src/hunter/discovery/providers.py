@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import time
 import urllib.error
@@ -187,8 +188,8 @@ class GeckoTerminalDiscoveryProvider:
                 continue
             token_id = str(item.get("id") or "").strip()
             name = str(attributes.get("name") or "").strip()
-            address = str(attributes.get("address") or "").strip().lower()
             network = _geckoterminal_network(token_id, relationships)
+            address = normalize_contract_address(attributes.get("address"), network or "")
             if not token_id or not name or not address or not network:
                 continue
             key = (network, address)
@@ -200,7 +201,7 @@ class GeckoTerminalDiscoveryProvider:
                 DiscoveredCandidate(
                     provider=self.name,
                     provider_id=token_id,
-                    slug=_slug(f"{network}-{address}"),
+                    slug=contract_slug(network, address),
                     name=name,
                     symbol=str(attributes.get("symbol") or "").upper() or None,
                     sector=str(pool_metadata.get("dex")) if pool_metadata.get("dex") else "dex_liquidity",
@@ -261,7 +262,7 @@ class DexScreenerDiscoveryProvider:
                 if not isinstance(item, dict):
                     continue
                 chain = str(item.get("chainId") or "").strip()
-                address = str(item.get("tokenAddress") or "").strip().lower()
+                address = normalize_contract_address(item.get("tokenAddress"), chain)
                 if not chain or not address:
                     continue
                 key = (chain, address)
@@ -273,7 +274,7 @@ class DexScreenerDiscoveryProvider:
                     DiscoveredCandidate(
                         provider=self.name,
                         provider_id=f"{chain}:{address}",
-                        slug=_slug(f"{chain}-{address}"),
+                        slug=contract_slug(chain, address),
                         name=_dexscreener_name(item, chain, address),
                         symbol=None,
                         sector="dex_market",
@@ -433,3 +434,19 @@ def _dexscreener_name(item: dict[str, object], chain: str, address: str) -> str:
 def _slug(value: str) -> str:
     normalized = "".join(character.lower() if character.isalnum() else "-" for character in value)
     return "-".join(part for part in normalized.split("-") if part)
+
+
+def normalize_contract_address(value: object, chain: str) -> str:
+    address = str(value or "").strip()
+    # Hex EVM addresses are case-insensitive; other identifiers are not assumed to be.
+    if chain.strip().lower() != "solana" and address.startswith(("0x", "0X")):
+        return address.lower()
+    return address
+
+
+def contract_slug(chain: str, address: str) -> str:
+    if chain.strip().lower() != "solana" and address.startswith("0x"):
+        return _slug(f"{chain}-{address}")
+    # A case-folded slug is not an identity for base58 addresses.
+    digest = hashlib.sha256(address.encode()).hexdigest()
+    return f"{_slug(chain)}-address-{digest}"
