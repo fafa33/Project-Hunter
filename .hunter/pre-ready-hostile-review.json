@@ -21,7 +21,7 @@
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "A fresh judgement was substantiated for the exact staged candidate (base a4a9b9e1, staged index head derived from 87f87d6a) and Issue #587, whose live body defines no acceptance-criteria section. The repository writer finalizer regenerates .hunter/pre-ready-hostile-review.json from staged git blob transitions; the canonical pre-push hook enforces clean tree, exact HEAD, verified Farhad5778 signature and deterministic gates. Focused verification reports 72 tests passed in 22.24 seconds; root cause and regression evidence are recorded as PRH-136 in docs/DEFECT_REGISTRY.json. No merge, new PR, release, scheduler change, production restart or CI rerun loop is claimed; PR #788 remains Draft pending explicit owner merge approval.",
+        "evidence": "A fresh judgement was substantiated for the exact staged candidate (base a4a9b9e1, staged index head derived from 87f87d6a) and Issue #587, whose live body defines no acceptance-criteria section. The repository writer finalizer regenerates .hunter/pre-ready-hostile-review.json from staged git blob transitions; the canonical pre-push hook enforces clean tree, exact HEAD, verified Farhad5778 signature and deterministic gates. Focused verification reports 72 tests passed in 22.24 seconds; root cause and regression evidence are recorded as PRH-136 in docs/DEFECT_REGISTRY.json. No merge, new PR, release, scheduler change, production restart or CI rerun loop is claimed; PR #788 remains Draft pending explicit owner merge approval. One pre-push attempt was blocked fail-closed because the PRH-136 regression-test selector was malformed; the selector was corrected to the exact node tests/test_automation.py::test_cli_commands and the Defect Prevention Guard re-passed before this final signed commit.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -108,7 +108,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Deterministic regressions use monkeypatched clocks, payloads, urlopen, executor delegates and temporary SQLite repositories; no test asserts on a live Issue body or provider response. Root cause and regression evidence for the CI-hang class are recorded through the existing lifecycle as PRH-136 in docs/DEFECT_REGISTRY.json.",
+        "evidence": "Deterministic regressions use monkeypatched clocks, payloads, urlopen, executor delegates and temporary SQLite repositories; no test asserts on a live Issue body or provider response. Root cause and regression evidence for the CI-hang class are recorded through the existing lifecycle as PRH-136 in docs/DEFECT_REGISTRY.json. The first push attempt's DPM rejection was corrected by pinning the single valid regression selector; the guard was re-run locally and passed before finalization.",
         "family": "DFF-035",
         "outcome": "clear"
       },
@@ -165,7 +165,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "a98e513c91b5cb6e66c81678f1b774821a2a3a2d",
+        "blob_sha": "16d9d9f7348ed20ddb6879a4c758f1407d2db8af",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -237,11 +237,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "25d31723be2318046c851b1eed8a12708145c59d9452fe61f8c8596ecf47d97d"
+    "review_target_digest": "c560c473ed869e3872320bf77f52f9bb0036f72a057d75537bfd64c832723588"
   },
-  "review_id": "8f07cb0dade0e870668e3ad9fa4aa1a597460340472c5f2cac7d8475197f86f8",
+  "review_id": "df8ebfae29fa304dd53d0ecde7d233e5566e43b47b271baddfb3cfc5124cbedf",
   "review_request": {
-    "claims_id": "8f07cb0dade0e870668e3ad9fa4aa1a597460340472c5f2cac7d8475197f86f8",
+    "claims_id": "df8ebfae29fa304dd53d0ecde7d233e5566e43b47b271baddfb3cfc5124cbedf",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

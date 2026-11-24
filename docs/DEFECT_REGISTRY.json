@@ -1220,7 +1220,7 @@
       "classification": "systemic",
       "guard_boundary": "deterministic CLI regression lane, at each tests/test_automation.py invocation of the automation start command",
       "guard": "The production automation start default stays indefinite by owner design (the LaunchAgent deliberately omits --max-iterations); the deterministic suite supplies its own finite bound. test_cli_commands now invokes automation start with --max-iterations 1, so the CLI test terminates on the command's own contract instead of an external CI timeout. No scheduler, deployment configuration, production default or iteration ceiling was changed.",
-      "test": "tests/test_automation.py::test_cli_commands (staged remediation; focused verification 72 passed in 22.24s)",
+      "test": "tests/test_automation.py::test_cli_commands",
       "status": "guarded"
     }
   ],
