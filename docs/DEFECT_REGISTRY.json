@@ -1602,7 +1602,7 @@
     {
       "id": "DFF-014",
       "title": "pending-prerequisite-reported-as-failure",
-      "invariant": "A hosted prerequisite that is still running publishes pending; only an invalid, absent, untrusted or wrongly-bound proof publishes failure. 'Still running' is decided from observable run state for the exact candidate head, never from the presence of a published status, because a proof that publishes its status last has no status for the whole time it is being produced. A head left pending is re-evaluated when the proof lands, and pending never satisfies admission, readiness or merge. Every trusted proof completion that can move admission from pending to eligible must wake the privileged orchestrator; a status-only refresh is not sufficient.",
+      "invariant": "A hosted prerequisite that is still running publishes pending; only an invalid, absent, untrusted or wrongly-bound proof publishes failure. 'Still running' is decided from observable run state for the exact candidate head, never from the presence of a published status, because a proof that publishes its status last has no status for the whole time it is being produced. A head left pending is re-evaluated when the proof lands, and pending never satisfies admission, readiness or merge. Every trusted proof completion that can move admission from pending to eligible must wake the privileged orchestrator; a status-only refresh is not sufficient. Within a trusted proof publisher, dependency success is not terminal API evidence: bounded observation must obtain a unique terminal job for the exact run and attempt before publication; stale, ambiguous or contradictory evidence never authorizes success.",
       "applicability": {
         "changed_paths": [
           "scripts/",
@@ -1610,12 +1610,13 @@
           ".github/workflows/",
           "docs/CODE_WRITE_POLICY.json",
           "docs/DEFECT_REGISTRY.json",
-          "docs/DEFECT_PREVENTION_LIFECYCLE.json"
+          "docs/DEFECT_PREVENTION_LIFECYCLE.json",
+          ".github/workflows/hunter-trusted-preflight-upgrade.yml"
         ],
         "rationale": "Admission and readiness controllers are where a transient state can be published as a defect."
       },
       "prevention": {
-        "mechanism": "Candidate admission propagates a tri-state ingress verdict, so a running trusted proof is reported as pending rather than as a blocked candidate, and the candidate-admission controller subscribes to trusted-upgrade completion so a pending head is reconciled once the proof exists. Where the proof's status is absent, the controller additionally resolves whether an eligible trusted run for that exact head is queued or in progress, using the same identity predicate the completed proof must satisfy, so the two cannot disagree about which runs count. Unavailable or malformed run evidence fails closed rather than being described as merely waiting, and an independent governance blocker is evaluated before the dependency wait so a real defect is never reported as a clean wait.",
+        "mechanism": "Candidate admission propagates a tri-state ingress verdict, so a running trusted proof is reported as pending rather than as a blocked candidate, and the candidate-admission controller subscribes to trusted-upgrade completion so a pending head is reconciled once the proof exists. Where the proof's status is absent, the controller additionally resolves whether an eligible trusted run for that exact head is queued or in progress, using the same identity predicate the completed proof must satisfy, so the two cannot disagree about which runs count. Unavailable or malformed run evidence fails closed rather than being described as merely waiting, and an independent governance blocker is evaluated before the dependency wait so a real defect is never reported as a clean wait. PRH-135: the checkout-free publisher observes at most five snapshots of its own run jobs, without rerunning validation or polling another workflow, and binds only same-attempt terminal evidence.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_governance_review_v2.py::verify_code_write_ingress_provenance"
       },
@@ -1628,13 +1629,15 @@
         "tests/test_issue_417_governance_waiting_state.py::test_an_ineligible_active_run_is_not_a_waiting_dependency",
         "tests/test_issue_417_governance_waiting_state.py::test_a_real_blocker_alongside_an_active_run_is_failure_not_waiting",
         "tests/test_issue_419_trusted_parallel_lane.py::test_waiting_still_satisfies_neither_admission_nor_merge_readiness",
-        "tests/test_issue_417_governance_waiting_state.py::test_the_same_head_succeeds_once_the_trusted_proof_lands"
+        "tests/test_issue_417_governance_waiting_state.py::test_the_same_head_succeeds_once_the_trusted_proof_lands",
+        "tests/test_pr376_prevention_regressions.py::test_trusted_publisher_waits_for_exact_attempt_terminal_evidence"
       ],
       "lifecycle": "hosted-enforced",
       "sources": [
         "Issue #412",
         "PR #413 independent review (Codex P1)",
-        "Issue #417 (recurrence observed on PR #416 head fda1ad0)"
+        "Issue #417 (recurrence observed on PR #416 head fda1ad0)",
+        "PRH-135 / PR #786 / run 45376425177; merge d54cce6f5f40f432bedf23c93764802b8e5b3971; hosted post-merge publication pending verification."
       ],
       "regression_tests": [
         "tests/test_hunter_governance_cleanup.py::test_reconcile_wakes_when_trusted_preflight_upgrade_completes"
