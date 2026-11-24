@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any, cast
 
 import pytest
 
@@ -16,12 +19,13 @@ from hunter.discovery import (
     CandidateRegistryRepository,
 )
 from hunter.discovery.automation import discovery_automation_status, install_discovery_jobs
-from hunter.discovery.configuration import DiscoveryConfig
+from hunter.discovery.configuration import DiscoveryConfig, DiscoveryProviderConfig
 from hunter.discovery.providers import (
     DexScreenerDiscoveryProvider,
     DiscoveredCandidate,
     DiscoveryProvider,
     GeckoTerminalDiscoveryProvider,
+    _request_json,
 )
 
 
@@ -672,6 +676,38 @@ def _urlopen_by_path(payloads: dict[str, object]):
     return opener
 
 
+def test_request_json_honors_bounded_retry_after_on_http_429(monkeypatch) -> None:
+    sleeps: list[float] = []
+    calls: list[str] = []
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                429,
+                "Too Many Requests",
+                {"Retry-After": "90"},
+                None,
+            )
+        return _JsonResponse({"ok": True})
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    payload = _request_json(
+        "https://example.invalid/api/v3/coins/markets",
+        provider="CoinGecko",
+        timeout_seconds=1,
+        max_attempts=2,
+        backoff_seconds=0.001,
+        sleeper=sleeps.append,
+        max_retry_after_seconds=5.0,
+    )
+
+    assert payload == {"ok": True}
+    assert len(calls) == 2
+    assert sleeps == [5.0]  # provider window honored, capped at the configured ceiling
+
+
 def test_solana_case_sensitive_addresses_survive_discovery_and_registry(tmp_path, monkeypatch) -> None:
     addresses = ("AbC123", "aBc123")
     payload = {
@@ -815,11 +851,11 @@ def test_gecko_fallback_and_contract_bound_link_corroboration(monkeypatch) -> No
 
 
 def test_market_scan_resumes_persisted_page_and_wraps(tmp_path, monkeypatch) -> None:
-    from hunter.discovery.providers import CoinGeckoDiscoveryProvider
+    from hunter.discovery.providers import CoinGeckoDiscoveryProvider  # noqa: PLC0415
 
     pages = []
 
-    def fetch(self, path, params):
+    def fetch(self, path, params, meter=None):
         page = params["page"]
         pages.append(page)
         return [{"id": f"asset-{page}-{i}", "name": f"Asset {page}-{i}"} for i in range(2)] if page < 3 else []
@@ -839,3 +875,259 @@ def test_market_scan_resumes_persisted_page_and_wraps(tmp_path, monkeypatch) -> 
     assert pages == [1, 2, 3, 1]
     assert repository.stats().total_candidates == 4
     assert repository.discovery_page_cursor("coingecko") == 1
+
+
+class _FakeGeckoApi:
+    def __init__(self, catalogues: dict[int, list[dict[str, object]]], pools: dict[tuple[str, int], object]):
+        self.catalogues = catalogues
+        self.pools = pools
+        self.calls: list[tuple[str, int]] = []
+
+    def __call__(self, provider: object, path: str, params: dict[str, object], meter: object = None) -> object:
+        if meter is not None:
+            meter.consume(time.sleep)
+        page = int(str(params.get("page", 1)))
+        self.calls.append((path, page))
+        if path == "/networks":
+            return {
+                "data": self.catalogues.get(page, []),
+                "links": {"next": page + 1} if page < max(self.catalogues, default=0) else None,
+            }
+        if path == "/networks/trending_pools":
+            return self.pools.get(("trending", page), _gecko_pool_payload("eth", "0xtrending", "0xtoken1"))
+        if path.startswith("/networks/") and path.endswith("/pools"):
+            network = path.split("/")[2]
+            return self.pools.get((network, page), {"data": [], "included": []})
+        raise AssertionError(f"unexpected path: {path}")
+
+
+def _gecko_pool_payload(network: str, pool_address: str, token_address: str) -> dict[str, object]:
+    quote = "So111" if network == "solana" else "0xweth"
+    return {
+        "data": [
+            {
+                "attributes": {"address": pool_address, "name": "Pool", "reserve_in_usd": "100"},
+                "relationships": {
+                    "base_token": {"data": {"id": f"{network}_{token_address}"}},
+                    "quote_token": {"data": {"id": f"{network}_{quote}"}},
+                    "dex": {"data": {"id": "dex"}},
+                },
+            }
+        ],
+        "included": [
+            {
+                "id": f"{network}_{token_address}",
+                "type": "token",
+                "attributes": {"name": "Base Token", "symbol": "BASE", "address": token_address},
+            },
+            {
+                "id": f"{network}_{quote}",
+                "type": "token",
+                "attributes": {"name": "Quote Token", "symbol": "QUOTE", "address": quote},
+            },
+        ],
+    }
+
+
+def _candidate_metadata(row: DiscoveredCandidate) -> dict[str, Any]:
+    return row.metadata or {}
+
+
+def test_geckoterminal_enumerates_network_catalogue_and_resumes_pages(tmp_path, monkeypatch) -> None:
+    from hunter.discovery.providers import ScanBudget
+
+    api = _FakeGeckoApi(
+        {1: [{"id": "eth"}], 2: [{"id": "solana"}]},
+        {
+            ("eth", 1): _gecko_pool_payload("eth", "0xpool1", "0xtoken1"),
+            ("solana", 1): _gecko_pool_payload("solana", "pool1", "TokenA"),
+        },
+    )
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    provider = GeckoTerminalDiscoveryProvider()
+    budget = ScanBudget(max_requests=3)
+
+    first = provider.discover_scan(state=None, budget=budget)
+    second = provider.discover_scan(state=first.state, budget=budget)
+
+    assert first.status == "partial"  # bounded by the request budget
+    assert [_candidate_metadata(row)["chain"] for row in first.candidates] == ["eth", "eth"]
+    assert ("/networks", 2) in api.calls  # second catalogue page enumerated after resume
+    assert ("/networks/solana/pools", 1) in api.calls
+    assert second.state["passes"] >= 1  # catalogue exhausted and a new pass started
+    assert api.calls[0] == ("/networks", 1)
+    assert ("/networks/eth/pools", 1) in api.calls
+    assert (
+        len(
+            {
+                (_candidate_metadata(row)["chain"], _candidate_metadata(row)["contract_address"])
+                for row in first.candidates + second.candidates
+            }
+        )
+        >= 2
+    )
+
+
+def test_geckoterminal_checkpoint_recovers_and_detects_new_pools(tmp_path, monkeypatch) -> None:
+    api = _FakeGeckoApi(
+        {1: [{"id": "eth"}]},
+        {("eth", 1): _gecko_pool_payload("eth", "0xpool1", "0xtoken1")},
+    )
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(
+        providers={
+            "geckoterminal": DiscoveryProviderConfig(enabled=True, max_requests_per_cycle=3),
+        }
+    )
+    first_engine = CandidateDiscoveryEngine(
+        repository, config, providers={"geckoterminal": GeckoTerminalDiscoveryProvider()}
+    )
+    first = first_engine.sync(provider="geckoterminal")
+    first_state = repository.scan_state("geckoterminal")
+
+    # A fresh engine and a fresh provider must resume from the persisted state.
+    second_engine = CandidateDiscoveryEngine(
+        repository, config, providers={"geckoterminal": GeckoTerminalDiscoveryProvider()}
+    )
+    second = second_engine.sync(provider="geckoterminal")
+    second_state = repository.scan_state("geckoterminal")
+
+    assert first_state is not None and second_state is not None
+    assert second_state["passes"] == first_state["passes"] + 1
+    assert second_state["catalogue_page"] == first_state["catalogue_page"]
+    assert second_state["observed_pools"] >= first_state["observed_pools"]
+    assert first.candidates_created == 2
+    assert second.candidates_created == 0
+    assert len(repository.pool_observations()) == 1
+    assert second_state["new_pools"] == 0
+    assert first.status in {"succeeded", "partial"} and second.status in {"succeeded", "partial"}
+
+    api.pools[("eth", 2)] = _gecko_pool_payload("eth", "0xpool2", "0xtoken2")
+    third = second_engine.sync(provider="geckoterminal")
+    assert len(repository.pool_observations()) == 2
+    third_state = repository.scan_state("geckoterminal")
+    assert third_state is not None
+    assert third_state["new_pools"] == 1
+    assert third.candidates_created == 1  # only the new pool's base token is new
+
+
+def test_geckoterminal_rate_budget_and_failure_recovery_keep_partial_state(monkeypatch) -> None:
+    from hunter.discovery.providers import ScanBudget
+
+    api = _FakeGeckoApi(
+        {1: [{"id": "eth"}]},
+        {("eth", 1): _gecko_pool_payload("eth", "0xpool1", "0xtoken1")},
+    )
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    provider = GeckoTerminalDiscoveryProvider()
+
+    bounded = provider.discover_scan(state=None, budget=ScanBudget(max_requests=2))
+    assert bounded.requests == 2
+    assert bounded.status == "partial"
+    assert len(bounded.candidates) == 2
+    assert bounded.state["pool_page"] == 2
+
+    def failing(provider: object, path: str, params: dict[str, object], meter: object = None) -> object:
+        if path == "/networks":
+            return api(provider, path, params, meter)
+        raise ProviderUnavailableError("rate limited")
+
+    monkeypatch.setattr(GeckoTerminalDiscoveryProvider, "_get", failing)
+    recovered = provider.discover_scan(state=None, budget=ScanBudget(max_requests=4))
+    assert recovered.status == "partial"
+    assert recovered.candidates == ()
+    assert recovered.error is not None
+    assert recovered.state["last_error"] == recovered.error
+    assert recovered.state["pool_page"] == 1
+
+
+def test_geckoterminal_contract_dedup_across_pool_pages(monkeypatch) -> None:
+    from hunter.discovery.providers import ScanBudget
+
+    api = _FakeGeckoApi(
+        {1: [{"id": "eth"}]},
+        {
+            ("eth", 1): _gecko_pool_payload("eth", "0xpool1", "0xtoken1"),
+            ("eth", 2): _gecko_pool_payload("eth", "0xpool2", "0xtoken1"),
+        },
+    )
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    result = GeckoTerminalDiscoveryProvider().discover_scan(state=None, budget=ScanBudget(max_requests=5))
+    contracts = [
+        (_candidate_metadata(row)["chain"], _candidate_metadata(row)["contract_address"]) for row in result.candidates
+    ]
+    assert len(contracts) == len(set(contracts))
+    assert ("eth", "0xweth") in contracts
+
+
+def test_universe_enumeration_measures_real_coverage_without_fabrication(tmp_path, monkeypatch) -> None:
+    from hunter.discovery.providers import CoinGeckoDiscoveryProvider
+
+    def fake_get(self: object, path: str, params: dict[str, object], meter: object = None) -> object:
+        if path == "/coins/list":
+            return [{"id": "bitcoin"}, {"id": "aave"}, {"id": "unseen"}]
+        page = int(str(params.get("page", 1)))
+        return [{"id": "bitcoin", "name": "Bitcoin"}, {"id": "aave", "name": "Aave"}] if page == 1 else []
+
+    monkeypatch.setattr(CoinGeckoDiscoveryProvider, "_get", fake_get)
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(providers={"coingecko": DiscoveryProviderConfig(enabled=True, limit=2)})
+    engine = CandidateDiscoveryEngine(repository, config, providers={"coingecko": CoinGeckoDiscoveryProvider()})
+
+    unmeasured = cast(dict[str, Any], engine.global_coverage())
+    assert unmeasured["universe"]["coverage"] is None
+    assert unmeasured["networks"]["coverage"] is None
+    assert unmeasured["pools"]["coverage"] is None
+    assert {item["provider"] for item in unmeasured["unsupported_scope"]} == {
+        "dexscreener",
+        "defillama",
+        "geckoterminal",
+    }
+
+    universe = engine.enumerate_universe()
+    engine.sync(provider="coingecko", limit=2)
+    measured = cast(dict[str, Any], engine.global_coverage())
+    assert universe["status"] == "succeeded" and universe["asset_count"] == 3
+    assert repository.universe_assets("coingecko") == ("aave", "bitcoin", "unseen")
+    assert measured["universe"]["accessible_assets"] == 3
+    assert measured["universe"]["matched_assets"] == 2
+    assert measured["universe"]["coverage"] == round(2 / 3, 6)
+    assert measured["universe"]["observed_at"] is not None
+    assert measured["freshness"]["newest_observation"] is not None
+
+
+def test_trending_feed_is_distinct_from_global_enumeration(monkeypatch) -> None:
+    from hunter.discovery.providers import ScanBudget
+
+    api = _FakeGeckoApi({1: [{"id": "eth"}]}, {("eth", 1): _gecko_pool_payload("eth", "0xpool1", "0xtoken1")})
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    provider = GeckoTerminalDiscoveryProvider()
+
+    trending = provider.discover(limit=10)
+    enumerated = provider.discover_scan(state=None, budget=ScanBudget(max_requests=3))
+
+    assert trending and all(_candidate_metadata(row)["discovery_mode"] == "trending_feed" for row in trending)
+    assert enumerated.candidates and all(
+        _candidate_metadata(row)["discovery_mode"] == "network_pool_enumeration" for row in enumerated.candidates
+    )

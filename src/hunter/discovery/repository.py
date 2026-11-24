@@ -561,6 +561,138 @@ class CandidateRegistryRepository:
                 (provider, cursor, _dt(datetime.now(tz=UTC)), status),
             )
 
+    def save_scan_state(self, provider: str, state: dict[str, Any], status: str) -> None:
+        cursor = "scan:" + json.dumps(state, sort_keys=True, separators=(",", ":"))
+        self.save_checkpoint(provider, cursor, status)
+
+    def scan_state(self, provider: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT cursor FROM checkpoints WHERE provider = ?", (provider,)).fetchone()
+        value = str(row["cursor"]) if row else ""
+        if not value.startswith("scan:"):
+            return None
+        try:
+            state = json.loads(value[5:])
+        except json.JSONDecodeError:
+            return None
+        return state if isinstance(state, dict) else None
+
+    def save_universe_assets(self, provider: str, asset_ids: tuple[str, ...] | list[str], observed_at: str) -> None:
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            conn.execute("DELETE FROM universe_assets WHERE provider = ?", (provider,))
+            conn.executemany(
+                "INSERT INTO universe_assets (provider, asset_id, observed_at) VALUES (?, ?, ?)",
+                ((provider, str(asset_id), observed_at) for asset_id in dict.fromkeys(asset_ids)),
+            )
+
+    def universe_assets(self, provider: str) -> tuple[str, ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT asset_id FROM universe_assets WHERE provider = ? ORDER BY asset_id", (provider,)
+            ).fetchall()
+        return tuple(str(row["asset_id"]) for row in rows)
+
+    def universe_observed_at(self, provider: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT MAX(observed_at) AS observed_at FROM universe_assets WHERE provider = ?", (provider,)
+            ).fetchone()
+        return str(row["observed_at"]) if row and row["observed_at"] else None
+
+    def identifier_values(self, namespace: str) -> tuple[str, ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT value FROM identifiers WHERE namespace = ? ORDER BY value", (namespace,)
+            ).fetchall()
+        return tuple(str(row["value"]) for row in rows)
+
+    def has_identifier(self, namespace: str, value: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM identifiers WHERE namespace = ? AND value = ? LIMIT 1", (namespace, value)
+            ).fetchone()
+        return row is not None
+
+    def save_network_observations(self, observations: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> int:
+        created = 0
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            for item in observations:
+                network_id = str(item.get("network_id") or "").strip()
+                if not network_id:
+                    continue
+                observed_at = str(item.get("observed_at") or _dt(datetime.now(tz=UTC)))
+                existing = conn.execute(
+                    "SELECT 1 FROM network_observations WHERE network_id = ?", (network_id,)
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        "UPDATE network_observations SET name = ?, source_url = ?, last_seen_at = ? WHERE network_id = ?",
+                        (item.get("name"), item.get("source_url"), observed_at, network_id),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO network_observations
+                            (network_id, name, source_url, first_seen_at, last_seen_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (network_id, item.get("name"), item.get("source_url"), observed_at, observed_at),
+                    )
+                    created += 1
+        return created
+
+    def network_observations(self) -> tuple[dict[str, Any], ...]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM network_observations ORDER BY network_id").fetchall()
+        return tuple(dict(row) for row in rows)
+
+    def save_pool_observations(self, observations: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> int:
+        created = 0
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            for item in observations:
+                network = str(item.get("network") or "").strip()
+                address = str(item.get("pool_address") or "").strip()
+                if not network or not address:
+                    continue
+                observed_at = str(item.get("observed_at") or _dt(datetime.now(tz=UTC)))
+                contracts = json.dumps(sorted({str(value) for value in item.get("contract_addresses", ())}))
+                existing = conn.execute(
+                    "SELECT 1 FROM pool_observations WHERE network = ? AND pool_address = ?", (network, address)
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        """
+                        UPDATE pool_observations
+                        SET contract_addresses = ?, source_url = ?, last_seen_at = ?
+                        WHERE network = ? AND pool_address = ?
+                        """,
+                        (contracts, item.get("source_url"), observed_at, network, address),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO pool_observations
+                            (network, pool_address, contract_addresses, source_url, first_seen_at, last_seen_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (network, address, contracts, item.get("source_url"), observed_at, observed_at),
+                    )
+                    created += 1
+        return created
+
+    def pool_observations(self, *, network: str | None = None) -> tuple[dict[str, Any], ...]:
+        with self._connect() as conn:
+            if network:
+                rows = conn.execute(
+                    "SELECT * FROM pool_observations WHERE network = ? ORDER BY network, pool_address", (network,)
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM pool_observations ORDER BY network, pool_address").fetchall()
+        return tuple(dict(row) for row in rows)
+
     def _initialize(self) -> None:
         with self._connect() as conn:
             conn.executescript("""
@@ -685,6 +817,33 @@ class CandidateRegistryRepository:
                     updated_at TEXT NOT NULL,
                     status TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS universe_assets (
+                    provider TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    PRIMARY KEY (provider, asset_id)
+                );
+                CREATE TABLE IF NOT EXISTS network_observations (
+                    network_id TEXT NOT NULL,
+                    name TEXT,
+                    source_url TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    PRIMARY KEY (network_id)
+                );
+                CREATE TABLE IF NOT EXISTS pool_observations (
+                    network TEXT NOT NULL,
+                    pool_address TEXT NOT NULL,
+                    contract_addresses TEXT NOT NULL,
+                    source_url TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    PRIMARY KEY (network, pool_address)
+                );
+                CREATE INDEX IF NOT EXISTS universe_assets_provider_idx
+                    ON universe_assets (provider);
+                CREATE INDEX IF NOT EXISTS pool_observations_network_idx
+                    ON pool_observations (network);
                 CREATE TABLE IF NOT EXISTS canonical_entity_history (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                     digest TEXT NOT NULL UNIQUE,

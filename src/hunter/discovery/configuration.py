@@ -16,6 +16,8 @@ class DiscoveryProviderConfig:
     timeout_seconds: int = 30
     max_attempts: int = 3
     backoff_seconds: float = 0.5
+    max_requests_per_cycle: int = 8
+    min_interval_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -79,6 +81,12 @@ def _provider_config(name: str, raw: dict[str, Any]) -> DiscoveryProviderConfig:
         timeout_seconds=int(os.getenv(f"{env_prefix}_TIMEOUT_SECONDS", str(raw.get("timeout_seconds", 30)))),
         max_attempts=int(os.getenv(f"{env_prefix}_MAX_ATTEMPTS", str(raw.get("max_attempts", 3)))),
         backoff_seconds=float(os.getenv(f"{env_prefix}_BACKOFF_SECONDS", str(raw.get("backoff_seconds", 0.5)))),
+        max_requests_per_cycle=int(
+            os.getenv(f"{env_prefix}_MAX_REQUESTS_PER_CYCLE", str(raw.get("max_requests_per_cycle", 8)))
+        ),
+        min_interval_seconds=float(
+            os.getenv(f"{env_prefix}_MIN_INTERVAL_SECONDS", str(raw.get("min_interval_seconds", 0.0)))
+        ),
     )
 
 

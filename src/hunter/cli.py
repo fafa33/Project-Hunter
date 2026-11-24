@@ -246,6 +246,8 @@ def main(argv: list[str] | None = None) -> int:
     discovery_sub.add_parser("status")
     discovery_sub.add_parser("stats")
     discovery_sub.add_parser("coverage")
+    discovery_sub.add_parser("global-coverage")
+    discovery_sub.add_parser("universe")
     discovery_sub.add_parser("validate")
     discovery_sub.add_parser("registry")
     discovery_candidates = discovery_sub.add_parser("candidates")
@@ -1127,6 +1129,13 @@ def _discovery(args: object) -> int:
             f"sources={stats.source_count} last_run={last_run}"
         )
         return 0
+    if command == "global-coverage":
+        print(json.dumps(engine.global_coverage(), indent=2, sort_keys=True, default=str))
+        return 0
+    if command == "universe":
+        result = engine.enumerate_universe()
+        print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        return 0 if result["status"] in {"succeeded", "unsupported"} else 2
     if command == "coverage":
         stats = repository.stats()
         expected = len(load_market_validation_config(Path(config.market_validation_config)).project_universe)
@@ -1196,6 +1205,24 @@ def _discovery(args: object) -> int:
         print(f"assets_by_category={json.dumps(metrics['assets_by_category'], sort_keys=True)}")
         print(f"provider_overlap={json.dumps(metrics['provider_overlap'], sort_keys=True)}")
         print(f"provider_uniqueness={json.dumps(metrics['provider_uniqueness'], sort_keys=True)}")
+        global_coverage = cast(dict[str, Any], engine.global_coverage())
+        universe = cast(dict[str, Any], global_coverage["universe"])
+        networks = cast(dict[str, Any], global_coverage["networks"])
+        pools = cast(dict[str, Any], global_coverage["pools"])
+        universe_coverage = "unmeasured" if universe["coverage"] is None else f"{universe['coverage']:.2%}"
+        network_coverage = "unmeasured" if networks["coverage"] is None else f"{networks['coverage']:.2%}"
+        print(
+            f"global_universe_assets={universe['accessible_assets']} "
+            f"discovered_universe_assets={universe['matched_assets']} "
+            f"global_universe_coverage={universe_coverage}"
+        )
+        print(
+            f"catalogued_networks={networks['catalogued_networks']} "
+            f"scanned_networks={networks['scanned_networks']} "
+            f"network_coverage={network_coverage}"
+        )
+        print(f"observed_pools={pools['observed_pools']} new_pools={pools['new_pools']} " f"pool_coverage=unmeasured")
+        print(f"unsupported_scope={json.dumps(global_coverage['unsupported_scope'], sort_keys=True)}")
         return 0
     if command == "validate":
         stats = repository.stats()

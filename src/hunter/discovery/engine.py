@@ -22,6 +22,7 @@ from hunter.discovery.providers import (
     DiscoveredCandidate,
     DiscoveryProvider,
     GeckoTerminalDiscoveryProvider,
+    ScanBudget,
     contract_slug,
     normalize_contract_address,
 )
@@ -123,12 +124,53 @@ class CandidateDiscoveryEngine:
             self.repository.save_run(run)
             return run
         next_cursor: int | None = None
+        source = self.providers[provider]
+        scan_status = "succeeded"
+        scan_message = ""
         try:
-            budget = limit or self.config.provider(provider).limit or 250
-            source = self.providers[provider]
-            if isinstance(source, (CoinGeckoDiscoveryProvider, GeckoTerminalDiscoveryProvider)) and limit is None:
+            provider_config = self.config.provider(provider)
+            budget = limit or provider_config.limit or 250
+            max_requests = getattr(provider_config, "max_requests_per_cycle", 8)
+            min_interval = getattr(provider_config, "min_interval_seconds", 0.0)
+            if not isinstance(max_requests, int):
+                max_requests = 8
+            if not isinstance(min_interval, (int, float)):
+                min_interval = 0.0
+            scan_budget = ScanBudget(max_requests=max_requests, min_interval_seconds=float(min_interval))
+            if isinstance(source, GeckoTerminalDiscoveryProvider):
+                result = source.discover_scan(
+                    state=self.repository.scan_state(provider),
+                    budget=scan_budget,
+                    observed_at=started_at.isoformat(),
+                    max_candidates=limit,
+                )
+                raw_candidates = result.candidates
+                self.repository.save_network_observations(
+                    tuple(
+                        {
+                            "network_id": network_id,
+                            "name": network_id,
+                            "source_url": f"{source.base_url.rstrip('/')}/networks",
+                            "observed_at": result.observed_at,
+                        }
+                        for network_id in result.network_ids
+                    )
+                )
+                new_pools = self.repository.save_pool_observations(result.pool_observations)
+                result.state["new_pools"] = new_pools
+                self.repository.save_scan_state(provider, result.state, result.status)
+                scan_status = result.status
+                scan_message = (
+                    f"requests={result.requests} networks={len(result.network_ids)} "
+                    f"pools={len(result.pool_observations)} new_pools={new_pools}"
+                )
+                if result.error:
+                    scan_message = f"{scan_message} error={result.error}"
+            elif isinstance(source, CoinGeckoDiscoveryProvider) and limit is None:
                 raw_candidates, next_cursor = source.discover_batch(
-                    limit=budget, cursor=self.repository.discovery_page_cursor(provider)
+                    limit=budget,
+                    cursor=self.repository.discovery_page_cursor(provider),
+                    budget=scan_budget,
                 )
             else:
                 raw_candidates = source.discover(limit=budget)
@@ -148,6 +190,7 @@ class CandidateDiscoveryEngine:
             return run
         candidates = tuple(self._provider_candidate(item, observed_at=started_at) for item in raw_candidates)
         created, updated = self.repository.upsert_many(candidates)
+        message = scan_message or f"synced {len(candidates)} candidates"
         run = DiscoveryRun(
             run_id=identity("candidate-discovery-run", {"provider": provider, "started_at": started_at}),
             provider=provider,
@@ -156,15 +199,151 @@ class CandidateDiscoveryEngine:
             candidates_seen=len(candidates),
             candidates_created=created,
             candidates_updated=updated,
-            status="succeeded",
-            message=f"synced {len(candidates)} candidates",
+            status=scan_status,
+            message=message,
         )
         self.repository.save_run(run)
         if next_cursor is not None:
             self.repository.save_checkpoint(provider, f"page:{next_cursor}", run.status)
-        elif not isinstance(self.providers[provider], (CoinGeckoDiscoveryProvider, GeckoTerminalDiscoveryProvider)):
+        elif not isinstance(source, (CoinGeckoDiscoveryProvider, GeckoTerminalDiscoveryProvider)):
             self.repository.save_checkpoint(provider, str(len(candidates)), run.status)
         return run
+
+    def enumerate_universe(self, provider: str = "coingecko") -> dict[str, object]:
+        """Persist the accessible provider universe used as a real coverage denominator."""
+        source = self.providers.get(provider)
+        if not isinstance(source, CoinGeckoDiscoveryProvider):
+            return {
+                "provider": provider,
+                "status": "unsupported",
+                "reason": "provider has no accessible global asset universe endpoint",
+                "observed_at": datetime.now(tz=UTC).isoformat(),
+            }
+        try:
+            payload = source.enumerate_universe()
+        except ProviderUnavailableError as exc:
+            return {
+                "provider": provider,
+                "status": "unavailable",
+                "reason": str(exc),
+                "observed_at": datetime.now(tz=UTC).isoformat(),
+            }
+        self.repository.save_universe_assets(
+            provider, tuple(str(value) for value in payload["asset_ids"]), str(payload["observed_at"])
+        )
+        return {
+            "provider": provider,
+            "status": "succeeded",
+            "scope": payload["scope"],
+            "asset_count": payload["asset_count"],
+            "observed_at": payload["observed_at"],
+            "source_url": payload["source_url"],
+        }
+
+    def global_coverage(self) -> dict[str, object]:
+        """Report coverage from measured denominators only; unmeasured values stay null."""
+        universe_ids = set(self.repository.universe_assets("coingecko"))
+        discovered_ids = set(self.repository.identifier_values("coingecko"))
+        matched = universe_ids & discovered_ids
+        universe_coverage = round(len(matched) / len(universe_ids), 6) if universe_ids else None
+        scan = self.repository.scan_state("geckoterminal") or {}
+        catalogue_ids = {str(value) for value in (scan.get("network_ids") or [])}
+        pools = self.repository.pool_observations()
+        scanned_networks = {str(item["network"]) for item in pools}
+        network_coverage = (
+            round(len(catalogue_ids & scanned_networks) / len(catalogue_ids), 6) if catalogue_ids else None
+        )
+        observations = [
+            str(source.observed_at)
+            for candidate in self.repository.list_candidates(limit=100_000)
+            for source in candidate.sources
+            if source.observed_at
+        ]
+        return {
+            "scope": "global_market_enumeration",
+            "generated_at": datetime.now(tz=UTC).isoformat(),
+            "universe": {
+                "provider": "coingecko",
+                "scope": "global_asset_universe",
+                "accessible_assets": len(universe_ids),
+                "discovered_assets": len(discovered_ids),
+                "matched_assets": len(matched),
+                "coverage": universe_coverage,
+                "unmeasured_reason": (
+                    None
+                    if universe_ids
+                    else "no verified accessible universe enumeration recorded; coverage is unmeasured"
+                ),
+                "observed_at": self.repository.universe_observed_at("coingecko"),
+                "provenance": "CoinGecko /coins/list snapshot persisted in the discovery registry",
+            },
+            "networks": {
+                "provider": "geckoterminal",
+                "scope": "network_catalogue_enumeration",
+                "catalogued_networks": len(catalogue_ids),
+                "scanned_networks": len(scanned_networks),
+                "coverage": network_coverage,
+                "unmeasured_reason": (
+                    None if catalogue_ids else "no network catalogue page has been enumerated; coverage is unmeasured"
+                ),
+            },
+            "pools": {
+                "provider": "geckoterminal",
+                "scope": "per_network_pool_pages",
+                "observed_pools": len(pools),
+                "new_pools": int(scan.get("new_pools") or 0),
+                "coverage": None,
+                "unmeasured_reason": "GeckoTerminal public API exposes no global pool denominator",
+            },
+            "freshness": {
+                "oldest_observation": min(observations) if observations else None,
+                "newest_observation": max(observations) if observations else None,
+                "universe_observed_at": self.repository.universe_observed_at("coingecko"),
+                "scan_observed_at": scan.get("updated_at"),
+            },
+            "provenance": {
+                "registry_path": self.config.registry_path,
+                "source_urls": {
+                    "universe": "https://api.coingecko.com/api/v3/coins/list",
+                    "networks": "https://api.geckoterminal.com/api/v2/networks",
+                },
+            },
+            "scan_progress": {
+                "coingecko_page": self.repository.discovery_page_cursor("coingecko"),
+                "geckoterminal": {
+                    key: scan.get(key)
+                    for key in (
+                        "catalogue_page",
+                        "catalogue_complete",
+                        "network_index",
+                        "pool_page",
+                        "passes",
+                        "observed_pools",
+                        "new_pools",
+                        "last_error",
+                        "updated_at",
+                    )
+                },
+            },
+            "unsupported_scope": [
+                {
+                    "provider": "dexscreener",
+                    "scope": "token_profile_and_boost_feed",
+                    "reason": "public profiles and paid boosts are not a global asset universe",
+                },
+                {
+                    "provider": "defillama",
+                    "scope": "protocol_catalogue",
+                    "reason": "protocol listings are not an exhaustive asset universe",
+                },
+                {
+                    "provider": "geckoterminal",
+                    "scope": "trending_pools",
+                    "reason": "popularity feed is distinct from network catalogue enumeration",
+                },
+            ],
+            "trending_feeds": ("geckoterminal:trending_pools", "dexscreener:token-boosts/top/v1"),
+        }
 
     def screen_candidates(self, *, limit: int = 1000) -> tuple[CandidateScreeningResult, ...]:
         screened_at = datetime.now(tz=UTC)
@@ -190,6 +369,7 @@ class CandidateDiscoveryEngine:
 
     def run_market_discovery(self, *, limit: int | None = None) -> dict[str, object]:
         seed_run = self.sync_configured_universe()
+        universe = self.enumerate_universe()
         provider_run = self.sync(provider="all", limit=limit)
         screening = self.screen_candidates()
         queue = self.refresh_queue()
@@ -197,6 +377,8 @@ class CandidateDiscoveryEngine:
         return {
             "seed_run": seed_run.run_id,
             "provider_run": provider_run.run_id,
+            "universe": universe,
+            "coverage": self.global_coverage(),
             "candidates": stats.total_candidates,
             "screened": len(screening),
             "queued": len(queue),
