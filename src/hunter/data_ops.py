@@ -36,6 +36,7 @@ DATA_OPS_JOB_IDS = (
 
 OPERATION_COMMANDS: dict[str, tuple[str, ...]] = {
     "discovery_market_run": ("discovery", "run", "--limit", "250"),
+    "discovery_market_run_backfill": ("discovery", "run", "--mode", "backfill", "--limit", "250"),
     "discovery_screen": ("discovery", "screen"),
     "discovery_queue_refresh": ("discovery", "queue", "refresh"),
     "coingecko_market_sync": ("coingecko", "sync"),

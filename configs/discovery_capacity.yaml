@@ -1,0 +1,130 @@
+# Free-provider capacity inventory for bounded global discovery.
+#
+# rate_limit_provenance / batch_limit_provenance / monthly_credits_provenance:
+#   official_documentation - published by the provider
+#   owner_specified        - supplied by the repository owner, not published in the fetched docs
+#   not_documented         - no numeric free ceiling found; leave the value null
+# Observed request consumption, retries, cooldowns and throughput are NOT stored here;
+# they are persisted in the discovery registry by CapacityLedger and reported by
+# `hunter discovery global-coverage`.
+endpoints:
+  - provider: coingecko
+    endpoint: coins_list
+    rate_limit_per_minute: 100
+    rate_limit_provenance: official_documentation
+    authentication: demo_key_or_keyless
+    pagination: no_pagination_required
+    documented_source_url: https://docs.coingecko.com/docs/errors-and-rate-limits.md
+    notes:
+      - "Demo plan: 100 calls/min; keyless is IP-based and shared."
+      - "All requests count toward the limit, including 4xx and 5xx errors."
+      - "The full active asset list is returned in one /coins/list response; no pagination denominator is required."
+      - "No numeric monthly free credit allowance is published for Demo/keyless."
+    has_global_denominator: true
+  - provider: coingecko
+    endpoint: coins_markets
+    rate_limit_per_minute: 100
+    rate_limit_provenance: official_documentation
+    authentication: demo_key_or_keyless
+    pagination: page_and_per_page
+    documented_source_url: https://docs.coingecko.com/reference/coins-markets.md
+    notes:
+      - "Maximum 250 IDs per request; the bounded scanner paginates 250 assets per page."
+      - "All requests count toward the limit, including 4xx and 5xx errors."
+    has_global_denominator: false
+  - provider: coingecko
+    endpoint: coins_contract
+    rate_limit_per_minute: 100
+    rate_limit_provenance: official_documentation
+    authentication: demo_key_or_keyless
+    pagination: not_documented
+    documented_source_url: https://docs.coingecko.com/docs/errors-and-rate-limits.md
+    notes:
+      - "Used only for contract-bound corroboration of already-discovered contracts."
+    has_global_denominator: false
+  - provider: geckoterminal
+    endpoint: networks
+    rate_limit_per_minute: 10
+    rate_limit_provenance: official_documentation
+    authentication: none
+    pagination: page
+    documented_source_url: https://www.geckoterminal.com/api
+    notes:
+      - "Public API is documented at 10 calls/min; paid /onchain endpoints are out of scope."
+      - "The network catalogue is enumerated page by page as the real scanned-network denominator."
+    has_global_denominator: true
+  - provider: geckoterminal
+    endpoint: network_pools
+    rate_limit_per_minute: 10
+    rate_limit_provenance: official_documentation
+    authentication: none
+    pagination: page
+    documented_source_url: https://www.geckoterminal.com/api
+    notes:
+      - "Enumerated per catalogue network; no global pool denominator is exposed, so pool coverage stays null."
+      - "Fair rotation changes the network order on each completed catalogue pass."
+    has_global_denominator: false
+  - provider: geckoterminal
+    endpoint: token
+    rate_limit_per_minute: 10
+    rate_limit_provenance: official_documentation
+    authentication: none
+    pagination: not_documented
+    documented_source_url: https://www.geckoterminal.com/api
+    notes:
+      - "Used only as a fallback for exact-contract market evidence already discovered elsewhere."
+    has_global_denominator: false
+  - provider: dexscreener
+    endpoint: tokens_v1
+    rate_limit_per_minute: 300
+    rate_limit_provenance: owner_specified
+    batch_limit: 30
+    batch_limit_provenance: owner_specified
+    authentication: none
+    pagination: not_documented
+    documented_source_url: https://docs.dexscreener.com/api/reference.md
+    notes:
+      - "Owner-specified free market-endpoint ceiling of 300 requests/min and 30 addresses per batch."
+      - "The fetched public reference did not publish a numeric market rate or batch ceiling."
+      - "Batches are grouped by verified DexScreener chain and preserve exact contract addresses."
+    has_global_denominator: false
+  - provider: dexscreener
+    endpoint: token_pairs
+    rate_limit_per_minute: 300
+    rate_limit_provenance: owner_specified
+    authentication: none
+    pagination: not_documented
+    documented_source_url: https://docs.dexscreener.com/api/reference.md
+    notes:
+      - "Exact-contract pair evidence; one request per contract before token-v1 batch enrichment is available."
+    has_global_denominator: false
+  - provider: dexscreener
+    endpoint: profiles_boosts
+    rate_limit_per_minute: 60
+    rate_limit_provenance: official_documentation
+    authentication: none
+    pagination: not_documented
+    documented_source_url: https://docs.dexscreener.com/api/reference.md
+    notes:
+      - "Official reference documents 60 requests/min for token profiles and boosts."
+      - "Profiles and boosts are trending feeds, not a global asset universe."
+    has_global_denominator: false
+  - provider: dexscreener
+    endpoint: market_search
+    rate_limit_per_minute: 300
+    rate_limit_provenance: owner_specified
+    authentication: none
+    pagination: not_documented
+    documented_source_url: https://docs.dexscreener.com/api/reference.md
+    notes:
+      - "Owner-specified market-endpoint ceiling; not published in the fetched public reference."
+    has_global_denominator: false
+  - provider: defillama
+    endpoint: protocols
+    authentication: none
+    pagination: not_documented
+    documented_source_url: https://api-docs.defillama.com/llms-free.txt
+    notes:
+      - "Free API requires no authentication; no numeric free request ceiling is documented."
+      - "Protocol listings are not an exhaustive asset universe."
+    has_global_denominator: false

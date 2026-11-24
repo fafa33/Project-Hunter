@@ -349,6 +349,13 @@ jobs:
   metadata:
     operation: discovery_market_run
     records_metrics: true
+    free_capacity_observation_window_hours: 24
+    discovery_modes:
+      - backfill
+      - incremental
+    budget_aware_resumable: true
+    fair_network_rotation: true
+    no_parallel_daemon: true
 - job_id: discovery-candidate-screening
   name: Discovery candidate screening
   enabled: true

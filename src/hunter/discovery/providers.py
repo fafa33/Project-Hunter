@@ -14,6 +14,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 
 from hunter.acquisition.exceptions import ProviderUnavailableError
+from hunter.discovery.capacity import CapacityLedger, endpoint_for_url
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,17 @@ class ProviderScanResult:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class DexEnrichmentResult:
+    """Bounded batch-enrichment outcome, including the assets actually requested."""
+
+    candidates: tuple[DiscoveredCandidate, ...]
+    assets: int
+    processed: int
+    batches: int
+    truncated: bool
+
+
 class _RequestBudgetExhausted(Exception):
     pass
 
@@ -91,6 +103,7 @@ class CoinGeckoDiscoveryProvider:
     per_page: int = 250
     name: str = "coingecko"
     sleeper: Callable[[float], None] = time.sleep
+    ledger: CapacityLedger | None = None
 
     def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
         return self.discover_batch(limit=limit, cursor=0)[0][:limit]
@@ -186,6 +199,8 @@ class CoinGeckoDiscoveryProvider:
             backoff_seconds=self.backoff_seconds,
             sleeper=self.sleeper,
             meter=meter,
+            ledger=self.ledger,
+            endpoint=endpoint_for_url("CoinGecko", url),
         )
 
 
@@ -197,6 +212,7 @@ class DefiLlamaDiscoveryProvider:
     backoff_seconds: float = 0.5
     name: str = "defillama"
     sleeper: Callable[[float], None] = time.sleep
+    ledger: CapacityLedger | None = None
 
     def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
         payload = self._get("/protocols")
@@ -242,6 +258,8 @@ class DefiLlamaDiscoveryProvider:
             max_attempts=self.max_attempts,
             backoff_seconds=self.backoff_seconds,
             sleeper=self.sleeper,
+            ledger=self.ledger,
+            endpoint=endpoint_for_url("DefiLlama", url),
         )
 
 
@@ -253,6 +271,7 @@ class GeckoTerminalDiscoveryProvider:
     backoff_seconds: float = 0.5
     name: str = "geckoterminal"
     sleeper: Callable[[float], None] = time.sleep
+    ledger: CapacityLedger | None = None
     seen_contract_limit: int = 20_000
 
     def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
@@ -290,6 +309,7 @@ class GeckoTerminalDiscoveryProvider:
                         scan["started"] = True
                     elif scan["catalogue_complete"]:
                         scan["passes"] = int(scan["passes"]) + 1
+                        scan["rotation_seed"] = int(scan["rotation_seed"]) + 1
                         scan["catalogue_page"] = 1
                         scan["catalogue_complete"] = False
                         scan["catalogue_fetched"] = False
@@ -309,6 +329,9 @@ class GeckoTerminalDiscoveryProvider:
                         for item in networks
                         if isinstance(item, dict) and str(item.get("id") or "").strip()
                     ]
+                    rotation = int(scan["rotation_seed"]) % len(scan["network_ids"]) if scan["network_ids"] else 0
+                    if rotation:
+                        scan["network_ids"] = scan["network_ids"][rotation:] + scan["network_ids"][:rotation]
                     links = catalogue.get("links") if isinstance(catalogue, dict) else None
                     if not isinstance(links, dict) or not links.get("next"):
                         scan["catalogue_complete"] = True
@@ -377,6 +400,7 @@ class GeckoTerminalDiscoveryProvider:
         scan.setdefault("seen_contracts", [])
         scan.setdefault("observed_pools", 0)
         scan.setdefault("passes", 0)
+        scan.setdefault("rotation_seed", 0)
         scan.setdefault("last_error", None)
         return scan
 
@@ -496,6 +520,8 @@ class GeckoTerminalDiscoveryProvider:
             backoff_seconds=self.backoff_seconds,
             sleeper=self.sleeper,
             meter=meter,
+            ledger=self.ledger,
+            endpoint=endpoint_for_url("GeckoTerminal", url),
         )
 
 
@@ -507,6 +533,7 @@ class DexScreenerDiscoveryProvider:
     backoff_seconds: float = 0.5
     name: str = "dexscreener"
     sleeper: Callable[[float], None] = time.sleep
+    ledger: CapacityLedger | None = None
 
     def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
         rows: list[DiscoveredCandidate] = []
@@ -630,7 +657,7 @@ class DexScreenerDiscoveryProvider:
         if platform is None:
             return {}
         provider = CoinGeckoDiscoveryProvider(
-            timeout_seconds=self.timeout_seconds, max_attempts=1, sleeper=self.sleeper
+            timeout_seconds=self.timeout_seconds, max_attempts=1, sleeper=self.sleeper, ledger=self.ledger
         )
         path = f"/coins/{platform}/contract/{urllib.parse.quote(address, safe='')}"
         try:
@@ -674,7 +701,7 @@ class DexScreenerDiscoveryProvider:
             return {}
         path = f"/networks/{network}/tokens/{urllib.parse.quote(address, safe='')}"
         provider = GeckoTerminalDiscoveryProvider(
-            timeout_seconds=self.timeout_seconds, max_attempts=1, sleeper=self.sleeper
+            timeout_seconds=self.timeout_seconds, max_attempts=1, sleeper=self.sleeper, ledger=self.ledger
         )
         try:
             payload = provider._get(path, {})
@@ -702,7 +729,81 @@ class DexScreenerDiscoveryProvider:
             "price_usd": _market_number(attrs.get("price_usd")),
         }
 
-    def _get(self, path: str) -> object:
+    def enrich_contracts(
+        self,
+        assets: tuple[tuple[str, str], ...] | list[tuple[str, str]],
+        *,
+        budget: ScanBudget | None = None,
+        max_batch_size: int = 30,
+        dedup: bool = True,
+    ) -> DexEnrichmentResult:
+        """Enrich already-discovered contracts with DexScreener's 30-address token endpoint."""
+        meter = _RequestMeter(budget) if budget else None
+        groups: dict[str, tuple[str, list[str]]] = {}
+        seen: set[tuple[str, str]] = set()
+        batch_limit = max(1, min(30, max_batch_size))
+        for platform, address in assets:
+            chain_id = _dex_chain_id(platform)
+            registry_chain = _registry_chain(platform) or platform.strip().lower()
+            normalized = normalize_contract_address(address, registry_chain)
+            if not chain_id or not normalized or (chain_id, normalized) in seen:
+                continue
+            seen.add((chain_id, normalized))
+            if chain_id not in groups:
+                groups[chain_id] = (registry_chain, [])
+            groups[chain_id][1].append(normalized)
+
+        asset_count = sum(len(addresses) for _chain, addresses in groups.values())
+        observed_at = datetime.now(UTC).isoformat()
+        rows: list[DiscoveredCandidate] = []
+        processed = 0
+        batches = 0
+        truncated = False
+        for chain_id in sorted(groups):
+            registry_chain, addresses = groups[chain_id]
+            for start in range(0, len(addresses), batch_limit):
+                chunk = addresses[start : start + batch_limit]
+                try:
+                    if meter is not None:
+                        meter.consume(self.sleeper)
+                except _RequestBudgetExhausted:
+                    truncated = True
+                    break
+                path = f"/tokens/v1/{urllib.parse.quote(chain_id, safe='')}/" + ",".join(
+                    urllib.parse.quote(address, safe="") for address in chunk
+                )
+                fingerprint = f"{chain_id}|{','.join(chunk)}"
+                payload = self._get(
+                    path,
+                    dedup_key=hashlib.sha256(fingerprint.encode()).hexdigest() if dedup else None,
+                    batch_size=len(chunk),
+                )
+                processed += len(chunk)
+                batches += 1
+                rows.extend(
+                    _dexscreener_batch_rows(
+                        payload,
+                        chain_id=chain_id,
+                        chain=registry_chain,
+                        base_url=self.base_url,
+                        path=path,
+                        batch_size=len(chunk),
+                        batch_index=start // batch_limit,
+                        observed_at=observed_at,
+                    )
+                )
+            if truncated:
+                break
+        return DexEnrichmentResult(tuple(rows), asset_count, processed, batches, truncated)
+
+    def _get(
+        self,
+        path: str,
+        *,
+        meter: _RequestMeter | None = None,
+        dedup_key: str | None = None,
+        batch_size: int | None = None,
+    ) -> object:
         url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
         return _request_json(
             url,
@@ -711,7 +812,138 @@ class DexScreenerDiscoveryProvider:
             max_attempts=self.max_attempts,
             backoff_seconds=self.backoff_seconds,
             sleeper=self.sleeper,
+            ledger=self.ledger,
+            endpoint=endpoint_for_url("DexScreener", url),
+            meter=meter,
+            dedup_key=dedup_key,
+            batch_size=batch_size,
         )
+
+
+_REGISTRY_CHAIN_BY_PLATFORM = {
+    "eth": "eth",
+    "ethereum": "eth",
+    "base": "base",
+    "bsc": "bsc",
+    "binance-smart-chain": "bsc",
+    "arbitrum": "arbitrum",
+    "arbitrum-one": "arbitrum",
+    "polygon": "polygon",
+    "polygon-pos": "polygon",
+    "optimism": "optimism",
+    "optimistic-ethereum": "optimism",
+    "solana": "solana",
+    "avax": "avax",
+    "avalanche": "avax",
+}
+
+# DexScreener's token-v1 path and response chainId use these full chain IDs;
+# the shorter registry chain names above are kept for contract identity merging.
+_DEX_CHAIN_BY_PLATFORM = {
+    "eth": "ethereum",
+    "ethereum": "ethereum",
+    "base": "base",
+    "bsc": "bsc",
+    "binance-smart-chain": "bsc",
+    "arbitrum": "arbitrum",
+    "arbitrum-one": "arbitrum",
+    "polygon": "polygon",
+    "polygon-pos": "polygon",
+    "optimism": "optimism",
+    "optimistic-ethereum": "optimism",
+    "solana": "solana",
+    "avax": "avalanche",
+    "avalanche": "avalanche",
+}
+
+
+def _registry_chain(platform: str) -> str | None:
+    return _REGISTRY_CHAIN_BY_PLATFORM.get(platform.strip().lower())
+
+
+def _dex_chain_id(platform: str) -> str | None:
+    return _DEX_CHAIN_BY_PLATFORM.get(platform.strip().lower())
+
+
+def _dexscreener_batch_rows(
+    payload: object,
+    *,
+    chain_id: str,
+    chain: str,
+    base_url: str,
+    path: str,
+    batch_size: int,
+    batch_index: int,
+    observed_at: str,
+) -> tuple[DiscoveredCandidate, ...]:
+    if not isinstance(payload, list):
+        return ()
+    by_address: dict[str, tuple[bool, float, dict[str, Any]]] = {}
+    for pair in payload:
+        if not isinstance(pair, dict) or str(pair.get("chainId") or "").strip().lower() != chain_id:
+            continue
+        liquidity_obj = pair.get("liquidity")
+        liquidity = _market_number(liquidity_obj.get("usd")) if isinstance(liquidity_obj, dict) else None
+        if liquidity is None or liquidity <= 0 or not pair.get("pairAddress"):
+            continue
+        for side in ("base", "quote"):
+            token = pair.get(f"{side}Token")
+            if not isinstance(token, dict):
+                continue
+            token_address = normalize_contract_address(token.get("address"), chain_id)
+            if not token_address:
+                continue
+            previous = by_address.get(token_address)
+            if previous is None or liquidity > previous[1]:
+                by_address[token_address] = (side == "base", liquidity, pair)
+
+    rows: list[DiscoveredCandidate] = []
+    for address, (is_base, _liquidity, pair) in sorted(by_address.items()):
+        side = "base" if is_base else "quote"
+        token = pair.get(f"{side}Token")
+        if not isinstance(token, dict):
+            continue
+        liquidity_obj = pair.get("liquidity")
+        volume_obj = pair.get("volume")
+        rows.append(
+            DiscoveredCandidate(
+                provider="dexscreener",
+                provider_id=f"{chain}:{address}",
+                slug=contract_slug(chain, address),
+                name=str(token.get("name") or "").strip() or address,
+                symbol=str(token.get("symbol") or "").strip().upper() or None,
+                sector="dex_market",
+                primary_chain=chain,
+                candidate_type="token",
+                source_url=f"{base_url.rstrip('/')}{path}",
+                metadata={
+                    "chain": chain,
+                    "dex_chain_id": chain_id,
+                    "contract_address": address,
+                    "asset_scope": "dex_token",
+                    "discovery_mode": "global_market_enumeration",
+                    "market_evidence_status": "observed",
+                    "market_evidence_provider": "dexscreener",
+                    "market_evidence_url": f"{base_url.rstrip('/')}{path}",
+                    "market_evidence_observed_at": observed_at,
+                    "market_pair_address": str(pair.get("pairAddress") or ""),
+                    "market_pair_side": side,
+                    "batch_endpoint": "tokens/v1",
+                    "batch_size": batch_size,
+                    "batch_index": batch_index,
+                    "chain_mapping_provenance": "verified_dexscreener_chain_id_map",
+                    "liquidity_usd": (
+                        _market_number(liquidity_obj.get("usd")) if isinstance(liquidity_obj, dict) else None
+                    ),
+                    "volume_usd": _market_number(volume_obj.get("h24")) if isinstance(volume_obj, dict) else None,
+                    "market_cap": _market_number(pair.get("marketCap")) if is_base else None,
+                    "fdv": _market_number(pair.get("fdv")) if is_base else None,
+                    "price_usd": _market_number(pair.get("priceUsd")) if is_base else None,
+                    "observed_at": observed_at,
+                },
+            )
+        )
+    return tuple(rows)
 
 
 def _request_json(
@@ -724,6 +956,10 @@ def _request_json(
     sleeper: Callable[[float], None],
     meter: _RequestMeter | None = None,
     max_retry_after_seconds: float = 60.0,
+    ledger: CapacityLedger | None = None,
+    endpoint: str | None = None,
+    dedup_key: str | None = None,
+    batch_size: int | None = None,
 ) -> object:
     request = urllib.request.Request(
         url,
@@ -733,29 +969,60 @@ def _request_json(
         },
     )
     last_error: Exception | None = None
+    endpoint_name = endpoint or endpoint_for_url(provider, url)
     for attempt in range(1, max(1, max_attempts) + 1):
+        reservation = None
         try:
             if meter is not None:
                 meter.consume(sleeper)
+            if ledger is not None:
+                reservation = ledger.reserve(
+                    provider,
+                    endpoint_name,
+                    url,
+                    dedup_key=dedup_key,
+                    batch_size=batch_size,
+                    retry=attempt > 1,
+                    sleeper=sleeper,
+                )
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
+                payload = json.loads(response.read().decode("utf-8"))
+            if reservation is not None and ledger is not None:
+                ledger.complete(reservation.reservation_id, status_code=200, outcome="success")
+            return payload
         except urllib.error.HTTPError as exc:
+            retry_after = _retry_after_seconds(exc.headers, max_retry_after_seconds) if exc.code == 429 else None
+            if reservation is not None and ledger is not None:
+                ledger.complete(
+                    reservation.reservation_id,
+                    status_code=exc.code,
+                    outcome="throttled" if exc.code == 429 else "failure",
+                    retry_after_seconds=retry_after,
+                    error=str(exc),
+                )
             if exc.code in {408, 425, 429, 500, 502, 503, 504} and attempt < max_attempts:
-                retry_after = _retry_after_seconds(exc.headers, max_retry_after_seconds) if exc.code == 429 else None
-                if retry_after is None:
-                    _sleep(attempt, backoff_seconds, sleeper)
+                if exc.code == 429 and retry_after is not None:
+                    if ledger is not None:
+                        # The ledger's next reservation waits out the persisted cooldown.
+                        ledger.cooldown(provider, endpoint_name, seconds=retry_after, reason="HTTP 429 Retry-After")
+                    else:
+                        sleeper(retry_after)
                 else:
-                    sleeper(retry_after)
+                    _sleep(attempt, backoff_seconds, sleeper)
                 last_error = exc
                 continue
             raise ProviderUnavailableError(f"{provider} discovery unavailable: HTTP {exc.code}") from exc
         except TimeoutError as exc:
+            if reservation is not None and ledger is not None:
+                ledger.complete(reservation.reservation_id, outcome="failure", error=str(exc))
             last_error = exc
             if attempt < max_attempts:
                 _sleep(attempt, backoff_seconds, sleeper)
                 continue
             raise ProviderUnavailableError(f"{provider} discovery timed out") from exc
         except urllib.error.URLError as exc:
+            if reservation is not None and ledger is not None:
+                ledger.complete(reservation.reservation_id, outcome="failure", error=str(exc))
             last_error = exc
             if attempt < max_attempts:
                 _sleep(attempt, backoff_seconds, sleeper)

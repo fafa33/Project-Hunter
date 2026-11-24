@@ -693,6 +693,154 @@ class CandidateRegistryRepository:
                 rows = conn.execute("SELECT * FROM pool_observations ORDER BY network, pool_address").fetchall()
         return tuple(dict(row) for row in rows)
 
+    def try_reserve_capacity(
+        self,
+        *,
+        provider: str,
+        endpoint: str,
+        fingerprint: str,
+        dedup_key: str | None,
+        attempted_at: str,
+        window_start: str,
+        dedupe_until: str,
+        rate_limit_per_minute: int | None,
+        retry: bool,
+        batch_size: int | None,
+        reservation_id: str,
+    ) -> tuple[str | None, float, bool]:
+        """Atomically reserve one request slot; returns (id, wait_seconds, duplicate)."""
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if dedup_key is not None and not retry:
+                duplicate = conn.execute(
+                    """
+                    SELECT 1 FROM capacity_requests
+                    WHERE provider = ? AND endpoint = ? AND dedup_key = ? AND dedupe_until > ?
+                    LIMIT 1
+                    """,
+                    (provider, endpoint, dedup_key, attempted_at),
+                ).fetchone()
+                if duplicate is not None:
+                    return None, 0.0, True
+            if rate_limit_per_minute is not None and rate_limit_per_minute > 0:
+                rows = conn.execute(
+                    """
+                    SELECT attempted_at FROM capacity_requests
+                    WHERE provider = ? AND endpoint = ? AND attempted_at > ?
+                    ORDER BY attempted_at
+                    LIMIT ?
+                    """,
+                    (provider, endpoint, window_start, rate_limit_per_minute),
+                ).fetchall()
+                if len(rows) >= rate_limit_per_minute:
+                    oldest = _parse_dt(str(rows[0]["attempted_at"]))
+                    wait = (oldest - _parse_dt(window_start)).total_seconds()
+                    return None, max(0.0, wait), False
+            conn.execute(
+                """
+                INSERT INTO capacity_requests (
+                    reservation_id, provider, endpoint, fingerprint, dedup_key, attempted_at,
+                    window_start, dedupe_until, state, retry, batch_size
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'in_flight', ?, ?)
+                """,
+                (
+                    reservation_id,
+                    provider,
+                    endpoint,
+                    fingerprint,
+                    dedup_key,
+                    attempted_at,
+                    window_start,
+                    dedupe_until,
+                    int(retry),
+                    batch_size,
+                ),
+            )
+            return reservation_id, 0.0, False
+
+    def complete_capacity_request(
+        self,
+        reservation_id: str,
+        *,
+        completed_at: str,
+        status_code: int | None,
+        outcome: str,
+        retry_after_seconds: float | None = None,
+        error: str | None = None,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE capacity_requests
+                SET state = ?, completed_at = ?, status_code = ?, outcome = ?,
+                    retry_after_seconds = ?, error = ?
+                WHERE reservation_id = ?
+                """,
+                ("completed", completed_at, status_code, outcome, retry_after_seconds, error, reservation_id),
+            )
+
+    def capacity_cooldown_until(self, provider: str, endpoint: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT cooldown_until FROM capacity_cooldowns WHERE provider = ? AND endpoint = ?",
+                (provider, endpoint),
+            ).fetchone()
+        return str(row["cooldown_until"]) if row and row["cooldown_until"] else None
+
+    def set_capacity_cooldown(self, provider: str, endpoint: str, *, until: str, reason: str) -> None:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO capacity_cooldowns (provider, endpoint, cooldown_until, reason, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(provider, endpoint) DO UPDATE SET
+                    cooldown_until = excluded.cooldown_until,
+                    reason = excluded.reason,
+                    updated_at = excluded.updated_at
+                """,
+                (provider, endpoint, until, reason, _dt(datetime.now(tz=UTC))),
+            )
+            conn.execute(
+                """
+                INSERT INTO capacity_cooldown_events (provider, endpoint, cooldown_until, reason, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (provider, endpoint, until, reason, _dt(datetime.now(tz=UTC))),
+            )
+
+    def capacity_summary(self, *, window_start: str) -> tuple[dict[str, Any], ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    requests.provider AS provider,
+                    requests.endpoint AS endpoint,
+                    COUNT(*) AS attempts,
+                    COALESCE(SUM(CASE WHEN requests.retry = 1 THEN 1 ELSE 0 END), 0) AS retries,
+                    COALESCE(SUM(CASE WHEN requests.outcome = 'throttled' THEN 1 ELSE 0 END), 0) AS throttles,
+                    COALESCE(SUM(CASE WHEN requests.outcome = 'failure' THEN 1 ELSE 0 END), 0) AS failures,
+                    COALESCE(SUM(CASE WHEN requests.outcome = 'success' THEN 1 ELSE 0 END), 0) AS successes,
+                    COALESCE(SUM(CASE WHEN requests.attempted_at > ? THEN 1 ELSE 0 END), 0) AS recent_attempts,
+                    MIN(requests.attempted_at) AS first_attempt_at,
+                    MAX(requests.attempted_at) AS last_attempt_at,
+                    MAX(requests.batch_size) AS max_batch_size,
+                    COALESCE(cooldowns.cooldowns, 0) AS cooldowns,
+                    MAX(COALESCE(cooldowns.cooldown_until, '')) AS cooldown_until
+                FROM capacity_requests AS requests
+                LEFT JOIN (
+                    SELECT provider, endpoint, COUNT(*) AS cooldowns, MAX(cooldown_until) AS cooldown_until
+                    FROM capacity_cooldown_events GROUP BY provider, endpoint
+                ) AS cooldowns
+                    ON cooldowns.provider = requests.provider AND cooldowns.endpoint = requests.endpoint
+                GROUP BY requests.provider, requests.endpoint
+                ORDER BY requests.provider, requests.endpoint
+                """,
+                (window_start,),
+            ).fetchall()
+        return tuple(dict(row) for row in rows)
+
     def _initialize(self) -> None:
         with self._connect() as conn:
             conn.executescript("""
@@ -844,6 +992,43 @@ class CandidateRegistryRepository:
                     ON universe_assets (provider);
                 CREATE INDEX IF NOT EXISTS pool_observations_network_idx
                     ON pool_observations (network);
+                CREATE TABLE IF NOT EXISTS capacity_requests (
+                    reservation_id TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    fingerprint TEXT NOT NULL,
+                    dedup_key TEXT,
+                    attempted_at TEXT NOT NULL,
+                    window_start TEXT NOT NULL,
+                    dedupe_until TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    retry INTEGER NOT NULL,
+                    batch_size INTEGER,
+                    status_code INTEGER,
+                    outcome TEXT,
+                    retry_after_seconds REAL,
+                    error TEXT,
+                    completed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS capacity_requests_window_idx
+                    ON capacity_requests (provider, endpoint, attempted_at);
+                CREATE INDEX IF NOT EXISTS capacity_requests_dedupe_idx
+                    ON capacity_requests (provider, endpoint, dedup_key, dedupe_until);
+                CREATE TABLE IF NOT EXISTS capacity_cooldowns (
+                    provider TEXT NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    cooldown_until TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (provider, endpoint)
+                );
+                CREATE TABLE IF NOT EXISTS capacity_cooldown_events (
+                    provider TEXT NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    cooldown_until TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS canonical_entity_history (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                     digest TEXT NOT NULL UNIQUE,

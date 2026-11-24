@@ -25,9 +25,14 @@ class DiscoveryConfig:
     registry_path: str = "data/discovery/runtime/candidates.sqlite"
     market_validation_config: str = "configs/market_validation.yaml"
     project_identifiers_config: str = "configs/project_identifiers.yaml"
+    capacity_inventory_path: str = "configs/discovery_capacity.yaml"
+    discovery_mode: str = "incremental"
     seed_market_validation_universe: bool = True
     minimum_screening_identifiers: int = 1
     providers: dict[str, DiscoveryProviderConfig] | None = None
+
+    def normalized_mode(self) -> str:
+        return "backfill" if self.discovery_mode.strip().lower() == "backfill" else "incremental"
 
     def provider(self, name: str) -> DiscoveryProviderConfig:
         return (self.providers or {}).get(name, DiscoveryProviderConfig(enabled=False))
@@ -50,6 +55,8 @@ def load_discovery_config(path: str | Path = "configs/discovery.yaml") -> Discov
         registry_path=str(payload.get("registry_path", "data/discovery/runtime/candidates.sqlite")),
         market_validation_config=str(payload.get("market_validation_config", "configs/market_validation.yaml")),
         project_identifiers_config=str(payload.get("project_identifiers_config", "configs/project_identifiers.yaml")),
+        capacity_inventory_path=str(payload.get("capacity_inventory_path", "configs/discovery_capacity.yaml")),
+        discovery_mode=str(payload.get("discovery_mode", "incremental")),
         seed_market_validation_universe=bool(payload.get("seed_market_validation_universe", True)),
         minimum_screening_identifiers=int(payload.get("minimum_screening_identifiers", 1)),
         providers=providers,
@@ -66,6 +73,8 @@ def discovery_config_from_mapping(payload: dict[str, Any]) -> DiscoveryConfig:
         registry_path=str(payload.get("registry_path", "data/discovery/runtime/candidates.sqlite")),
         market_validation_config=str(payload.get("market_validation_config", "configs/market_validation.yaml")),
         project_identifiers_config=str(payload.get("project_identifiers_config", "configs/project_identifiers.yaml")),
+        capacity_inventory_path=str(payload.get("capacity_inventory_path", "configs/discovery_capacity.yaml")),
+        discovery_mode=str(payload.get("discovery_mode", "incremental")),
         seed_market_validation_universe=bool(payload.get("seed_market_validation_universe", True)),
         minimum_screening_identifiers=int(payload.get("minimum_screening_identifiers", 1)),
         providers=providers,

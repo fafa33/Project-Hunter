@@ -236,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
     discovery_sub = discovery.add_subparsers(dest="discovery_command")
     discovery_run = discovery_sub.add_parser("run")
     discovery_run.add_argument("--limit", type=int)
+    discovery_run.add_argument("--mode", choices=("backfill", "incremental"), default=None)
     discovery_sync = discovery_sub.add_parser("sync")
     discovery_sync.add_argument(
         "--provider",
@@ -1110,7 +1111,7 @@ def _discovery(args: object) -> int:
     repository = CandidateRegistryRepository(config.registry_path)
     engine = CandidateDiscoveryEngine(repository, config)
     if command == "run":
-        result = engine.run_market_discovery(limit=getattr(args, "limit", None))
+        result = engine.run_market_discovery(limit=getattr(args, "limit", None), mode=getattr(args, "mode", None))
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
     if command == "sync":
@@ -1223,6 +1224,25 @@ def _discovery(args: object) -> int:
         )
         print(f"observed_pools={pools['observed_pools']} new_pools={pools['new_pools']} " f"pool_coverage=unmeasured")
         print(f"unsupported_scope={json.dumps(global_coverage['unsupported_scope'], sort_keys=True)}")
+        evidence = cast(dict[str, Any], global_coverage["evidence"])
+        print(
+            f"identity_verified_assets={evidence['identity_verified_assets']} "
+            f"fresh_market_evidence_assets_24h={evidence['fresh_market_evidence_assets_24h']}"
+        )
+        capacity = cast(dict[str, Any], global_coverage["capacity"])
+        observed = cast(dict[str, Any], capacity["observed"] or {"totals": {}})
+        print(
+            f"capacity_inventory={capacity['inventory']} api_calls={capacity['api_calls']} "
+            f"retries={capacity['retries']} throttles={capacity['throttles']} cooldowns={capacity['cooldowns']}"
+        )
+        print(
+            f"remaining_quota={json.dumps(capacity['remaining_quota'], sort_keys=True)} "
+            f"observed_requests_per_second={json.dumps(capacity['observed_requests_per_second'], sort_keys=True)}"
+        )
+        print(f"eta_seconds={json.dumps(capacity['eta_seconds'], sort_keys=True)}")
+        print(f"capacity_unsupported_segments={json.dumps(capacity['unsupported_segments'], sort_keys=True)}")
+        if observed.get("totals"):
+            print(f"capacity_totals={json.dumps(observed['totals'], sort_keys=True)}")
         return 0
     if command == "validate":
         stats = repository.stats()

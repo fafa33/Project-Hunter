@@ -42,13 +42,31 @@ def discovery_automation_status(path: Path = Path("configs/automation.yaml")) ->
 def _discovery_jobs() -> tuple[dict[str, Any], ...]:
     return (
         _job("discovery-source-health", "Discovery source health check", "hourly", "discovery_source_health"),
-        _job("discovery-market-run", "Global discovery market run", "every_6_hours", "discovery_market_run"),
+        _job(
+            "discovery-market-run",
+            "Global discovery market run",
+            "every_6_hours",
+            "discovery_market_run",
+            {
+                "free_capacity_observation_window_hours": 24,
+                "discovery_modes": ["backfill", "incremental"],
+                "budget_aware_resumable": True,
+                "fair_network_rotation": True,
+                "no_parallel_daemon": True,
+            },
+        ),
         _job("discovery-candidate-screening", "Discovery candidate screening", "every_6_hours", "discovery_screen"),
         _job("discovery-queue-refresh", "Discovery queue refresh", "every_6_hours", "discovery_queue_refresh"),
     )
 
 
-def _job(job_id: str, name: str, schedule_type: str, operation: str) -> dict[str, Any]:
+def _job(
+    job_id: str,
+    name: str,
+    schedule_type: str,
+    operation: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     return {
         "job_id": job_id,
         "name": name,
@@ -68,7 +86,7 @@ def _job(job_id: str, name: str, schedule_type: str, operation: str) -> dict[str
         "as_of_policy": {"mode": "current"},
         "timeout_seconds": 3600,
         "concurrency_policy": {"prevent_overlapping": True, "scope": "job_target"},
-        "metadata": {"operation": operation, "records_metrics": True},
+        "metadata": {"operation": operation, "records_metrics": True, **(metadata or {})},
     }
 
 

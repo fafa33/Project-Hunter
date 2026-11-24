@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import math
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from hunter.acquisition.exceptions import ProviderUnavailableError
 from hunter.acquisition.project_identifiers import ProjectIdentifier, load_project_identifiers
+from hunter.discovery.capacity import (
+    CapacityInventory,
+    CapacityLedger,
+    DuplicateCapacityRequest,
+    load_capacity_inventory,
+)
 from hunter.discovery.configuration import DiscoveryConfig
 from hunter.discovery.models import (
     CandidateAlias,
@@ -38,9 +46,12 @@ class CandidateDiscoveryEngine:
         config: DiscoveryConfig,
         *,
         providers: dict[str, DiscoveryProvider] | None = None,
+        ledger: CapacityLedger | None = None,
     ) -> None:
         self.repository = repository
         self.config = config
+        self.capacity_inventory: CapacityInventory = load_capacity_inventory(config.capacity_inventory_path)
+        self.ledger = ledger or (CapacityLedger(repository, self.capacity_inventory) if providers is None else None)
         self.providers = providers or self._configured_providers(config)
 
     def sync(self, *, provider: str = "seed", limit: int | None = None) -> DiscoveryRun:
@@ -109,6 +120,7 @@ class CandidateDiscoveryEngine:
 
     def sync_provider(self, provider: str, *, limit: int | None = None) -> DiscoveryRun:
         started_at = datetime.now(tz=UTC)
+        ledger_before = dict(self.ledger.summary()["totals"]) if self.ledger else None
         if provider not in self.providers:
             run = DiscoveryRun(
                 run_id=identity("candidate-discovery-run", {"provider": provider, "started_at": started_at}),
@@ -184,13 +196,13 @@ class CandidateDiscoveryEngine:
                 candidates_created=0,
                 candidates_updated=0,
                 status="unavailable",
-                message=str(exc),
+                message=f"{exc}{self._capacity_suffix(ledger_before)}",
             )
             self.repository.save_run(run)
             return run
         candidates = tuple(self._provider_candidate(item, observed_at=started_at) for item in raw_candidates)
         created, updated = self.repository.upsert_many(candidates)
-        message = scan_message or f"synced {len(candidates)} candidates"
+        message = (scan_message or f"synced {len(candidates)} candidates") + self._capacity_suffix(ledger_before)
         run = DiscoveryRun(
             run_id=identity("candidate-discovery-run", {"provider": provider, "started_at": started_at}),
             provider=provider,
@@ -240,6 +252,99 @@ class CandidateDiscoveryEngine:
             "source_url": payload["source_url"],
         }
 
+    def enrich_dex_contracts(self, *, limit: int | None = None, mode: str | None = None) -> DiscoveryRun:
+        """Enrich already-discovered contracts via DexScreener's bounded token-v1 batches."""
+        selected_mode = (
+            self.config.normalized_mode()
+            if mode is None
+            else ("backfill" if mode.strip().lower() == "backfill" else "incremental")
+        )
+        started_at = datetime.now(tz=UTC)
+        ledger_before = dict(self.ledger.summary()["totals"]) if self.ledger else None
+        source = self.providers.get("dexscreener")
+        if not isinstance(source, DexScreenerDiscoveryProvider):
+            run = DiscoveryRun(
+                run_id=identity("candidate-discovery-run", {"provider": "dexscreener-batch", "started_at": started_at}),
+                provider="dexscreener-batch",
+                started_at=started_at,
+                finished_at=datetime.now(tz=UTC),
+                candidates_seen=0,
+                candidates_created=0,
+                candidates_updated=0,
+                status="unsupported",
+                message="DexScreener batch enrichment provider is not configured",
+            )
+            self.repository.save_run(run)
+            return run
+
+        groups = self.repository.identifier_groups()
+        assets: list[tuple[str, str]] = []
+        for (namespace, value), candidate_ids in sorted(groups.items()):
+            if not namespace.startswith("contract:"):
+                continue
+            chain = namespace.split(":", 1)[1]
+            if selected_mode == "incremental" and any(
+                self._has_current_market_measure(candidate_id) for candidate_id in candidate_ids
+            ):
+                continue  # incremental: never re-fetch a contract that already has market evidence
+            assets.append((chain, value))
+            if limit is not None and len(assets) >= max(1, limit):
+                break
+        if limit is not None:
+            assets = assets[: max(1, limit)]
+
+        config = self.config.provider("dexscreener")
+        budget = ScanBudget(
+            max_requests=max(1, config.max_requests_per_cycle),
+            min_interval_seconds=max(0.0, config.min_interval_seconds),
+        )
+        try:
+            result = source.enrich_contracts(tuple(assets), budget=budget, dedup=selected_mode != "backfill")
+        except (ProviderUnavailableError, DuplicateCapacityRequest) as exc:
+            status = "partial" if isinstance(exc, DuplicateCapacityRequest) else "unavailable"
+            run = DiscoveryRun(
+                run_id=identity("candidate-discovery-run", {"provider": "dexscreener-batch", "started_at": started_at}),
+                provider="dexscreener-batch",
+                started_at=started_at,
+                finished_at=datetime.now(tz=UTC),
+                candidates_seen=0,
+                candidates_created=0,
+                candidates_updated=0,
+                status=status,
+                message=(
+                    f"mode={selected_mode} contracts={len(assets)} error={exc}"
+                    f"{self._capacity_suffix(ledger_before)}"
+                ),
+            )
+            self.repository.save_run(run)
+            return run
+        candidates = tuple(self._provider_candidate(item, observed_at=started_at) for item in result.candidates)
+        created, updated = self.repository.upsert_many(candidates)
+        status = "succeeded" if result.assets and not result.truncated else "partial"
+        message = (
+            f"mode={selected_mode} contracts={result.assets} processed={result.processed} "
+            f"batches={result.batches} rows={len(candidates)}"
+        )
+        if result.truncated:
+            message += f" unprocessed={result.assets - result.processed}"
+        run = DiscoveryRun(
+            run_id=identity("candidate-discovery-run", {"provider": "dexscreener-batch", "started_at": started_at}),
+            provider="dexscreener-batch",
+            started_at=started_at,
+            finished_at=datetime.now(tz=UTC),
+            candidates_seen=len(candidates),
+            candidates_created=created,
+            candidates_updated=updated,
+            status=status,
+            message=message + self._capacity_suffix(ledger_before),
+        )
+        self.repository.save_run(run)
+        return run
+
+    def _has_current_market_measure(self, candidate_id: str) -> bool:
+        candidate = self.repository.get(candidate_id)
+        return candidate is not None and _has_market_or_protocol_measure(candidate)
+
     def global_coverage(self) -> dict[str, object]:
         """Report coverage from measured denominators only; unmeasured values stay null."""
         universe_ids = set(self.repository.universe_assets("coingecko"))
@@ -253,12 +358,21 @@ class CandidateDiscoveryEngine:
         network_coverage = (
             round(len(catalogue_ids & scanned_networks) / len(catalogue_ids), 6) if catalogue_ids else None
         )
+        candidates = self.repository.list_candidates(limit=100_000)
         observations = [
-            str(source.observed_at)
-            for candidate in self.repository.list_candidates(limit=100_000)
-            for source in candidate.sources
-            if source.observed_at
+            str(source.observed_at) for candidate in candidates for source in candidate.sources if source.observed_at
         ]
+        fresh_cutoff = datetime.now(tz=UTC) - timedelta(hours=24)
+        fresh_market_evidence = sum(
+            1
+            for candidate in candidates
+            if _has_market_or_protocol_measure(candidate)
+            and (observed_at := _market_observation_at(candidate)) is not None
+            and observed_at >= fresh_cutoff
+        )
+        identity_verified = sum(1 for result in self.repository.identity_results() if result.outcome == "exact")
+        ledger_summary = self.ledger.summary() if self.ledger else None
+        capacity = self._capacity_telemetry(ledger_summary, universe_size=len(universe_ids), matched=len(matched))
         return {
             "scope": "global_market_enumeration",
             "generated_at": datetime.now(tz=UTC).isoformat(),
@@ -295,6 +409,17 @@ class CandidateDiscoveryEngine:
                 "coverage": None,
                 "unmeasured_reason": "GeckoTerminal public API exposes no global pool denominator",
             },
+            "evidence": {
+                "identity_verified_assets": identity_verified,
+                "fresh_market_evidence_assets_24h": fresh_market_evidence,
+                "criteria": (
+                    "identity_verified_assets counts exact identity outcomes; "
+                    "fresh_market_evidence_assets_24h counts candidates with a market/protocol measure and a "
+                    "provider-observed market timestamp within 24 hours; generic source sync timestamps do not "
+                    "qualify; the fields are reported separately"
+                ),
+            },
+            "capacity": capacity,
             "freshness": {
                 "oldest_observation": min(observations) if observations else None,
                 "newest_observation": max(observations) if observations else None,
@@ -367,16 +492,24 @@ class CandidateDiscoveryEngine:
         self.repository.save_queue_entries(entries)
         return entries
 
-    def run_market_discovery(self, *, limit: int | None = None) -> dict[str, object]:
+    def run_market_discovery(self, *, limit: int | None = None, mode: str | None = None) -> dict[str, object]:
+        selected_mode = (
+            self.config.normalized_mode()
+            if mode is None
+            else ("backfill" if mode.strip().lower() == "backfill" else "incremental")
+        )
         seed_run = self.sync_configured_universe()
         universe = self.enumerate_universe()
         provider_run = self.sync(provider="all", limit=limit)
+        dex_run = self.enrich_dex_contracts(limit=limit, mode=selected_mode)
         screening = self.screen_candidates()
         queue = self.refresh_queue()
         stats = self.repository.stats()
         return {
+            "mode": selected_mode,
             "seed_run": seed_run.run_id,
             "provider_run": provider_run.run_id,
+            "dex_enrichment_run": dex_run.run_id,
             "universe": universe,
             "coverage": self.global_coverage(),
             "candidates": stats.total_candidates,
@@ -543,6 +676,86 @@ class CandidateDiscoveryEngine:
             metadata=metadata,
         )
 
+    def _capacity_telemetry(
+        self,
+        summary: dict[str, Any] | None,
+        *,
+        universe_size: int,
+        matched: int,
+    ) -> dict[str, Any]:
+        inventory = self.ledger.inventory if self.ledger is not None else self.capacity_inventory
+        endpoints = list(summary["endpoints"]) if summary else []
+        totals = (
+            dict(summary["totals"])
+            if summary
+            else {
+                "requests": 0,
+                "retries": 0,
+                "throttles": 0,
+                "failures": 0,
+                "successes": 0,
+                "cooldowns": 0,
+            }
+        )
+        rates = {f"{row['provider']}:{row['endpoint']}": _observed_rate_per_second(row) for row in endpoints}
+        coin_rate = rates.get("coingecko:coins_markets")
+        remaining_pages = math.ceil(max(0, universe_size - matched) / 250) if universe_size else None
+        universe_eta = round(remaining_pages / coin_rate, 1) if coin_rate and remaining_pages else None
+        gecko_rate = rates.get("geckoterminal:network_pools")
+        return {
+            "inventory": inventory.source_path,
+            "documented": inventory.as_dict(),
+            "observed": summary,
+            "api_calls": int(totals["requests"]),
+            "retries": int(totals["retries"]),
+            "throttles": int(totals["throttles"]),
+            "cooldowns": int(totals["cooldowns"]),
+            "failures": int(totals["failures"]),
+            "remaining_quota": {
+                f"{row['provider']}:{row['endpoint']}": row["remaining_quota"]
+                for row in endpoints
+                if row["remaining_quota"] is not None
+            },
+            "observed_requests_per_second": {key: value for key, value in rates.items() if value is not None},
+            "eta_seconds": {
+                "universe": universe_eta,
+                "network_pools": None,
+                "reason": (
+                    "universe ETA uses observed CoinGecko /coins/markets throughput and a 250-asset page; "
+                    "pool ETA is unmeasured because GeckoTerminal exposes no global pool denominator"
+                ),
+                "geckoterminal_observed_requests_per_second": gecko_rate,
+            },
+            "unsupported_segments": [
+                {
+                    "provider": "geckoterminal",
+                    "scope": "global_pool_denominator",
+                    "reason": "public API exposes no global pool denominator; pool coverage stays null",
+                },
+                {
+                    "provider": "defillama",
+                    "scope": "numeric_free_request_ceiling",
+                    "reason": "free API is available without authentication but no numeric ceiling is documented",
+                },
+                {
+                    "provider": "dexscreener",
+                    "scope": "market_rate_and_batch_limit",
+                    "reason": "300 requests/min and 30 addresses/batch are owner-specified, not published in fetched docs",
+                },
+            ],
+        }
+
+    def _capacity_suffix(self, before: dict[str, Any] | None) -> str:
+        if self.ledger is None or before is None:
+            return ""
+        totals = self.ledger.summary()["totals"]
+        return (
+            f" api_calls={int(totals['requests']) - int(before.get('requests', 0))}"
+            f" retries={int(totals['retries']) - int(before.get('retries', 0))}"
+            f" throttles={int(totals['throttles']) - int(before.get('throttles', 0))}"
+            f" cooldowns={int(totals['cooldowns']) - int(before.get('cooldowns', 0))}"
+        )
+
     def _configured_providers(self, config: DiscoveryConfig) -> dict[str, DiscoveryProvider]:
         providers: dict[str, DiscoveryProvider] = {}
         coingecko = config.provider("coingecko")
@@ -552,6 +765,7 @@ class CandidateDiscoveryEngine:
                 timeout_seconds=coingecko.timeout_seconds,
                 max_attempts=coingecko.max_attempts,
                 backoff_seconds=coingecko.backoff_seconds,
+                ledger=self.ledger,
             )
         defillama = config.provider("defillama")
         if defillama.enabled:
@@ -560,6 +774,7 @@ class CandidateDiscoveryEngine:
                 timeout_seconds=defillama.timeout_seconds,
                 max_attempts=defillama.max_attempts,
                 backoff_seconds=defillama.backoff_seconds,
+                ledger=self.ledger,
             )
         geckoterminal = config.provider("geckoterminal")
         if geckoterminal.enabled:
@@ -568,6 +783,7 @@ class CandidateDiscoveryEngine:
                 timeout_seconds=geckoterminal.timeout_seconds,
                 max_attempts=geckoterminal.max_attempts,
                 backoff_seconds=geckoterminal.backoff_seconds,
+                ledger=self.ledger,
             )
         dexscreener = config.provider("dexscreener")
         if dexscreener.enabled:
@@ -576,6 +792,7 @@ class CandidateDiscoveryEngine:
                 timeout_seconds=dexscreener.timeout_seconds,
                 max_attempts=dexscreener.max_attempts,
                 backoff_seconds=dexscreener.backoff_seconds,
+                ledger=self.ledger,
             )
         return providers
 
@@ -746,6 +963,35 @@ def _has_market_or_protocol_measure(candidate: CandidateRecord) -> bool:
     return any(candidate.metadata.get(key) not in {None, ""} for key in keys)
 
 
+def _market_observation_at(candidate: CandidateRecord) -> datetime | None:
+    """Return the newest provider-reported market observation time, if parseable."""
+    observations: list[datetime] = []
+    for key in ("market_evidence_observed_at", "last_updated"):
+        value = (candidate.metadata or {}).get(key)
+        if not value:
+            continue
+        try:
+            observations.append(_parse_iso(str(value)))
+        except (TypeError, ValueError):
+            continue
+    return max(observations) if observations else None
+
+
 def _has_rejection_marker(candidate: CandidateRecord) -> bool:
     markers = ("spam", "scam", "impersonation", "blocked")
     return any(bool(candidate.metadata.get(marker)) for marker in markers)
+
+
+def _observed_rate_per_second(row: dict[str, Any]) -> float | None:
+    first = row.get("first_attempt_at")
+    last = row.get("last_attempt_at")
+    if not first or not last:
+        return None
+    span = (_parse_iso(str(last)) - _parse_iso(str(first))).total_seconds()
+    attempts = int(row.get("attempts") or 0)
+    return round(attempts / span, 6) if span > 0 and attempts else None
+
+
+def _parse_iso(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
