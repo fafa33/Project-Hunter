@@ -1202,6 +1202,16 @@
       "guard": "A governance/orchestration production-only branch must bind to the authenticated repository identity, not merely to GITHUB_ACTIONS or other environment presence shared with hosted tests. Exact-head Codex completion dedup requires GITHUB_ACTIONS=true AND GITHUB_REPOSITORY==the repository argument, authenticated Codex author, and exact HEAD. Provider completion may terminate optional waiting but never mint REVIEW_CLEAR/approval or overwrite FINDINGS_OPEN. Every change at this boundary must include paired regressions for real production binding and hosted fixture isolation before push.",
       "test": "tests/test_hunter_review_orchestrator.py::test_exact_head_codex_completion_helper_binds_author_and_head; tests/test_hunter_review_orchestrator.py::test_exact_head_codex_completion_prevents_new_collector_dispatch; tests/test_hunter_review_orchestrator.py::test_exact_head_codex_completion_terminalizes_existing_waiting_cycle; tests/test_hunter_review_orchestrator.py::test_exact_head_codex_completion_never_overwrites_real_terminal_authority; tests/test_hunter_reviewer_collector.py::test_codex_exact_head_summary_ends_wait_without_forging_review_authority; tests/test_review_after_remediation_generation.py::test_a_changed_head_starts_an_ordinary_new_exact_head_cycle",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-135",
+      "class": "trusted-upgrade-rerun-publisher-reuses-prior-validation-job",
+      "source": "Issue #587 / PR #786, hosted workflow run 45363081133 attempt 2: the status publisher emitted attempt=2 with validation_attempt=1 and job_id=138337775808 even though attempt-2 validation job 138355137709 completed successfully. The canonical governance consumer correctly rejected the stale validation identity and kept the PR blocked.",
+      "classification": "systemic",
+      "guard_boundary": "trusted exact-head proof publisher, before committing any status for a rerun attempt",
+      "guard": "For a successful new workflow attempt, the publisher must find exactly one successful validation job from that same attempt. A proof based on any earlier attempt, including a successful earlier job, fails closed without publishing a fresh success; an exact attempt/job/digest and GitHub-origin receipt are still mandatory. The existing governance consumer must never be weakened to accept mismatched attempt evidence.",
+      "test": "tests/test_pr376_prevention_regressions.py::test_m3_trusted_publisher_receipt_is_checkout_free_and_job_bound; tests/test_pr376_prevention_regressions.py::test_m3_trusted_receipt_binds_job_attempt_and_digest",
+      "status": "guarded"
     }
   ],
   "families": [

@@ -431,3 +431,11 @@ def test_m3_trusted_publisher_receipt_is_checkout_free_and_job_bound() -> None:
     assert "/jobs?per_page=100&filter=all" in step["run"]
     assert "sha256=" in step["run"]
     assert "run_attempt" in step["run"]
+    # GitHub can rerun a publisher with a prior validation job still present.
+    # Do not mint a fresh-attempt proof by borrowing the older job.
+    assert 'validation_attempt != attempt and result == "success"' in step["run"]
+    assert "trusted validation job did not run in this workflow attempt" in step["run"]
+    # Regression on the actual embedded publisher code, without GitHub writes.
+    # Two validation jobs in one run must select the latest attempt's job;
+    # replayed success from a prior attempt must fail closed.
+    assert 'validation_attempt = max(int(job["run_attempt"]) for job in jobs)' in step["run"]

@@ -179,10 +179,17 @@ jobs:
                   and int(job.get("run_attempt") or 0) <= attempt]
           if not jobs:
               raise RuntimeError("trusted validation job missing")
+          # Reruns may reuse an older validation job. A new run_attempt is
+          # not evidence that validation was re-executed; bind the receipt to
+          # the latest completed validation job that actually exists.
           validation_attempt = max(int(job["run_attempt"]) for job in jobs)
           jobs = [job for job in jobs if int(job["run_attempt"]) == validation_attempt]
           if len(jobs) != 1 or int(jobs[0].get("run_id") or 0) != run_id:
               raise RuntimeError("trusted validation job identity is ambiguous")
+          if validation_attempt != attempt and result == "success":
+              # A whole-run rerun without a matching validator must not
+              # republish an earlier job as a fresh exact-attempt proof.
+              raise RuntimeError("trusted validation job did not run in this workflow attempt")
           job = jobs[0]
           conclusion = str(job.get("conclusion") or "unknown")
           if result == "success" and (job.get("status") != "completed" or conclusion != "success"):
