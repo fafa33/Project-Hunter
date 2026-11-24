@@ -663,7 +663,11 @@ def _urlopen(payload: object):
 def _urlopen_by_path(payloads: dict[str, object]):
     def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
         path = urllib.parse.urlparse(request.full_url).path
-        return _JsonResponse(payloads.get(path, []) if path.startswith("/token-pairs/v1/") else payloads[path])
+        return _JsonResponse(
+            payloads.get(path, [])
+            if path.startswith(("/token-pairs/v1/", "/api/v2/networks/", "/api/v3/coins/"))
+            else payloads[path]
+        )
 
     return opener
 
@@ -768,3 +772,43 @@ def test_paid_boost_is_not_market_evidence(tmp_path) -> None:
     candidate = engine._provider_candidate(row, observed_at=datetime.now(UTC))
     assert not _has_market_or_protocol_measure(candidate)
     assert not _has_official_domain(candidate)
+
+
+def test_quote_pair_does_not_inherit_base_valuation(monkeypatch) -> None:
+    payload = [
+        {
+            "chainId": "solana",
+            "pairAddress": "pair",
+            "baseToken": {"address": "Other"},
+            "quoteToken": {"address": "AbC", "name": "Quote"},
+            "liquidity": {"usd": 100},
+            "marketCap": 900,
+            "priceUsd": "2",
+            "fdv": 1000,
+        }
+    ]
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen(payload))
+    evidence = DexScreenerDiscoveryProvider()._market_evidence("solana", "AbC")
+    assert evidence["market_pair_side"] == "quote"
+    assert evidence["market_cap"] is None and evidence["price_usd"] is None and evidence["fdv"] is None
+    assert evidence["liquidity_usd"] == 100
+
+
+def test_gecko_fallback_and_contract_bound_link_corroboration(monkeypatch) -> None:
+    payloads = {
+        "/api/v2/networks/solana/tokens/AbC": {
+            "data": {"attributes": {"address": "AbC", "total_reserve_in_usd": "100", "market_cap_usd": "200"}}
+        },
+        "/api/v3/coins/solana/contract/AbC": {
+            "platforms": {"solana": "AbC"},
+            "links": {"homepage": ["https://www.example.org", "https://x.com/other"]},
+        },
+    }
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen_by_path(payloads))
+    provider = DexScreenerDiscoveryProvider()
+    assert provider._gecko_evidence("solana", "AbC")["market_cap"] == 200
+    assert provider._corroborated_links(
+        "solana", "AbC", ("https://example.org", "https://x.com/fake", "https://example.org.evil.net")
+    )["verified_official_links"] == ("https://example.org",)
+    payloads["/api/v3/coins/solana/contract/AbC"] = {"platforms": {"solana": "abc"}}
+    assert not provider._corroborated_links("solana", "AbC", ("https://example.org",))

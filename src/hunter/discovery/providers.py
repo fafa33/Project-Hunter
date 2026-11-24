@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from hunter.acquisition.exceptions import ProviderUnavailableError
@@ -272,6 +273,12 @@ class DexScreenerDiscoveryProvider:
                 seen.add(key)
                 links = item.get("links") if isinstance(item.get("links"), list) else []
                 market = self._market_evidence(chain, address)
+                if market.get("market_evidence_status") != "observed" or market.get("market_pair_side") == "quote":
+                    fallback = self._gecko_evidence(chain, address)
+                    if fallback:
+                        market = fallback
+                claimed = tuple(_dexscreener_links(links))
+                verified = self._corroborated_links(chain, address, claimed) if claimed else {}
                 rows.append(
                     DiscoveredCandidate(
                         provider=self.name,
@@ -293,7 +300,8 @@ class DexScreenerDiscoveryProvider:
                             "icon": item.get("icon"),
                             "boost_amount": item.get("amount"),
                             "boost_total_amount": item.get("totalAmount"),
-                            "claimed_links": tuple(_dexscreener_links(links)),
+                            "claimed_links": claimed,
+                            **verified,
                             **market,
                         },
                     )
@@ -314,29 +322,126 @@ class DexScreenerDiscoveryProvider:
         for pair in payload:
             if not isinstance(pair, dict) or pair.get("chainId") != chain:
                 continue
-            token = pair.get("baseToken")
-            if not isinstance(token, dict) or normalize_contract_address(token.get("address"), chain) != address:
+            side = next(
+                (
+                    side
+                    for side in ("base", "quote")
+                    if isinstance(pair.get(f"{side}Token"), dict)
+                    and normalize_contract_address(pair[f"{side}Token"].get("address"), chain) == address
+                ),
+                None,
+            )
+            if side is None:
                 continue
             liquidity = pair.get("liquidity")
             amount = _market_number(liquidity.get("usd")) if isinstance(liquidity, dict) else None
             if amount is not None and amount > 0 and pair.get("pairAddress"):
-                matches.append((amount, str(pair["pairAddress"]), pair))
+                matches.append((side == "base", amount, str(pair["pairAddress"]), side, pair))
         if not matches:
-            return {"market_evidence_status": "no_matching_liquid_base_pair"}
-        liquidity_usd, pair_address, pair = max(matches, key=lambda item: (item[0], item[1]))
-        token = pair["baseToken"]
+            return {"market_evidence_status": "no_matching_liquid_pair"}
+        _, liquidity_usd, pair_address, side, pair = max(matches, key=lambda item: item[:3])
+        token = pair[f"{side}Token"]
         volume = pair.get("volume")
         return {
             "market_evidence_status": "observed",
             "market_evidence_url": self.base_url.rstrip("/") + path,
             "market_pair_address": pair_address,
+            "market_pair_side": side,
+            "market_evidence_provider": "dexscreener",
+            "market_evidence_observed_at": datetime.now(UTC).isoformat(),
             "token_name": str(token.get("name") or "").strip() or None,
             "token_symbol": str(token.get("symbol") or "").strip().upper() or None,
             "liquidity_usd": liquidity_usd,
             "volume_usd": _market_number(volume.get("h24")) if isinstance(volume, dict) else None,
-            "market_cap": _market_number(pair.get("marketCap")),
-            "fdv": _market_number(pair.get("fdv")),
-            "price_usd": _market_number(pair.get("priceUsd")),
+            "market_cap": _market_number(pair.get("marketCap")) if side == "base" else None,
+            "fdv": _market_number(pair.get("fdv")) if side == "base" else None,
+            "price_usd": _market_number(pair.get("priceUsd")) if side == "base" else None,
+        }
+
+    def _corroborated_links(self, chain: str, address: str, claimed: tuple[str, ...]) -> dict[str, Any]:
+        platform = {
+            "eth": "ethereum",
+            "ethereum": "ethereum",
+            "solana": "solana",
+            "base": "base",
+            "bsc": "binance-smart-chain",
+            "arbitrum": "arbitrum-one",
+            "polygon": "polygon-pos",
+            "optimism": "optimistic-ethereum",
+        }.get(chain)
+        if platform is None:
+            return {}
+        provider = CoinGeckoDiscoveryProvider(
+            timeout_seconds=self.timeout_seconds, max_attempts=1, sleeper=self.sleeper
+        )
+        path = f"/coins/{platform}/contract/{urllib.parse.quote(address, safe='')}"
+        try:
+            payload = provider._get(path, {})
+        except (ProviderUnavailableError, ValueError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        platforms = payload.get("platforms")
+        if not isinstance(platforms, dict) or normalize_contract_address(platforms.get(platform), chain) != address:
+            return {}
+        links = payload.get("links")
+        homepages = links.get("homepage") if isinstance(links, dict) else None
+        if not isinstance(homepages, list):
+            return {}
+        domains = {_homepage_domain(url) for url in homepages}
+        matched = tuple(
+            url for url in claimed if _homepage_domain(url) is not None and _homepage_domain(url) in domains
+        )
+        if not matched:
+            return {}
+        return {
+            "verified_official_links": matched,
+            "official_link_verification_method": "contract_bound_provider_homepage_corroboration",
+            "official_link_evidence_url": provider.base_url + path,
+            "official_link_observed_at": datetime.now(UTC).isoformat(),
+        }
+
+    def _gecko_evidence(self, chain: str, address: str) -> dict[str, Any]:
+        network = {
+            "ethereum": "eth",
+            "eth": "eth",
+            "solana": "solana",
+            "base": "base",
+            "bsc": "bsc",
+            "arbitrum": "arbitrum",
+            "polygon": "polygon_pos",
+            "optimism": "optimism",
+        }.get(chain)
+        if network is None:
+            return {}
+        path = f"/networks/{network}/tokens/{urllib.parse.quote(address, safe='')}"
+        provider = GeckoTerminalDiscoveryProvider(
+            timeout_seconds=self.timeout_seconds, max_attempts=1, sleeper=self.sleeper
+        )
+        try:
+            payload = provider._get(path, {})
+        except (ProviderUnavailableError, ValueError):
+            return {}
+        data = payload.get("data") if isinstance(payload, dict) else None
+        attrs = data.get("attributes") if isinstance(data, dict) else None
+        if not isinstance(attrs, dict) or normalize_contract_address(attrs.get("address"), chain) != address:
+            return {}
+        reserve = _market_number(attrs.get("total_reserve_in_usd"))
+        if reserve is None or reserve <= 0:
+            return {}
+        volume = attrs.get("volume_usd")
+        return {
+            "market_evidence_status": "observed",
+            "market_evidence_provider": "geckoterminal",
+            "market_evidence_url": provider.base_url + path,
+            "market_evidence_observed_at": datetime.now(UTC).isoformat(),
+            "token_name": attrs.get("name"),
+            "token_symbol": attrs.get("symbol"),
+            "reserve_usd": reserve,
+            "volume_usd": _market_number(volume.get("h24")) if isinstance(volume, dict) else None,
+            "market_cap": _market_number(attrs.get("market_cap_usd")),
+            "fdv": _market_number(attrs.get("fdv_usd")),
+            "price_usd": _market_number(attrs.get("price_usd")),
         }
 
     def _get(self, path: str) -> object:
@@ -452,6 +557,35 @@ def _pool_volume(payload: object) -> object:
     if isinstance(payload, dict):
         return payload.get("h24") or payload.get("24h")
     return None
+
+
+def _homepage_domain(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        host = parsed.hostname
+        if parsed.scheme != "https" or not host or parsed.username or parsed.password or parsed.port not in (None, 443):
+            return None
+    except ValueError:
+        return None
+    host = host.lower().removeprefix("www.")
+    if host in {
+        "x.com",
+        "twitter.com",
+        "t.me",
+        "telegram.me",
+        "discord.com",
+        "discord.gg",
+        "github.com",
+        "linktr.ee",
+        "medium.com",
+        "facebook.com",
+        "instagram.com",
+        "youtube.com",
+    }:
+        return None
+    return host
 
 
 def _market_number(value: object) -> float | None:
