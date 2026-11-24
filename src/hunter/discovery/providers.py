@@ -1050,12 +1050,14 @@ def _request_json(
                     retry_after_seconds=retry_after,
                     error=str(exc),
                 )
+            # Persist a 429 cooldown even for single-attempt helper calls.
+            # Otherwise a helper with max_attempts=1 raises before this branch
+            # and the next cycle can retry inside the provider's Retry-After.
+            if exc.code == 429 and retry_after is not None and ledger is not None:
+                ledger.cooldown(provider, endpoint_name, seconds=retry_after, reason="HTTP 429 Retry-After")
             if exc.code in {408, 425, 429, 500, 502, 503, 504} and attempt < max_attempts:
                 if exc.code == 429 and retry_after is not None:
-                    if ledger is not None:
-                        # The ledger's next reservation waits out the persisted cooldown.
-                        ledger.cooldown(provider, endpoint_name, seconds=retry_after, reason="HTTP 429 Retry-After")
-                    else:
+                    if ledger is None:
                         sleeper(retry_after)
                 else:
                     _sleep(attempt, backoff_seconds, sleeper)

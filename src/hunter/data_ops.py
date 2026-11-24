@@ -49,7 +49,10 @@ READ_ONLY_DISCOVERY_OPERATIONS = frozenset(
 )
 
 OPERATION_COMMANDS: dict[str, tuple[str, ...]] = {
-    "discovery_market_run": ("discovery", "run", "--limit", "250"),
+    # Omit --limit so incremental cycles use the persisted CoinGecko page
+    # cursor and configured per-provider request budgets instead of re-reading
+    # the same first page on every cycle.
+    "discovery_market_run": ("discovery", "run"),
     "discovery_market_run_backfill": ("discovery", "run", "--mode", "backfill", "--limit", "5"),
     "discovery_screen": ("discovery", "screen"),
     "discovery_queue_refresh": ("discovery", "queue", "refresh"),

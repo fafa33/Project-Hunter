@@ -3,25 +3,25 @@
     "acceptance_criteria": [
       {
         "criterion": "Free-provider capacity is inventoried with explicit provenance and observed consumption is persisted without paid API use.",
-        "evidence": "configs/discovery_capacity.yaml separates official_documentation, owner_specified and not_documented limits and leaves undocumented monthly credits null. Additive capacity tables persist requests, retries, throttles and cooldowns. The live evidence manifest /Users/farhadafshari/hunter-587-live-evidence/capacity-evidence-manifest-final.json records persisted free-provider consumption; no paid API was used. The new scheduler exposes only allowlisted read-only discovery operations and no privileged path.",
+        "evidence": "configs/discovery_capacity.yaml separates official_documentation, owner_specified and not_documented limits and leaves undocumented monthly credits null. Additive capacity tables persist requests, retries, throttles and cooldowns. Live evidence at /Users/farhadafshari/hunter-587-live-evidence records persisted free-provider consumption, including bounded Retry-After cooldowns that are now persisted even for single-attempt helper calls. Only free endpoints were used.",
         "id": "AC-587-01",
         "verdict": "satisfied"
       },
       {
         "criterion": "Global discovery uses bounded, resumable free capacity and truthful DexScreener batching without a parallel daemon.",
-        "evidence": "The existing scheduler now runs discovery-market-run every 15 minutes for incremental discovery and a bounded discovery-market-run-backfill hourly with at most five contracts per cycle, so backfill cannot starve incremental work. automation start has no finite iteration default. ReadOnlyDiscoveryExecutor routes only the four allowlisted discovery operations locally and leaves every other operation and analytical job on the legacy executor. GeckoTerminal catalogue and pool pagination are capped at the free-plan page 10, inaccessible scope is recorded, and stale over-cap checkpoints advance without retrying the HTTP 401 page.",
+        "evidence": "The existing scheduler runs discovery-market-run every 15 minutes and bounded backfill hourly with at most five contracts. automation start has no finite iteration default; LaunchAgent omits --max-iterations. ReadOnlyDiscoveryExecutor routes only the four allowlisted operations locally. Incremental discovery omits --limit so persisted CoinGecko page cursors advance instead of repeatedly reading page 1. GeckoTerminal catalogue and pool pagination are capped at free-plan page 10, inaccessible scope is recorded, and stale checkpoints advance without retrying HTTP 401.",
         "id": "AC-587-02",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Coverage and evidence telemetry use real denominators and never claim unmeasured global coverage or stale market evidence.",
-        "evidence": "global_coverage uses real denominators, leaves global pool coverage null, and now reports GeckoTerminal free_api_page_cap scope through scan_progress and unsupported_scope. Fresh market evidence still requires a provider-reported timestamp inside 24 hours rather than a generic sync time. Focused tests pin null pool coverage, stale-evidence rejection, page-cap behavior and checker recovery.",
+        "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
+        "evidence": "global_coverage uses real denominators, leaves global pool coverage null, and reports GeckoTerminal free_api_page_cap scope through scan_progress and unsupported_scope. Fresh market evidence requires a provider-reported timestamp inside 24 hours rather than a generic sync time. Focused tests pin null pool coverage, stale-evidence rejection and page-cap behavior.",
         "id": "AC-587-03",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Verification is sufficient and governance is preserved before the single signed commit and push.",
-        "evidence": "A fresh exact-head hostile review judgement is regenerated for this staged candidate; the canonical writer finalizer mints the request against the staged tree and the pre-push boundary enforces exact HEAD, clean tree, signatures and deterministic gates. Focused suite tests/test_global_discovery_candidate_registry.py passes 54 tests; Black, Ruff and focused MyPy pass. No merge, new PR, CI rerun loop, parallel daemon or paid API use is performed; PR #788 remains Draft until owner approval.",
+        "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
+        "evidence": "A fresh exact-head hostile review judgement is regenerated for this staged candidate; the canonical writer finalizer mints the request against the staged tree and the pre-push boundary enforces exact HEAD, clean tree, signatures and deterministic gates. Focused suite tests/test_global_discovery_candidate_registry.py passes 56 tests; Black, Ruff and focused MyPy pass. No merge, new PR, CI rerun loop, parallel daemon or paid API use is performed; PR #788 remains Draft until owner approval.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -48,17 +48,17 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Capacity reservation and cooldown writes keep BEGIN IMMEDIATE snapshot semantics; completion remains keyed by a unique reservation id. Scheduler state is persisted in the existing automation repository, and discovery cursors remain in the additive discovery registry. No schema replacement or competing writer was introduced.",
+        "evidence": "Capacity reservation and cooldown writes keep BEGIN IMMEDIATE snapshot semantics; completion remains keyed by a unique reservation id. The new single-attempt 429 path calls the same ledger.cooldown persistence boundary, and scheduler/discovery cursors remain in existing additive repositories. No schema replacement or competing writer was introduced.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "DexScreener batch identity handling is unchanged: registry chain names remain in provider ids and contract namespaces while canonical chainIds are used only in request paths and response filtering. No executor routing change can override candidate identity or source attribution.",
+        "evidence": "DexScreener batch identity handling is unchanged: registry chain names remain in provider ids and contract namespaces while canonical chainIds are used only in request paths and response filtering. No executor routing or command change can override candidate identity or source attribution.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Unknown operations and providers still fall back to explicitly non-permissive behavior. The composite executor defaults every non-allowlisted plan to the legacy analytical executor; GeckoTerminal pages above 10 are never requested, and HTTP 401 is not treated as a retryable rate limit.",
+        "evidence": "Unknown operations and providers still fall back to explicitly non-permissive behavior. The composite executor defaults every non-allowlisted plan to the legacy analytical executor; GeckoTerminal pages above 10 are never requested, and HTTP 401 is not treated as a retryable rate limit. HTTP 429 now persists a cooldown on every attempt count.",
         "family": "DFF-004",
         "outcome": "clear"
       },
@@ -68,7 +68,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Rolling-window budgets, retries and dedup keys remain deterministic. The GeckoTerminal page cap and stale checkpoint normalization prevent retry storms against a free-plan restriction, while hourly bounded backfill and 15-minute incremental jobs cannot overlap on the same job target.",
+        "evidence": "Rolling-window budgets, retries and dedup keys remain deterministic. The GeckoTerminal page cap and stale checkpoint normalization prevent retry storms against a free-plan restriction; persisted 429 cooldowns prevent rate-limit retry storms; hourly bounded backfill and 15-minute incremental jobs cannot overlap on the same job target.",
         "family": "DFF-006",
         "outcome": "clear"
       },
@@ -93,7 +93,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Deterministic regressions use monkeypatched clocks, payloads, urlopen, executor delegates and temporary SQLite repositories; no test asserts on a live Issue body or live provider response. The focused suite reports 54 passed after the scheduling, executor and page-cap changes.",
+        "evidence": "Deterministic regressions use monkeypatched clocks, payloads, urlopen, executor delegates and temporary SQLite repositories; no test asserts on a live Issue body or live provider response. The focused suite reports 56 passed after the incremental command and single-attempt cooldown remediation.",
         "family": "DFF-035",
         "outcome": "clear"
       },
@@ -147,7 +147,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "919b353ba820d302b2c0773cc9b7983dadbbba95",
+        "blob_sha": "ebc989d3faecbc1e0c9e81f873426b78bc6fba3a",
         "path": "src/hunter/data_ops.py",
         "previous_path": "",
         "status": "modified"
@@ -177,7 +177,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "5bc485b3af9d5bdc8614300b1ee25f1bfc1f2845",
+        "blob_sha": "674c2d55b1b3a68b12b3b3f110d0bd5a4eb3efa4",
         "path": "src/hunter/discovery/providers.py",
         "previous_path": "",
         "status": "modified"
@@ -189,17 +189,17 @@
         "status": "modified"
       },
       {
-        "blob_sha": "089782a898a97928f10aece902d2ce62f6e5c863",
+        "blob_sha": "fb96c6b24a1639352e9cff370eea0018e2d875e2",
         "path": "tests/test_global_discovery_candidate_registry.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "64a0cd2b1bb0dfc6775fdf360878d7c40b419ba18ff21d23620f8329eebdb16b"
+    "review_target_digest": "ad368a08dc50ba131a31f2985c0f3e2b50484e8fe5fc6bad13dafc77a1d6b0c9"
   },
-  "review_id": "790dd8758de8ab7d4303df62c5b532a1d75aca9c816c1b907c298843e82b0353",
+  "review_id": "85185c7a3e2fb291c5cd324f25f154cc27a0e02d5b3c34952bb861f2e72a5fcc",
   "review_request": {
-    "claims_id": "790dd8758de8ab7d4303df62c5b532a1d75aca9c816c1b907c298843e82b0353",
+    "claims_id": "85185c7a3e2fb291c5cd324f25f154cc27a0e02d5b3c34952bb861f2e72a5fcc",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

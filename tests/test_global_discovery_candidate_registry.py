@@ -1758,3 +1758,46 @@ def test_automation_start_defaults_to_indefinite_operation(tmp_path, monkeypatch
 
     assert cli.main(["--config", str(config_path), "automation", "start"]) == 0
     assert captured["max_iterations"] is None
+
+
+def test_single_attempt_http_429_still_persists_cooldown(tmp_path, monkeypatch) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    ledger = CapacityLedger(repository, load_capacity_inventory("configs/discovery_capacity.yaml"))
+    calls: list[str] = []
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        calls.append(request.full_url)
+        raise urllib.error.HTTPError(
+            request.full_url,
+            429,
+            "Too Many Requests",
+            {"Retry-After": "90"},
+            None,
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    with pytest.raises(ProviderUnavailableError):
+        _request_json(
+            "https://api.coingecko.com/api/v3/coins/ethereum/contract/0xabc",
+            provider="CoinGecko",
+            timeout_seconds=1,
+            max_attempts=1,
+            backoff_seconds=0,
+            sleeper=lambda _seconds: None,
+            ledger=ledger,
+            endpoint="coins_contract",
+            max_retry_after_seconds=5.0,
+        )
+
+    assert len(calls) == 1
+    summary = {row["endpoint"]: row for row in ledger.summary()["endpoints"]}["coins_contract"]
+    assert summary["throttles"] == 1
+    assert summary["cooldowns"] == 1
+    assert summary["cooldown_until"]
+
+
+def test_incremental_automation_command_has_no_explicit_limit() -> None:
+    from hunter.data_ops import OPERATION_COMMANDS
+
+    assert OPERATION_COMMANDS["discovery_market_run"] == ("discovery", "run")
+    assert "--limit" in OPERATION_COMMANDS["discovery_market_run_backfill"]
