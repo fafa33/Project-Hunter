@@ -1212,6 +1212,16 @@
       "guard": "Run 45376425177 attempt 1 reproduced the API visibility race: validation completed at 10:47:18Z but publisher failed three seconds later. Publisher observes at most five snapshots with five-second intervals and five-second request timeouts, requires complete job listing and unique same-attempt terminal evidence, and refuses contradictory terminal outcomes or ambiguous identity. Earlier attempts cannot authorize publication. Governance remains unchanged.",
       "test": "tests/test_pr376_prevention_regressions.py::test_m3_trusted_publisher_receipt_is_checkout_free_and_job_bound; tests/test_pr376_prevention_regressions.py::test_trusted_publisher_waits_for_exact_attempt_terminal_evidence; tests/test_pr376_prevention_regressions.py::test_m3_trusted_receipt_binds_job_attempt_and_digest",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-136",
+      "class": "unbounded-automation-start-invocation-blocks-deterministic-cli-test",
+      "source": "Issue #587 / PR #788 at head 87f87d6a3ab845c9428984a4c893cb5667883d09: automation start now defaults to indefinite operation, but legacy tests/test_automation.py::test_cli_commands invoked it without an iteration limit. The deterministic Pytest lane never reached a terminal assertion, so the exact-head Hunter / Pre-PR Preflight and Trusted Candidate Preflight Validation runs were cancelled at timeout instead of producing proof.",
+      "classification": "systemic",
+      "guard_boundary": "deterministic CLI regression lane, at each tests/test_automation.py invocation of the automation start command",
+      "guard": "The production automation start default stays indefinite by owner design (the LaunchAgent deliberately omits --max-iterations); the deterministic suite supplies its own finite bound. test_cli_commands now invokes automation start with --max-iterations 1, so the CLI test terminates on the command's own contract instead of an external CI timeout. No scheduler, deployment configuration, production default or iteration ceiling was changed.",
+      "test": "tests/test_automation.py::test_cli_commands (staged remediation; focused verification 72 passed in 22.24s)",
+      "status": "guarded"
     }
   ],
   "families": [
