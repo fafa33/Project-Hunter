@@ -137,3 +137,58 @@ def comment_body(document: bytes) -> str:
     if len(document) > 8192:
         raise WorkspaceAuthorityMismatch("oversized dispatch request")
     return _PREFIX + base64.b64encode(document).decode("ascii")
+
+
+def select_dispatch_checkpoint(
+    comments: list[dict[str, Any]],
+    *,
+    verification_key: Ed25519PublicKey,
+    repository: str,
+    issue: int,
+    authorization_id: str,
+    run_id: int,
+    run_attempt: int,
+    control_sha: str,
+    base_sha: str,
+    authorized_branch: str,
+    ledger_identity: str,
+) -> str:
+    """Resolve checkpoint identity only from the exact K_AUTH-signed dispatch."""
+    if len(comments) > 100:
+        raise WorkspaceAuthorityMismatch("dispatch transport bound exceeded")
+    matching = set()
+    for item in comments:
+        body = item.get("body")
+        if not isinstance(body, str) or not body.startswith(_PREFIX):
+            continue
+        try:
+            document = base64.b64decode(body[len(_PREFIX) :], validate=True)
+            req = verify_dispatch_request(document, verification_key=verification_key)
+        except ValueError:
+            raise WorkspaceAuthorityMismatch("invalid signed dispatch transport") from None
+        if (req.authorization_id, req.run_id) != (authorization_id, run_id):
+            continue
+        if (
+            req.repository,
+            req.issue,
+            req.run_attempt,
+            req.control_sha,
+            req.base_sha,
+            req.authorized_branch,
+            req.ledger_identity,
+            req.workflow_path,
+        ) != (
+            repository,
+            issue,
+            run_attempt,
+            control_sha,
+            base_sha,
+            authorized_branch,
+            ledger_identity,
+            ".github/workflows/hunter-issue-agent-trigger.yml",
+        ):
+            raise WorkspaceAuthorityMismatch("dispatch checkpoint binding mismatch")
+        matching.add(req.checkpoint)
+    if len(matching) != 1:
+        raise WorkspaceAuthorityMismatch("missing or ambiguous dispatch checkpoint")
+    return next(iter(matching))

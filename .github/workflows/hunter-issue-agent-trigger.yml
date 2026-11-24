@@ -278,7 +278,6 @@ jobs:
         id: execute
         env:
           # Trusted provenance reads only; the executor pops this before invoking Kilo.
-          HUNTER_WORKSPACE_CHECKPOINT: ${{ secrets.HUNTER_WORKSPACE_CHECKPOINT }}
           HUNTER_ISSUE_AGENT_PROVENANCE_TOKEN: ${{ github.token }}
           HUNTER_ISSUE_AGENT_HANDOFF_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_HANDOFF_KEY }}
           HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_EXECUTOR_MODEL_API_KEY }}

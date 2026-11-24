@@ -2087,7 +2087,7 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
     from hunter.automation.issue_agent_kilo_container import KiloContainerIsolation
     from hunter.evidence_intelligence.smart_prompt_routing import PromptAutomationVerifier
 
-    run_id, attempt, _ = _run_context()
+    run_id, attempt, control_sha = _run_context()
     # Issue #772: consume the job-scoped read credential inside this trusted process,
     # before constructing or launching any untrusted model/container process.
     grant_transport_token = os.environ.get(PROVENANCE_TOKEN_ENV, "").strip()
@@ -2105,7 +2105,7 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
     grant_file = os.environ.get("HUNTER_WORKSPACE_GRANT_FILE", "")
     grant_checkpoint = os.environ.get("HUNTER_WORKSPACE_CHECKPOINT", "")
     if any((grant_file, grant_checkpoint, configuration.workspace_grant_verifying_key)):
-        if not grant_checkpoint or configuration.workspace_grant_verifying_key is None:
+        if configuration.workspace_grant_verifying_key is None:
             raise LifecycleRefused("WORKSPACE_AUTHORITY_MISMATCH", "incomplete hosted grant admission")
 
         from hunter.automation.workspace_grant_handoff import verify_grant_handoff
@@ -2114,6 +2114,29 @@ def cmd_execute(configuration: control.Configuration, arguments: argparse.Namesp
         try:
             bound = roles._authorization(access, arguments.issue, arguments.authorization_id)
             authorized = bound.evidence[state.AUTHORIZED]
+            if not grant_checkpoint:
+                from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+                from hunter.automation.workspace_grant_dispatch import select_dispatch_checkpoint
+
+                comments = fetch_issue_grant_comments(
+                    repository=configuration.repository, issue=arguments.issue, token=grant_transport_token
+                )
+                grant_checkpoint = select_dispatch_checkpoint(
+                    comments,
+                    verification_key=Ed25519PublicKey.from_public_bytes(
+                        bytes.fromhex(configuration.authorization_verifying_key)
+                    ),
+                    repository=configuration.repository,
+                    issue=arguments.issue,
+                    authorization_id=arguments.authorization_id,
+                    run_id=run_id,
+                    run_attempt=attempt,
+                    control_sha=control_sha,
+                    base_sha=authorized["base_sha"],
+                    authorized_branch=authorized["execution_branch"],
+                    ledger_identity=state.ledger_ref(arguments.issue),
+                )
             binding = dict(
                 verification_key=configuration.workspace_grant_verifying_key,
                 authorization_id=arguments.authorization_id,
