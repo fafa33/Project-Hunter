@@ -21,6 +21,7 @@ from hunter.plugins.contracts import PipelineContext
 
 DATA_OPS_JOB_IDS = (
     "discovery-market-run",
+    "discovery-identity-resolution",
     "discovery-candidate-screening",
     "discovery-queue-refresh",
     "dataops-coingecko-market-sync",
@@ -43,6 +44,7 @@ READ_ONLY_DISCOVERY_OPERATIONS = frozenset(
     {
         "discovery_market_run",
         "discovery_market_run_backfill",
+        "discovery_identity_resolve",
         "discovery_screen",
         "discovery_queue_refresh",
     }
@@ -54,6 +56,7 @@ OPERATION_COMMANDS: dict[str, tuple[str, ...]] = {
     # the same first page on every cycle.
     "discovery_market_run": ("discovery", "run"),
     "discovery_market_run_backfill": ("discovery", "run", "--mode", "backfill", "--limit", "5"),
+    "discovery_identity_resolve": ("discovery", "identity", "resolve", "--batch-size", "500"),
     "discovery_screen": ("discovery", "screen"),
     "discovery_queue_refresh": ("discovery", "queue", "refresh"),
     "coingecko_market_sync": ("coingecko", "sync"),
@@ -265,6 +268,13 @@ def _data_ops_database(config_path: Path) -> Path:
 def _data_ops_jobs() -> tuple[dict[str, Any], ...]:
     return (
         _job("discovery-market-run", "Global discovery market run", "every_6_hours", "discovery_market_run"),
+        _job(
+            "discovery-identity-resolution",
+            "Bounded candidate identity resolution",
+            "cron",
+            "discovery_identity_resolve",
+            expression="5 */6 * * *",
+        ),
         _job("discovery-candidate-screening", "Discovery candidate screening", "every_6_hours", "discovery_screen"),
         _job("discovery-queue-refresh", "Discovery queue refresh", "every_6_hours", "discovery_queue_refresh"),
         _job("dataops-coingecko-market-sync", "CoinGecko market sync", "every_6_hours", "coingecko_market_sync"),

@@ -9,6 +9,7 @@ DISCOVERY_JOB_IDS = (
     "discovery-source-health",
     "discovery-market-run",
     "discovery-market-run-backfill",
+    "discovery-identity-resolution",
     "discovery-candidate-screening",
     "discovery-queue-refresh",
 )
@@ -70,8 +71,33 @@ def _discovery_jobs() -> tuple[dict[str, Any], ...]:
             },
             expression="0 * * * *",
         ),
-        _job("discovery-candidate-screening", "Discovery candidate screening", "every_6_hours", "discovery_screen"),
-        _job("discovery-queue-refresh", "Discovery queue refresh", "every_6_hours", "discovery_queue_refresh"),
+        # Staggered six-hour handoff: discovery -> identity -> screening -> queue.
+        _job(
+            "discovery-identity-resolution",
+            "Bounded candidate identity resolution",
+            "cron",
+            "discovery_identity_resolve",
+            {
+                "evidence_gated": True,
+                "bounded_fair_batch": True,
+                "no_parallel_daemon": True,
+            },
+            expression="5 */6 * * *",
+        ),
+        _job(
+            "discovery-candidate-screening",
+            "Discovery candidate screening",
+            "cron",
+            "discovery_screen",
+            expression="10 */6 * * *",
+        ),
+        _job(
+            "discovery-queue-refresh",
+            "Discovery queue refresh",
+            "cron",
+            "discovery_queue_refresh",
+            expression="15 */6 * * *",
+        ),
     )
 
 

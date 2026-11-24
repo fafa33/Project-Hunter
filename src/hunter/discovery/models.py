@@ -20,6 +20,12 @@ CandidateType = Literal["project", "protocol", "token", "network", "infrastructu
 IdentityResolutionOutcome = Literal["exact", "probable", "ambiguous", "conflict", "rejected", "unresolved"]
 CandidatePriority = Literal["critical", "high", "medium", "low", "defer"]
 
+IDENTITY_POLICY_VERSION = "identity-policy-v2"
+SCREENING_STATUS_NOT_SCREENED = "not_screened"
+QUEUE_STATUS_NOT_QUEUED = "not_queued"
+QUEUE_STATUS_QUEUED = "queued"
+QUEUE_STATUS_ELIGIBLE = "deep_analysis_eligible"
+
 
 @dataclass(frozen=True)
 class CandidateIdentifier:
@@ -117,6 +123,8 @@ class CandidateIdentity:
     conflicts: tuple[str, ...] = ()
     related_candidate_ids: tuple[str, ...] = ()
     evaluated_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
+    policy_version: str = IDENTITY_POLICY_VERSION
+    evidence_fingerprint: str = ""
 
     def __post_init__(self) -> None:
         if not self.candidate_id.strip() or not self.reason.strip():

@@ -14,6 +14,11 @@ from hunter.discovery.capacity import (
     load_capacity_inventory,
 )
 from hunter.discovery.configuration import DiscoveryConfig
+from hunter.discovery.identity import (
+    CandidateIdentityResolutionEngine,
+    identity_is_accepted,
+    related_ticker_candidates,
+)
 from hunter.discovery.models import (
     CandidateAlias,
     CandidateIdentifier,
@@ -483,25 +488,119 @@ class CandidateDiscoveryEngine:
 
     def screen_candidates(self, *, limit: int = 1000) -> tuple[CandidateScreeningResult, ...]:
         screened_at = datetime.now(tz=UTC)
-        results = tuple(
-            self._screen_candidate(candidate, screened_at=screened_at)
-            for candidate in self.repository.list_candidates(limit=limit)
-        )
+        batch = self.repository.fair_candidates("screening", limit)
+        previous = self.repository.latest_screening_by_candidate()
+        results = tuple(self._screen_candidate(candidate, screened_at=screened_at) for candidate in batch)
         for result in results:
-            self.repository.save_screening_result(result)
+            prior = previous.get(result.candidate_id)
+            if prior is None or prior.screening_id != result.screening_id:
+                self.repository.save_screening_result(result)
         return results
 
     def refresh_queue(self, *, limit: int = 1000) -> tuple[CandidateQueueEntry, ...]:
+        """Refresh queue entries from current screening without re-screening the same cohort."""
         now = datetime.now(tz=UTC)
-        results = self.screen_candidates(limit=limit)
-        candidates = {candidate.candidate_id: candidate for candidate in self.repository.list_candidates(limit=limit)}
+        batch = self.repository.fair_candidates("queue", limit)
+        previous = self.repository.latest_screening_by_candidate()
+        screened: dict[str, CandidateScreeningResult] = {}
+        for candidate in batch:
+            result = self._screen_candidate(candidate, screened_at=now)
+            prior = previous.get(candidate.candidate_id)
+            if prior is None or prior.screening_id != result.screening_id:
+                self.repository.save_screening_result(result)
+                screened[candidate.candidate_id] = result
+            else:
+                screened[candidate.candidate_id] = prior
+        identities = self.repository.latest_identity_by_candidate()
+        ticker_groups = self.repository.alias_groups(alias_type="ticker_symbol")
         entries = tuple(
-            self._queue_entry(result, candidates[result.candidate_id], updated_at=now)
-            for result in results
-            if result.candidate_id in candidates
+            self._queue_entry(
+                screened[candidate.candidate_id],
+                candidate,
+                updated_at=now,
+                identity_accepted=identity_is_accepted(
+                    identities.get(candidate.candidate_id),
+                    candidate=candidate,
+                    related_candidate_ids=related_ticker_candidates(candidate, ticker_groups),
+                ),
+            )
+            for candidate in batch
         )
         self.repository.save_queue_entries(entries)
         return entries
+
+    def handoff_manifest(self, *, limit: int = 25) -> dict[str, object]:
+        """Read-only evidence manifest for downstream intelligence stages.
+
+        This does not execute Whale, Capital Flow, or Opportunity engines: those
+        require evidence formats that are not present in the registry. It only
+        exposes candidates whose identity and screening evidence are accepted.
+        """
+        identities = self.repository.latest_identity_by_candidate()
+        ticker_groups = self.repository.alias_groups(alias_type="ticker_symbol")
+        screenings = self.repository.latest_screening_by_candidate()
+        candidates = {item.candidate_id: item for item in self.repository.list_candidates(limit=100_000)}
+        eligible = [entry for entry in self.repository.all_queue_entries() if entry.eligible_for_deep_analysis]
+        eligible.sort(key=lambda entry: (-entry.priority_score, entry.candidate_id))
+        shortlist: list[dict[str, object]] = []
+        for entry in eligible:
+            candidate = candidates.get(entry.candidate_id)
+            result = identities.get(entry.candidate_id)
+            if candidate is None or not identity_is_accepted(
+                result,
+                candidate=candidate,
+                related_candidate_ids=related_ticker_candidates(candidate, ticker_groups),
+            ):
+                continue
+            screening = screenings.get(entry.candidate_id)
+            shortlist.append(
+                {
+                    "candidate_id": entry.candidate_id,
+                    "slug": candidate.slug,
+                    "name": candidate.name,
+                    "symbol": candidate.symbol,
+                    "priority": entry.priority,
+                    "priority_score": entry.priority_score,
+                    "identity_outcome": result.outcome if result else None,
+                    "identity_confidence": result.confidence if result else None,
+                    "identity_reason": result.reason if result else None,
+                    "identity_evidence_fingerprint": result.evidence_fingerprint if result else None,
+                    "screening_status": screening.status if screening else None,
+                    "screening_score": screening.score if screening else None,
+                    "missing_evidence": sorted(set(entry.missing_evidence)),
+                }
+            )
+            if len(shortlist) >= max(1, min(limit, 1000)):
+                break
+        return {
+            "eligible_queue_entries": len(eligible),
+            "shortlist_size": len(shortlist),
+            "shortlist": shortlist,
+            "handoff_boundary": "read-only evidence manifest; no Whale/Capital Flow/Opportunity engine execution",
+        }
+
+    def reconcile_eligibility(self) -> int:
+        """Fail closed: queue eligibility must match accepted identity + screening."""
+        identities = self.repository.latest_identity_by_candidate()
+        ticker_groups = self.repository.alias_groups(alias_type="ticker_symbol")
+        screenings = self.repository.latest_screening_by_candidate()
+        states = self.repository.candidate_lifecycle_states()
+        candidates = {item.candidate_id: item for item in self.repository.list_candidates(limit=100_000)}
+        updates: list[tuple[str, bool]] = []
+        for entry in self.repository.all_queue_entries():
+            result = screenings.get(entry.candidate_id)
+            candidate = candidates.get(entry.candidate_id)
+            accepted = candidate is not None and identity_is_accepted(
+                identities.get(entry.candidate_id),
+                candidate=candidate,
+                related_candidate_ids=related_ticker_candidates(candidate, ticker_groups),
+            )
+            advanced = result is not None and result.status == "advanced" and result.advanced
+            lifecycle_ok = states.get(entry.candidate_id) in {"analyzable", "identified", "ranked"}
+            expected = accepted and advanced and lifecycle_ok
+            if expected != bool(entry.eligible_for_deep_analysis):
+                updates.append((entry.candidate_id, expected))
+        return self.repository.set_queue_eligibility(tuple(updates))
 
     def run_market_discovery(self, *, limit: int | None = None, mode: str | None = None) -> dict[str, object]:
         selected_mode = (
@@ -513,8 +612,12 @@ class CandidateDiscoveryEngine:
         universe = self.enumerate_universe()
         provider_run = self.sync(provider="all", limit=limit)
         dex_run = self.enrich_dex_contracts(limit=limit, mode=selected_mode)
-        screening = self.screen_candidates()
-        queue = self.refresh_queue()
+        stage_limit = max(1, min(int(limit) if limit else 500, 10_000))
+        identity = CandidateIdentityResolutionEngine(self.repository).resolve_batch(limit=stage_limit)
+        screening = self.screen_candidates(limit=stage_limit)
+        queue = self.refresh_queue(limit=stage_limit)
+        eligibility_changes = self.reconcile_eligibility()
+        status_changes = self.repository.reconcile_candidate_status()
         stats = self.repository.stats()
         return {
             "mode": selected_mode,
@@ -524,8 +627,12 @@ class CandidateDiscoveryEngine:
             "universe": universe,
             "coverage": self.global_coverage(),
             "candidates": stats.total_candidates,
+            "identity_evaluated": identity.evaluated,
+            "identity_unchanged": identity.unchanged,
             "screened": len(screening),
             "queued": len(queue),
+            "eligibility_changes": eligibility_changes,
+            "status_changes": status_changes,
             "top": [entry.candidate_id for entry in queue[:10]],
         }
 
@@ -902,6 +1009,7 @@ class CandidateDiscoveryEngine:
         candidate: CandidateRecord,
         *,
         updated_at: datetime,
+        identity_accepted: bool = False,
     ) -> CandidateQueueEntry:
         score = (
             0.0 if result.status == "rejected" else round(min(result.score + (0.1 if result.advanced else 0.0), 1.0), 4)
@@ -916,18 +1024,28 @@ class CandidateDiscoveryEngine:
             priority = "low"
         else:
             priority = "defer"
+        reasons = list(result.reasons)
+        if not identity_accepted:
+            reasons.append("accepted identity evidence required before deep analysis")
+        else:
+            reasons.append("accepted current identity evidence")
         return CandidateQueueEntry(
             queue_entry_id=identity("candidate-queue-entry", {"candidate": candidate.candidate_id}),
             candidate_id=candidate.candidate_id,
             priority_score=score,
             priority=priority,  # type: ignore[arg-type]
-            priority_reasons=result.reasons,
+            priority_reasons=tuple(reasons),
             missing_evidence=result.missing_evidence,
             lifecycle_state=candidate.lifecycle_status,
             created_at=candidate.first_seen_at,
             updated_at=updated_at,
             source_run_id="latest-screening",
-            eligible_for_deep_analysis=candidate.lifecycle_status == "analyzable" and result.advanced,
+            eligible_for_deep_analysis=(
+                identity_accepted
+                and result.status == "advanced"
+                and result.advanced
+                and candidate.lifecycle_status in {"analyzable", "identified", "ranked"}
+            ),
         )
 
 

@@ -3,25 +3,25 @@
     "acceptance_criteria": [
       {
         "criterion": "Free-provider capacity is inventoried with explicit provenance and observed consumption is persisted without paid API use.",
-        "evidence": "configs/discovery_capacity.yaml separates official_documentation, owner_specified and not_documented limits with undocumented monthly credits left null. Additive capacity tables in src/hunter/data_ops.py persist requests, retries, throttles and cooldowns, including bounded Retry-After cooldowns for single-attempt helper calls. Live evidence under /Users/farhadafshari/hunter-587-live-evidence used only free endpoints; the staged CLI-test remediation adds no provider call.",
+        "evidence": "Existing capacity inventory and acquisition code retained from c6cca495; 96 isolated tests passed with Python socket connect/connect_ex/getaddrinfo blocked. Live billing is not independently certified.",
         "id": "AC-587-01",
-        "verdict": "satisfied"
+        "verdict": "pending-deployment"
       },
       {
         "criterion": "Global discovery uses bounded, resumable free capacity and truthful DexScreener batching without a parallel daemon.",
-        "evidence": "The existing scheduler still runs discovery-market-run every 15 minutes and bounded backfill hourly with at most five contracts; no parallel daemon was introduced. automation start keeps its indefinite production default, and the staged tests/test_automation.py::test_cli_commands now passes --max-iterations 1 so the deterministic lane terminates on the command contract rather than a CI timeout. Incremental discovery omits --limit so persisted CoinGecko cursors advance; GeckoTerminal catalogue and pool pagination remain capped at free-plan page 10 with inaccessible scope recorded; stale checkpoints advance without retrying HTTP 401.",
+        "evidence": "test_T reproduced 12 evaluations for limit 3, now four batches cover 12 with at most 3 evaluations each. test_E covers cursor rotation. Existing scheduler PID 13716 remains running; no deployment.",
         "id": "AC-587-02",
         "verdict": "satisfied"
       },
       {
         "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
-        "evidence": "global_coverage uses real denominators, leaves global pool coverage null and reports GeckoTerminal free_api_page_cap scope through scan_progress and unsupported_scope. Fresh market evidence requires a provider-reported timestamp inside 24 hours. Focused discovery tests still pin null pool coverage, stale-evidence rejection and page-cap behavior; no coverage or freshness claim was weakened by this test-only remediation.",
+        "evidence": "test_S reproduced stale shortlist eligibility after new ticker collision; current alias groups now feed queue, manifest and reconciliation. Registry regression suite passes; no new global coverage claim.",
         "id": "AC-587-03",
-        "verdict": "satisfied"
+        "verdict": "pending-deployment"
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "A fresh judgement was substantiated for the exact staged candidate (base a4a9b9e1, staged index head derived from 87f87d6a) and Issue #587, whose live body defines no acceptance-criteria section. The repository writer finalizer regenerates .hunter/pre-ready-hostile-review.json from staged git blob transitions; the canonical pre-push hook enforces clean tree, exact HEAD, verified Farhad5778 signature and deterministic gates. Focused verification reports 72 tests passed in 22.24 seconds; root cause and regression evidence are recorded as PRH-136 in docs/DEFECT_REGISTRY.json. No merge, new PR, release, scheduler change, production restart or CI rerun loop is claimed; PR #788 remains Draft pending explicit owner merge approval. One pre-push attempt was blocked fail-closed because the PRH-136 regression-test selector was malformed; the selector was corrected to the exact node tests/test_automation.py::test_cli_commands and the Defect Prevention Guard re-passed before this final signed commit.",
+        "evidence": "Aligned staged tree on c6cca495, retained PRH-136 bounded CLI test; 96 tests passed in 20.59s, Ruff Black Mypy pass. Local writer request only, no independent reviewer authority, push or merge.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -43,102 +43,102 @@
     "base_sha": "a4a9b9e173bb15afaed2c162bda9708e93eb2411",
     "defect_families": [
       {
-        "evidence": "Runtime UTC clocks still bound freshness, Retry-After and cooldown windows in the discovery modules; stale GeckoTerminal checkpoints normalize deterministically from persisted state. The staged one-line CLI test argv change cannot promote caller-supplied time into an admission or ordering decision.",
+        "evidence": "Identity fingerprint excludes volatile timestamps; test_B/C cover unchanged and changed evidence. No new caller time admission parameter.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Capacity reservation and cooldown writes retain BEGIN IMMEDIATE snapshot semantics and unique reservation ids in src/hunter/data_ops.py and the discovery repositories; the single-attempt 429 path persists through the same boundary. No new writer or schema replacement was introduced.",
+        "evidence": "test_S covers sequential acquisition then read-only manifest and reconciliation; current alias groups replace stale stored collision membership. Concurrent acquisition snapshot atomicity is not independently established; deployment remains pending.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "DexScreener identity handling is unchanged: registry chain names remain in provider ids and contract namespaces while canonical chainIds are used only in request paths and response filtering. A CLI test argv cannot override candidate identity or source attribution.",
+        "evidence": "test_D/S use immutable candidate IDs and current ticker groups; stale identity is rejected before handoff.",
         "family": "DFF-003",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
-        "evidence": "Unknown operations and providers remain non-permissive; the composite executor defaults non-allowlisted plans to the legacy analytical executor, GeckoTerminal pages above 10 are never requested, HTTP 401 is not retryable, and HTTP 429 persists a cooldown on every attempt count.",
+        "evidence": "test_I/K/S reject missing or stale identity; policy version and fingerprint remain required.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Only additive capacity and discovery tables are written; no credential, token or excluded payload enters candidate metadata. The staged regression adds no persistence surface and the deployment config still points to the existing durable registry.",
+        "evidence": "Patch introduces no new metadata persistence field; test_H covers provider upsert status preservation.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Rolling-window budgets, retries, dedup keys and persisted 429 cooldowns remain deterministic and bound retry storms; the 15-minute incremental and hourly bounded backfill jobs cannot overlap. This remediation removes an unbounded in-process loop from the deterministic test lane without changing scheduler cadence or retry policy.",
+        "evidence": "test_E/T cover durable cursor rotation and bounded evaluation; unchanged evidence test_B passes.",
         "family": "DFF-006",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
-        "evidence": "No authorization proof is replayed: the exact-head request is regenerated from a fresh judgement and per-file blob transitions of the staged index, and no previous reviewer authority, request blob or authorizer is reused.",
+        "evidence": "No authorization code changed; writer finalizer derives new request from staged tree, not previous authority.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "The review artifact binds its own claims digest and review_target_digest; scripts/hunter_pre_ready_review.py re-derives both from exact staged git evidence before any claim is believed, so a stale or hand-edited artifact fails verification.",
+        "evidence": "Canonical finalizer computes content-bound request; no external reviewer signature asserted.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "The request is minted by the repository-owned writer finalizer through the governed channel; no caller-chosen reviewer identity, external proof or trusted-review assertion is recorded.",
+        "evidence": "Existing writer path and owner signing configuration retained; no connector provenance change.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "The regenerated request binds staged exact content; the commit-time finalizer re-verifies staged blobs and the pre-push receipt gate refuses a stale or inherited artifact before any publication.",
-        "family": "DFF-012",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "No independent hosted review authority is asserted, findings are empty and no readiness claim is made. PR #788 stays Draft; final Ready remains the sole trusted default-branch controller's decision after exact-head proof and all pre-Ready checks.",
-        "family": "DFF-013",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The canonical pre-push hook and repository-owned push tool are the only publication path. Exact HEAD, clean tree, verified Farhad5778 signature and deterministic Architecture Index, Artifact, Defect Prevention, Ruff, Black and Mypy gates are enforced before network push; no hook bypass or timeout increase is used.",
-        "family": "DFF-029",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The review artifact remains at the tracked path .hunter/pre-ready-hostile-review.json and is produced by the canonical script; the temporary judgement file is untracked inside the authorized checkout and is removed before the governed push.",
-        "family": "DFF-033",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "Deterministic regressions use monkeypatched clocks, payloads, urlopen, executor delegates and temporary SQLite repositories; no test asserts on a live Issue body or provider response. Root cause and regression evidence for the CI-hang class are recorded through the existing lifecycle as PRH-136 in docs/DEFECT_REGISTRY.json. The first push attempt's DPM rejection was corrected by pinning the single valid regression selector; the guard was re-run locally and passed before finalization.",
-        "family": "DFF-035",
-        "outcome": "clear"
-      },
-      {
-        "evidence": "The approved owner identity Farhad5778 and its configured signing path are unchanged; the docs-only registry addition touches no hook, script, workflow or policy file. Pre-push writer provenance still resolves one canonical principal, and this commit is signed and signature-verified before publication. No alias or cross-principal authority is introduced.",
+        "evidence": "Configured owner name Farhad5778 and signing key unchanged; commit uses git commit -S.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "No authority or policy change is made: the registry addition is a bounded historical learning entry. Range-level push provenance and the governed commit chain are unchanged, so no intermediate commit carrying its own proof is stranded or re-aimed.",
+        "evidence": "Local candidate is aligned as a single new commit on c6cca495, no remote rewrite or intermediate publication.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "The cancelled Hunter / Pre-PR Preflight and Trusted Candidate Preflight Validation runs at the previous head are the observed hang symptom, not a new governance verdict. No publisher or admission code is touched; pending remains pending and failure remains failure. Fresh exact-head check runs are inspected on their own identity after the push.",
+        "evidence": "Old request was rejected by hook; new request generated from current staged content before commit.",
+        "family": "DFF-012",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Local request only; PR stays Draft and independent exact-head hosted review remains outstanding.",
+        "family": "DFF-013",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "No hosted publisher or readiness controller changed; no hosted result asserted for this candidate.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "PRH-136 is recorded as a single individual defect at status 'guarded', not as a new recurring family and not as a 'prevented' claim. No family lifecycle, enforcement stage or explicit_enforcement entry was changed, so a detection-only observation is never relabelled as prevention.",
+        "evidence": "Existing PRH-136 registry record retained verbatim from c6cca495; no family lifecycle promotion.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "No merge-readiness or review-authority implementation is modified. The request is regenerated for the exact staged content, findings are empty and PR #788 stays Draft; no Ready, approval or merge claim is made by this writer. The trusted default-branch controller remains the sole readiness authority.",
+        "evidence": "No merge readiness or reviewer pool change; no authority adoption or merge claim.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "The registry growth is one bounded individual defect record with no family-schema change and no edit to engineering_context_authority.py or smart_prompt_routing.py. The compiler's existing bounded prevention-context budget and family-selection semantics are untouched.",
+        "evidence": "96 focused tests are diagnostic only; no hosted proof or push claimed.",
+        "family": "DFF-029",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Canonical review path and existing registry path retained; no new governance asset path.",
+        "family": "DFF-033",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "96 tests executed with Python socket connections and DNS blocked; bounded CLI regression preserved.",
+        "family": "DFF-035",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Registry identical to c6cca495; no SPM compiler or prevention-context change.",
         "family": "DFF-045",
         "outcome": "clear"
       }
@@ -159,7 +159,13 @@
         "status": "added"
       },
       {
-        "blob_sha": "41c8fc16f09ca82a24720df7b19934c5bf4f4ad6",
+        "blob_sha": "9d511d566dd2eaf0176d41604ca5b2173f0750d3",
+        "path": "tests/test_discovery_identity_handoff.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "0d1e022142bf539d4045222ff9652d861d4ae8a8",
         "path": "configs/automation.yaml",
         "previous_path": "",
         "status": "modified"
@@ -177,19 +183,19 @@
         "status": "modified"
       },
       {
-        "blob_sha": "8dbf629e0a3e3d0c52e30c7c51c3627a59482b55",
+        "blob_sha": "d210ced874c8b1f5e2aa496db0b7d6aab6496371",
         "path": "src/hunter/cli.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "ebc989d3faecbc1e0c9e81f873426b78bc6fba3a",
+        "blob_sha": "355bfa2e3ed95bf0de1d6b1916b95b67b455ac30",
         "path": "src/hunter/data_ops.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "4356e4b5ae10de24e53b55d998089bf3cc48edf3",
+        "blob_sha": "ddbd8135ec5aa51b12c7e6b18f10f618dbe1a43e",
         "path": "src/hunter/discovery/automation.py",
         "previous_path": "",
         "status": "modified"
@@ -201,14 +207,20 @@
         "status": "modified"
       },
       {
-        "blob_sha": "247cb7bb6d8b86511e4b0303a7e7761dc84d7ebb",
+        "blob_sha": "edbb630c41f06badf83de299aa00a3bf1581e27b",
         "path": "src/hunter/discovery/engine.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "db11a5bfb3ed77b037b2fea8326ccc8b34b74d5e",
+        "blob_sha": "42576ff87889f1751dc6c6f80da5e399530cc983",
         "path": "src/hunter/discovery/identity.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "240b84ba82e7a84f059c91ba52beefb8012893d9",
+        "path": "src/hunter/discovery/models.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -219,7 +231,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "3ad589946d23fd198599aa86840ef9fefa45ce34",
+        "blob_sha": "ca02fa0f0a995f75c1d3b4b2887a88ead3062cd9",
         "path": "src/hunter/discovery/repository.py",
         "previous_path": "",
         "status": "modified"
@@ -231,17 +243,22 @@
         "status": "modified"
       },
       {
-        "blob_sha": "fb96c6b24a1639352e9cff370eea0018e2d875e2",
+        "blob_sha": "7f659f7f40e227052c03c55b9d8ba17eae4dfb7a",
         "path": "tests/test_global_discovery_candidate_registry.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "c560c473ed869e3872320bf77f52f9bb0036f72a057d75537bfd64c832723588"
+    "review_target_digest": "a2af59828aa7f3e1781c555c9701eafce662828a970fa2fe4cb99a1def005cc7"
   },
-  "review_id": "df8ebfae29fa304dd53d0ecde7d233e5566e43b47b271baddfb3cfc5124cbedf",
+  "review_eligibility": {
+    "mode": "pre_deployment",
+    "pr_number": 788,
+    "repository": "fafa33/Project-Hunter"
+  },
+  "review_id": "edaaef6c1feed777c6d99ea57f2918c0a76e33b9764ab1bd518b1456a1588e47",
   "review_request": {
-    "claims_id": "df8ebfae29fa304dd53d0ecde7d233e5566e43b47b271baddfb3cfc5124cbedf",
+    "claims_id": "edaaef6c1feed777c6d99ea57f2918c0a76e33b9764ab1bd518b1456a1588e47",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

@@ -263,14 +263,20 @@ def main(argv: list[str] | None = None) -> int:
     discovery_report.add_argument("--limit", type=int, default=25)
     discovery_candidate = discovery_sub.add_parser("candidate")
     discovery_candidate.add_argument("candidate")
-    discovery_sub.add_parser("screen")
+    discovery_screen = discovery_sub.add_parser("screen")
+    discovery_screen.add_argument("--batch-size", type=int, default=1000)
     discovery_queue = discovery_sub.add_parser("queue")
     discovery_queue.add_argument("queue_command", nargs="?", choices=("refresh",))
     discovery_queue.add_argument("--limit", type=int, default=25)
+    discovery_queue.add_argument("--batch-size", type=int, default=1000)
+    discovery_sub.add_parser("reconcile")
+    discovery_handoff = discovery_sub.add_parser("handoff")
+    discovery_handoff.add_argument("--limit", type=int, default=25)
     discovery_sub.add_parser("conflicts")
     discovery_identity = discovery_sub.add_parser("identity")
     discovery_identity.add_argument("identity_command", choices=("resolve", "coverage", "report", "conflicts"))
     discovery_identity.add_argument("--limit", type=int, default=25)
+    discovery_identity.add_argument("--batch-size", type=int, default=500)
     discovery_automation = discovery_sub.add_parser("automation")
     discovery_automation_sub = discovery_automation.add_subparsers(dest="discovery_automation_command")
     discovery_automation_sub.add_parser("install")
@@ -1260,7 +1266,7 @@ def _discovery(args: object) -> int:
         print(json.dumps([candidate_for_report(candidate) for candidate in candidates], indent=2, sort_keys=True))
         return 0
     if command == "screen":
-        results = engine.screen_candidates()
+        results = engine.screen_candidates(limit=int(getattr(args, "batch_size", 1000)))
         counts = Counter(result.status for result in results)
         print(
             f"screened={len(results)} advanced={counts['advanced']} deferred={counts['deferred']} rejected={counts['rejected']}"
@@ -1268,7 +1274,7 @@ def _discovery(args: object) -> int:
         return 0
     if command == "queue":
         entries = (
-            engine.refresh_queue()
+            engine.refresh_queue(limit=int(getattr(args, "batch_size", 1000)))
             if getattr(args, "queue_command", None) == "refresh"
             else repository.queue_entries(limit=int(args.limit))
         )
@@ -1301,6 +1307,16 @@ def _discovery(args: object) -> int:
             )
         )
         return 0
+    if command == "reconcile":
+        payload = {
+            "queue_eligibility_changes": engine.reconcile_eligibility(),
+            "candidate_status_changes": repository.reconcile_candidate_status(),
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    if command == "handoff":
+        print(json.dumps(engine.handoff_manifest(limit=int(args.limit)), indent=2, sort_keys=True))
+        return 0
     if command == "conflicts":
         print(
             json.dumps(
@@ -1312,7 +1328,7 @@ def _discovery(args: object) -> int:
         identity_command = getattr(args, "identity_command", None)
         identity_engine = CandidateIdentityResolutionEngine(repository)
         if identity_command == "resolve":
-            summary = identity_engine.resolve_all()
+            summary = identity_engine.resolve_batch(limit=int(getattr(args, "batch_size", 500)))
             print(json.dumps(summary.__dict__, indent=2, sort_keys=True))
             return 0
         results = repository.identity_results()

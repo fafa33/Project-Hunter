@@ -528,6 +528,7 @@ def test_screening_and_queue_are_deterministic_and_idempotent(tmp_path) -> None:
     engine = CandidateDiscoveryEngine(repository, config, providers={})
 
     engine.sync(provider="seed")
+    CandidateIdentityResolutionEngine(repository).resolve_all()
     first_screening = engine.screen_candidates()
     first_queue = engine.refresh_queue()
     second_queue = engine.refresh_queue()
@@ -648,8 +649,8 @@ def test_discovery_automation_install_is_idempotent(tmp_path) -> None:
     status = discovery_automation_status(config_path)
 
     assert first == second
-    assert status["installed_jobs"] == 5
-    assert status["expected_jobs"] == 5
+    assert status["installed_jobs"] == 6
+    assert status["expected_jobs"] == 6
 
 
 def _provider(provider: StaticDiscoveryProvider) -> DiscoveryProvider:
@@ -1509,6 +1510,13 @@ def test_canonical_automation_config_carries_free_capacity_observation_metadata(
     assert (job.get("schedule") or {}).get("expression") == "*/15 * * * *"
     assert (backfill.get("schedule") or {}).get("expression") == "0 * * * *"
     assert (backfill.get("metadata") or {}).get("bounded_contracts_per_cycle") == 5
+    identity = by_id.get("discovery-identity-resolution")
+    screening = by_id.get("discovery-candidate-screening")
+    queue = by_id.get("discovery-queue-refresh")
+    assert identity is not None and screening is not None and queue is not None
+    assert (identity.get("schedule") or {}).get("expression") == "5 */6 * * *"
+    assert (screening.get("schedule") or {}).get("expression") == "10 */6 * * *"
+    assert (queue.get("schedule") or {}).get("expression") == "15 */6 * * *"
 
 
 def test_geckoterminal_fair_rotation_changes_network_order_between_passes(monkeypatch) -> None:
@@ -1732,6 +1740,7 @@ def test_read_only_discovery_executor_isolated_from_privileged_operations(monkey
     executor(plan_for("coingecko_market_sync"), context)
 
     assert routed == [
+        ("discovery", "discovery_identity_resolve"),
         ("discovery", "discovery_market_run"),
         ("discovery", "discovery_market_run_backfill"),
         ("discovery", "discovery_queue_refresh"),
