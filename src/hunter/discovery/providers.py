@@ -342,7 +342,7 @@ class GeckoTerminalDiscoveryProvider:
                 if max_candidates is not None and len(rows) >= max(1, max_candidates):
                     break
             except _RequestBudgetExhausted:
-                status = "partial" if successful_pages else "partial"
+                status = "partial"
                 break
             except ProviderUnavailableError as exc:
                 error = str(exc)
