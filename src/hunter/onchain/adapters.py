@@ -163,6 +163,18 @@ class EVMJsonRpcAdapter:
             raise EVMProviderUnavailable("eth_getBalance returned invalid payload", failure_type="invalid_response")
         return int(result, 16)
 
+    def code(self, address: str, block_number: int) -> str:
+        result = self._rpc("eth_getCode", (address, hex(block_number)))
+        if not isinstance(result, str):
+            raise EVMProviderUnavailable("eth_getCode returned invalid payload", failure_type="invalid_response")
+        return result.lower()
+
+    def contract_call(self, address: str, data: str, block_number: int) -> str:
+        result = self._rpc("eth_call", ({"to": address, "data": data}, hex(block_number)))
+        if not isinstance(result, str):
+            raise EVMProviderUnavailable("eth_call returned invalid payload", failure_type="invalid_response")
+        return result.lower()
+
     def logs(
         self, *, address: str | None, from_block: int, to_block: int, topics: tuple[str | None, ...]
     ) -> tuple[dict[str, Any], ...]:

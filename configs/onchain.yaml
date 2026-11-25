@@ -20,6 +20,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    swap_rpc_budget: 12
   - chain_id: 42161
     network: arbitrum
     family: evm
@@ -150,6 +151,28 @@ tracked_assets:
     asset_type: stablecoin
     decimals: 18
     contract_address: "0x6B175474E89094C44Da98b954EedeAC495271d0F"
+
+dex_pools:
+  - pool_id: uniswap-v3-ethereum-usdc-weth-0005
+    project: uniswap
+    chain_id: 1
+    address: "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640"
+    dex: uniswap
+    version: v3
+    token0: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    token1: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+    token0_decimals: 6
+    token1_decimals: 18
+    target_asset: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    target_asset_symbol: USDC
+    source_url: https://docs.uniswap.org/contracts/v3/reference/deployments/ethereum-deployments
+    source_type: official_documentation
+    verification_timestamp: "2026-11-25T00:00:00+00:00"
+    confidence: 0.95
+    active: true
+    valid_from: "2021-05-05T00:00:00+00:00"
+    valid_to:
+    routers: []
 
 surface_registry:
   - project: aave

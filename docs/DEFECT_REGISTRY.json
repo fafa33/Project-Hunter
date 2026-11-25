@@ -1372,6 +1372,26 @@
       "guard": "Require an exact chain/contract provider mapping, a causal at-or-before price point, a freshness ceiling, exact Decimal valuation, and persisted source provenance; expose the result only as economic context and never as canonical valuation, wallet attribution, or wallet performance.",
       "test": "tests/test_historical_acquisition.py::test_historical_usd_valuation_is_exact_and_evidence_bound; tests/test_historical_acquisition.py::test_historical_usd_valuation_fails_closed_for_wrong_chain_stale_and_future_points; tests/test_market_validation_input_authority.py::test_capital_flow_usd_metrics_preserve_evidence_and_never_infer_wallet_performance",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-152",
+      "class": "swap-detection-without-verified-pool-and-receipt-binding",
+      "source": "Issue #587 owner criterion comment 7172851514: swap detection must bind exact chain, verified pool identity, token contracts and decimals, finalized successful receipt, exact transaction and log, provenance, wallet attribution, and a bounded RPC budget; unsupported, failed, wrong-pool, or multi-hop events must fail closed.",
+      "classification": "systemic",
+      "guard_boundary": "onchain DEX event acquisition, decoding, signing, and replay verification",
+      "guard": "Decode only explicitly supported V2/V3 swap schemas from an active verified pool configuration, verify pool token contracts and decimals onchain, bind the signed log to the transaction receipt and independent corroboration, separate router/pool from trader, mark ambiguous multi-hop swaps unavailable, and enforce a per-chain RPC budget.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_v2_and_v3_logs_decode_exact_direction_and_amounts; tests/test_onchain_swap_wallet_evidence.py::test_unsupported_failed_and_unknown_pool_logs_are_rejected; tests/test_onchain_swap_wallet_evidence.py::test_router_and_pool_addresses_are_not_attributed_wallets; tests/test_onchain_swap_wallet_evidence.py::test_multi_hop_same_asset_direction_is_ambiguous_not_double_counted; tests/test_onchain_swap_wallet_evidence.py::test_swap_evidence_replay_and_tamper_rejection; tests/test_onchain_swap_wallet_evidence.py::test_adapter_enforces_bounded_swap_rpc_budget",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-153",
+      "class": "wallet-performance-fabricated-from-unverified-swaps",
+      "source": "Issue #587 owner criterion comment 7172851514: wallet performance must consume only verified attributed swaps, keep chain and asset identity exact, use deterministic documented FIFO only with sufficient inventory, keep fees separate, and expose only evidence-bound signals through existing consumers.",
+      "classification": "systemic",
+      "guard_boundary": "wallet performance aggregation and whale/market-validation context exposure",
+      "guard": "Aggregate only verified per-chain attributed swaps, reject ambiguous attribution and partial inventory, compute exact Decimal FIFO realized P&L from causally valued buys and sells, leave net P&L unavailable without fees, and expose gross realized context without ranking insufficient evidence.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_partial_inventory_fees_and_cross_chain_are_unavailable; tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_fifo_profitable_and_losing_cases; tests/test_onchain_swap_wallet_evidence.py::test_market_validation_swap_wallet_context_uses_identity_and_usd_integration; tests/test_market_validation_input_authority.py::test_capital_flow_usd_metrics_preserve_evidence_and_never_infer_wallet_performance",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -3481,6 +3501,70 @@
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #587 market-validation checkpoint at head a1a81a106396992e05b275ae77512231ad9e696a: point-in-time USD value was unavailable and the existing closest-point behavior was mischaracterized as future-selecting; live CoinGecko history supplied an at-or-before point with source provenance."
+      ]
+    },
+    {
+      "id": "DFF-070",
+      "title": "swap-evidence-must-be-pool-receipt-and-budget-bound",
+      "invariant": "Swap evidence must decode only explicitly supported schemas from an active verified pool, bind exact token contracts and decimals to a finalized successful transaction receipt and independent corroboration, never attribute routers or pools as traders, fail closed for ambiguous multi-hop events, and remain within a declared per-chain RPC budget.",
+      "applicability": {
+        "changed_paths": [
+          "configs/onchain.yaml",
+          "src/hunter/onchain/adapters.py",
+          "src/hunter/onchain/configuration.py",
+          "src/hunter/onchain/dex.py",
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/evidence.py",
+          "src/hunter/onchain/models.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "These paths add DEX pool configuration, event decoding, RPC acquisition, signing, and replay verification. Unverified pools, unsupported event shapes, failed receipts, router attribution, or unbounded calls would create fabricated trading evidence."
+      },
+      "prevention": {
+        "mechanism": "Register only verified pool surfaces, verify onchain token contracts and decimals, decode explicit V2/V3 schemas with exact normalized token amounts, bind receipt and independent corroboration, separate trader from router/pool, mark ambiguous multi-hop swaps unavailable, and enforce the configured swap RPC budget.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/evidence.py::verified_swap_rows"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_v2_and_v3_logs_decode_exact_direction_and_amounts",
+        "tests/test_onchain_swap_wallet_evidence.py::test_unsupported_failed_and_unknown_pool_logs_are_rejected",
+        "tests/test_onchain_swap_wallet_evidence.py::test_router_and_pool_addresses_are_not_attributed_wallets",
+        "tests/test_onchain_swap_wallet_evidence.py::test_multi_hop_same_asset_direction_is_ambiguous_not_double_counted",
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_evidence_replay_and_tamper_rejection",
+        "tests/test_onchain_swap_wallet_evidence.py::test_adapter_enforces_bounded_swap_rpc_budget",
+        "tests/test_engineering_context_authority.py::test_issue_587_swap_wallet_evidence_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 owner criterion comment 7172851514: bounded Swap Detection must verify chain, pool identity, token contracts, decimals, finalized successful receipt, exact transaction and log, provenance, and wallet attribution without parallel architecture."
+      ]
+    },
+    {
+      "id": "DFF-071",
+      "title": "wallet-performance-must-use-verified-fifo-and-separate-fees",
+      "invariant": "Wallet performance must consume only verified attributed swaps with exact chain and asset identity, use deterministic FIFO only when inventory history is sufficient, compute exact Decimal realized P&L from causal valuations, keep fees and net P&L unavailable when evidence is absent, and expose gross context without ranking insufficient evidence.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/market_validation/acquisition_sources.py",
+          "src/hunter/onchain/wallet_performance.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "These paths aggregate verified swaps into wallet performance and market-validation context. Unattributed transfers, cross-chain mixing, partial inventory, missing fees, or fabricated win rates would manufacture a false performance signal."
+      },
+      "prevention": {
+        "mechanism": "Group only by exact chain and attributed wallet, require verified swap status, reject ambiguous attribution or incomplete inventory, apply deterministic FIFO with exact Decimal arithmetic, keep net P&L unavailable without fee evidence, and expose evidence-bound metrics through the existing whale/market-validation seam.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/wallet_performance.py::wallet_performance_from_swaps"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_partial_inventory_fees_and_cross_chain_are_unavailable",
+        "tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_fifo_profitable_and_losing_cases",
+        "tests/test_onchain_swap_wallet_evidence.py::test_market_validation_swap_wallet_context_uses_identity_and_usd_integration",
+        "tests/test_engineering_context_authority.py::test_issue_587_swap_wallet_evidence_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 owner criterion comment 7172851514: bounded Wallet Performance must consume only verified attributed swaps, separate gross/net and realized/unrealized, require sufficient inventory for FIFO, and avoid ranking insufficient evidence."
       ]
     }
   ]

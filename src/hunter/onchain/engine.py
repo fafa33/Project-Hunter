@@ -5,6 +5,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, localcontext
+from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -13,6 +14,12 @@ from hunter.execution.identity import identity
 from hunter.market_validation.configuration import load_market_validation_config
 from hunter.onchain.adapters import EVMJsonRpcAdapter, EVMProviderUnavailable
 from hunter.onchain.configuration import OnChainConfig, load_onchain_config
+from hunter.onchain.dex import (
+    V2_SWAP_TOPIC,
+    V3_SWAP_TOPIC,
+    decode_swap_log,
+    verify_pool_identity,
+)
 from hunter.onchain.evidence import (
     CORROBORATION_POLICY,
     TRANSFER_TOPIC,
@@ -27,6 +34,7 @@ from hunter.onchain.evidence import (
 from hunter.onchain.models import (
     CapitalFlowRecord,
     CapitalFlowSnapshot,
+    DexPoolConfig,
     FlowCategory,
     OnChainSurface,
     RawOnChainObservation,
@@ -35,6 +43,9 @@ from hunter.onchain.registry import SurfaceRegistry
 from hunter.onchain.repository import OnChainRepository
 
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+SWAP_IDENTITY_RPC_CALLS = 4
+MIN_SWAP_RPC_BUDGET = SWAP_IDENTITY_RPC_CALLS + 3
+_ADDRESS_PATTERN = re.compile(r"0x[0-9a-f]{40}")
 
 
 class CapitalFlowEngine:
@@ -96,6 +107,12 @@ class CapitalFlowEngine:
                 observations, signatures, acquisition_unavailable = self._observations(
                     surface, adapter, start_block, selected_end_block, block_hash, end_timestamp
                 )
+                swap_observations, swap_signatures, swap_unavailable = self._surface_swap_observations(
+                    surface, adapter, start_block, selected_end_block, block_hash, end_timestamp
+                )
+                evidence = observations + swap_observations
+                signatures = signatures + swap_signatures
+                acquisition_unavailable = tuple(sorted({*acquisition_unavailable, *swap_unavailable}))
             except EVMProviderUnavailable:
                 snapshot = _unavailable_snapshot(surface, "provider_unavailable", ("live_provider",))
                 self.repository.save_snapshots((snapshot,))
@@ -110,7 +127,7 @@ class CapitalFlowEngine:
                 ),
             )
             snapshot = snapshot_from_flows(
-                surface, "24h", start_block, selected_end_block, flows, observations, end_timestamp
+                surface, "24h", start_block, selected_end_block, flows, evidence, end_timestamp
             )
             # Bounded tracked-token evidence is not complete economic coverage.
             snapshot = replace(
@@ -126,7 +143,7 @@ class CapitalFlowEngine:
                 gross_outflow=Decimal(0),
                 net_external_flow=Decimal(0),
             )
-            self.repository.save_acquired_evidence(observations, signatures)
+            self.repository.save_acquired_evidence(evidence, signatures)
             self.repository.save_flows(flows)
             self.repository.save_snapshots((snapshot,))
             self.repository.save_checkpoint(surface.chain_id, surface.project, selected_end_block, block_hash)
@@ -344,6 +361,220 @@ class CapitalFlowEngine:
                     unavailable.add("transfer_corroboration_unavailable")
                     continue
         return tuple(rows), tuple(signatures), tuple(sorted(unavailable))
+
+    def _surface_swap_observations(
+        self,
+        surface: OnChainSurface,
+        adapter: EVMJsonRpcAdapter,
+        start_block: int,
+        end_block: int,
+        block_hash: str,
+        end_timestamp: datetime,
+    ) -> tuple[tuple[RawOnChainObservation, ...], tuple[dict[str, object], ...], tuple[str, ...]]:
+        pools = tuple(
+            pool_row
+            for pool_row in self.config.dex_pools
+            if pool_row.active and pool_row.chain_id == surface.chain_id and pool_row.project == surface.project
+        )
+        observations: list[RawOnChainObservation] = []
+        signatures: list[dict[str, object]] = []
+        unavailable: set[str] = set()
+        for pool_row in pools:
+            rows, signed, reasons = self._swap_observations(
+                pool_row,
+                adapter,
+                start_block=start_block,
+                end_block=end_block,
+                block_hash=block_hash,
+                end_timestamp=end_timestamp,
+            )
+            observations.extend(rows)
+            signatures.extend(signed)
+            unavailable.update(reasons)
+        return tuple(observations), tuple(signatures), tuple(sorted(unavailable))
+
+    def _swap_observations(
+        self,
+        pool_row: DexPoolConfig,
+        adapter: EVMJsonRpcAdapter,
+        *,
+        start_block: int,
+        end_block: int,
+        block_hash: str,
+        end_timestamp: datetime,
+    ) -> tuple[tuple[RawOnChainObservation, ...], tuple[dict[str, object], ...], tuple[str, ...]]:
+        chain = next((item for item in self.config.chains if item.chain_id == pool_row.chain_id), None)
+        budget = chain.swap_rpc_budget if chain else 12
+        if budget < MIN_SWAP_RPC_BUDGET:
+            return (), (), ("swap_rpc_budget_exhausted",)
+        if self.evidence_signing_key is None:
+            return (), (), ("evidence_signing_key",)
+        unavailable: set[str] = set()
+        try:
+            identity_error = verify_pool_identity(pool_row, adapter, end_block)
+        except (EVMProviderUnavailable, ValueError, TypeError):
+            return (), (), ("pool_identity_unavailable",)
+        if identity_error is not None:
+            return (), (), (identity_error,)
+        used = SWAP_IDENTITY_RPC_CALLS
+        topic = V2_SWAP_TOPIC if pool_row.version == "v2" else V3_SWAP_TOPIC if pool_row.version == "v3" else None
+        if topic is None:
+            return (), (), ("unsupported_dex_schema",)
+        try:
+            logs = adapter.logs(address=pool_row.address, from_block=start_block, to_block=end_block, topics=(topic,))
+        except EVMProviderUnavailable:
+            return (), (), ("swap_log_provider_unavailable",)
+        existing_rows = {
+            f"{row.get('project')}:{row.get('chain_id')}:{row.get('evidence_id')}": row for row in self.repository.raw()
+        }
+        existing_signatures = {str(row["signature_id"]): row for row in self.repository.evidence_signatures()}
+        tx_counts: dict[str, int] = {}
+        for log in logs:
+            tx = str(log.get("transactionHash", "")).lower()
+            tx_counts[tx] = tx_counts.get(tx, 0) + 1
+        observations: list[RawOnChainObservation] = []
+        signatures: list[dict[str, object]] = []
+        seen: set[str] = set()
+        surface = pool_row.as_surface()
+        for log in logs:
+            try:
+                if log.get("removed") or str(log.get("address", "")).lower() != pool_row.address:
+                    continue
+                topics_raw = tuple(str(item).lower() for item in log["topics"])
+                decoded = decode_swap_log(pool_row, {**log, "topics": topics_raw})
+                if decoded.status != "AVAILABLE" or decoded.sender is None:
+                    continue
+                number = int(str(log["blockNumber"]), 16)
+                index = int(str(log["logIndex"]), 16)
+                tx = str(log["transactionHash"]).lower()
+                block_hash_value = str(log["blockHash"]).lower()
+                data = str(log["data"]).lower()
+                if (
+                    not start_block <= number <= end_block
+                    or index < 0
+                    or block_hash_value.lower() != block_hash.lower()
+                    or re.fullmatch(r"0x[0-9a-f]{64}", tx) is None
+                    or topics_raw[0] != topic
+                ):
+                    continue
+                evidence_id = evm_log_evidence_id(pool_row.chain_id, tx, index)
+                if evidence_id in seen:
+                    continue
+                if used + 1 > budget:
+                    unavailable.add("swap_rpc_budget_exhausted")
+                    break
+                receipt = adapter.transaction_receipt(tx)
+                used += 1
+                if not receipt_matches_log(receipt, {**log, "topics": topics_raw, "data": data}):
+                    continue
+                receipt_from = str(receipt.get("from", "")).lower()
+                if _ADDRESS_PATTERN.fullmatch(receipt_from) is None:
+                    continue
+                if used + 1 > budget:
+                    unavailable.add("swap_rpc_budget_exhausted")
+                    break
+                wallet_code = adapter.code(receipt_from, number)
+                used += 1
+                corroborations: tuple[tuple[str, dict[str, Any]], ...] = ()
+                if used + 1 <= budget:
+                    corroborations = adapter.corroborating_receipts(
+                        tx, exclude=(adapter.endpoint_identity, adapter.endpoint_identity)
+                    )
+                    used += len(corroborations)
+                if not corroborations or not all(
+                    receipt_matches_log(other, {**log, "topics": topics_raw, "data": data})
+                    for _, other in corroborations
+                ):
+                    unavailable.add("swap_corroboration_unavailable")
+                    continue
+                excluded = {pool_row.address, *pool_row.routers}
+                attributable = (
+                    wallet_code == "0x"
+                    and receipt_from not in excluded
+                    and str(receipt.get("status", "")).lower() == "0x1"
+                )
+                ambiguous = tx_counts.get(tx, 0) > 1
+                target_amount = decoded.amount_out if decoded.trade_direction == "buy" else decoded.amount_in
+                target_raw = decoded.raw_amount_out if decoded.trade_direction == "buy" else decoded.raw_amount_in
+                acquired_at = self.clock.now().astimezone(UTC)
+                row = RawOnChainObservation(
+                    project=pool_row.project,
+                    chain_id=pool_row.chain_id,
+                    provider=adapter.provider,
+                    endpoint_identity=adapter.endpoint_identity,
+                    block_number=number,
+                    block_hash=block_hash_value,
+                    block_timestamp=end_timestamp,
+                    observed_address=pool_row.address,
+                    acquisition_timestamp=acquired_at,
+                    finality_status="finalized",
+                    source_reference=pool_row.source_url,
+                    evidence_id=evidence_id,
+                    transaction_hash=tx,
+                    log_index=index,
+                    counterparty_address=decoded.sender,
+                    asset_contract=pool_row.target_asset,
+                    asset_symbol=pool_row.target_asset_symbol,
+                    raw_amount=str(target_raw),
+                    decimals=(
+                        pool_row.token0_decimals
+                        if pool_row.target_asset == pool_row.token0
+                        else pool_row.token1_decimals
+                    ),
+                    normalized_amount=target_amount,
+                    direction="unknown",
+                    event_type="dex_swap",
+                    log_endpoint=adapter.endpoint_identity,
+                    receipt_endpoint=adapter.endpoint_identity,
+                    corroborating_endpoints=tuple(sorted(name for name, _ in corroborations)),
+                    receipt_validation_policy=CORROBORATION_POLICY,
+                    receipt_verified_at=acquired_at,
+                    log_address=pool_row.address,
+                    swap_pool_id=pool_row.pool_id,
+                    swap_dex=pool_row.dex,
+                    swap_version=pool_row.version,
+                    swap_event_topic=topic,
+                    token_in_contract=decoded.token_in,
+                    token_out_contract=decoded.token_out,
+                    token_in_raw_amount=str(decoded.raw_amount_in),
+                    token_out_raw_amount=str(decoded.raw_amount_out),
+                    token_in_amount=decoded.amount_in,
+                    token_out_amount=decoded.amount_out,
+                    target_asset_contract=pool_row.target_asset,
+                    trade_direction=decoded.trade_direction,
+                    attributed_wallet=receipt_from if attributable else None,
+                    attribution_status="AVAILABLE" if attributable else "UNAVAILABLE",
+                    attribution_reason=None if attributable else "router_or_contract_attribution_unavailable",
+                    receipt_from=receipt_from,
+                    receipt_status=str(receipt.get("status", "")).lower(),
+                    wallet_code=wallet_code if attributable else None,
+                    swap_status="AMBIGUOUS" if ambiguous else "AVAILABLE",
+                    rpc_request_count=used,
+                    log_topics=topics_raw,
+                    log_data=data,
+                )
+                row = replace(row, receipt_log_digest=receipt_log_digest(row))
+                existing = existing_rows.get(f"{row.project}:{row.chain_id}:{row.evidence_id}")
+                if existing is not None and signature_id(row) in existing_signatures:
+                    preserved = _preserved_signed_row(row, existing)
+                    if preserved is not None:
+                        row = preserved
+                signed = sign_observation(row, surface, self.evidence_signing_key)
+                observations.append(row)
+                signatures.append(signed)
+                seen.add(evidence_id)
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                AttributeError,
+                OverflowError,
+                CapitalFlowEvidenceError,
+                EVMProviderUnavailable,
+            ):
+                unavailable.add("swap_evidence_signing_failed")
+                continue
+        return tuple(observations), tuple(signatures), tuple(sorted(unavailable))
 
     def _block_window(self, chain_id: int, window: str) -> int:
         chain = next((item for item in self.config.chains if item.chain_id == chain_id), None)

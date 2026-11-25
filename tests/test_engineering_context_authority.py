@@ -575,3 +575,31 @@ def test_issue_587_identity_and_usd_evidence_families_reach_spm_context() -> Non
     assert "causal" in str(by_id["DFF-069"].get("invariant", "")).lower()
     assert "canonical valuation" in str(by_id["DFF-069"].get("invariant", "")).lower()
     assert "wallet performance" in str(by_id["DFF-069"].get("invariant", "")).lower()
+
+
+def test_issue_587_swap_wallet_evidence_families_reach_spm_context() -> None:
+    context = EngineeringContextAuthority().compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        scope=_scope(
+            "configs/onchain.yaml",
+            "src/hunter/market_validation/acquisition_sources.py",
+            "src/hunter/onchain/adapters.py",
+            "src/hunter/onchain/configuration.py",
+            "src/hunter/onchain/dex.py",
+            "src/hunter/onchain/engine.py",
+            "src/hunter/onchain/evidence.py",
+            "src/hunter/onchain/models.py",
+            "src/hunter/onchain/wallet_performance.py",
+            "tests/test_onchain_swap_wallet_evidence.py",
+        ),
+        budget_bytes=1_000_000,
+    )
+    families = cast(list[dict[str, object]], context["applicable_defect_families"])
+    by_id = {str(item.get("id")): item for item in families}
+
+    for family_id in ("DFF-070", "DFF-071"):
+        assert family_id in by_id
+    assert "verified pool" in str(by_id["DFF-070"].get("invariant", "")).lower()
+    assert "rpc budget" in str(by_id["DFF-070"].get("invariant", "")).lower()
+    assert "fifo" in str(by_id["DFF-071"].get("invariant", "")).lower()
+    assert "fees" in str(by_id["DFF-071"].get("invariant", "")).lower()

@@ -21,9 +21,10 @@ from hunter.macro import MacroRepository, MacroSnapshot
 from hunter.market_validation.models import EngineValidationSource, Scalar
 from hunter.narrative.provider import NARRATIVE_ENGINES, NARRATIVE_METRIC
 from hunter.onchain.configuration import OnChainConfig, load_onchain_config
-from hunter.onchain.evidence import EvidenceTrust, verified_capital_flow_rows
+from hunter.onchain.evidence import EvidenceTrust, verified_capital_flow_rows, verified_swap_rows
 from hunter.onchain.models import RawOnChainObservation
 from hunter.onchain.repository import OnChainRepository
+from hunter.onchain.wallet_performance import FIFO_POLICY, wallet_performance_from_swaps
 from hunter.scenario import SCENARIO_ENGINES, ScenarioRepository
 from hunter.scenario.models import ScenarioImpact
 from hunter.timing.models import TimingAssessment
@@ -108,6 +109,11 @@ def acquisition_engine_sources(
             )
             if contextual is not None:
                 sources[project_id].append(contextual)
+            swap_context = _swap_wallet_context(
+                project_id, capital_rows, as_of=as_of, usd_valuator=resolved_usd_valuator
+            )
+            if swap_context is not None:
+                sources[project_id].append(swap_context)
         for project_id, graph_sources in _graph_engine_sources(as_of=as_of).items():
             sources[project_id].extend(graph_sources)
         for project_id, economic_sources in _economic_graph_engine_sources(as_of=as_of).items():
@@ -261,6 +267,76 @@ def _capital_whale_context(
         warnings=tuple(warnings),
         raw_input_metrics={"context_transfer_count": len(ids), **usd_metrics},
     )
+
+
+def _swap_wallet_context(
+    project_id: str,
+    rows: Sequence[Mapping[str, object] | RawOnChainObservation],
+    *,
+    as_of: datetime | None,
+    config: OnChainConfig | None = None,
+    repository: Any | None = None,
+    trust: EvidenceTrust | None = None,
+    usd_valuator: Callable[[RawOnChainObservation], UsdValuation] | None = None,
+) -> EngineValidationSource | None:
+    cutoff = as_of or datetime.now(UTC)
+    verified = verified_swap_rows(
+        project_id,
+        rows,
+        config=config,
+        repository=repository,
+        trust=trust,
+        as_of=cutoff,
+    )
+    if not verified:
+        return None
+    valuations = tuple(usd_valuator(row) for row in verified) if usd_valuator is not None else ()
+    valuation_by_id = {row.evidence_id: valuation for row, valuation in zip(verified, valuations, strict=False)}
+    performance = wallet_performance_from_swaps(verified, valuation_by_id, as_of=cutoff)
+    usd_metrics = capital_flow_usd_metrics(valuations)
+    ids = tuple(sorted(row.evidence_id for row in verified))
+    evidence_timestamps = tuple(row.block_timestamp for row in verified)
+    available = len(performance) == 1 and performance[0].status == "AVAILABLE" and bool(usd_metrics)
+    metrics: dict[str, Scalar] = {
+        "verified_swap_count": len(ids),
+        "fifo_policy": FIFO_POLICY,
+        "net_pnl_usd": "UNAVAILABLE",
+        "coverage": _scalar_decimal(performance[0].coverage) if performance else None,
+        "sample_size": performance[0].sample_size if performance else 0,
+        "win_rate": _scalar_decimal(performance[0].win_rate) if performance else None,
+        "cost_basis_usd": _scalar_decimal(performance[0].cost_basis_usd) if performance else None,
+        "realized_pnl_usd": _scalar_decimal(performance[0].realized_pnl_usd) if performance else None,
+        "realized_return": _scalar_decimal(performance[0].realized_return) if performance else None,
+        **usd_metrics,
+    }
+    missing_fields = ("fees", "unrealized_pnl", "net_pnl_usd")
+    if not usd_metrics:
+        missing_fields = (*missing_fields, "economic_value")
+    warnings = ("net_pnl_unavailable_fees_not_evidenced", "gross_realized_performance_only")
+    return EngineValidationSource(
+        engine="whale_intelligence",
+        score=0.0,
+        confidence=0.5 if available else 0.0,
+        timestamp=max(evidence_timestamps),
+        freshness=max(
+            (max(0.0, (cutoff - item).total_seconds()) for item in evidence_timestamps),
+            default=0.0,
+        ),
+        source_record_ids=ids,
+        evidence_ids=ids,
+        repository_ids=ids,
+        source="swap-wallet-context",
+        collector="onchain-repository",
+        validation_status="PARTIAL",
+        status="AVAILABLE" if available else "UNAVAILABLE",
+        missing_fields=missing_fields,
+        warnings=warnings,
+        raw_input_metrics=metrics,
+    )
+
+
+def _scalar_decimal(value: Decimal | None) -> str | None:
+    return None if value is None else str(value)
 
 
 def capital_flow_usd_metrics(valuations: tuple[UsdValuation, ...]) -> dict[str, Scalar]:

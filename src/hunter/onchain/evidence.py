@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, localcontext
@@ -16,7 +16,8 @@ from cryptography.hazmat.primitives.serialization import Encoding, NoEncryption,
 from hunter.execution.identity import identity
 from hunter.onchain.adapters import endpoint_identity
 from hunter.onchain.configuration import OnChainConfig, load_onchain_config
-from hunter.onchain.models import RawOnChainObservation
+from hunter.onchain.dex import V2_SWAP_TOPIC, V3_SWAP_TOPIC, decode_swap_log
+from hunter.onchain.models import DexPoolConfig, RawOnChainObservation
 
 EVIDENCE_SIGNING_DOMAIN = "hunter-capital-flow-evidence-v1"
 EVIDENCE_SCHEMA_VERSION = "hunter-capital-flow-evidence-record-v1"
@@ -27,6 +28,7 @@ CORROBORATION_POLICY = "evm-receipt-corroboration-v1"
 MAX_EVIDENCE_AGE = timedelta(hours=24)
 FUTURE_TOLERANCE = timedelta(minutes=5)
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+MAX_SWAP_RPC_REQUESTS = 12
 _ADDRESS = re.compile(r"0x[0-9a-f]{40}")
 _HASH = re.compile(r"0x[0-9a-f]{64}")
 _HEX = re.compile(r"[0-9a-f]{64}")
@@ -125,7 +127,7 @@ def receipt_log_digest(row: RawOnChainObservation | Mapping[str, Any]) -> str:
     return identity(
         "evm-receipt-log",
         {
-            "address": str(_field(row, "asset_contract")).lower(),
+            "address": str(_field(row, "log_address") or _field(row, "asset_contract")).lower(),
             "topics": [str(item).lower() for item in (_field(row, "log_topics") or ())],
             "data": str(_field(row, "log_data")).lower(),
             "transactionHash": str(_field(row, "transaction_hash")).lower(),
@@ -188,6 +190,35 @@ def observation_payload(row: RawOnChainObservation, surface: Any, verification_t
         "provider": row.provider,
         "source_reference": row.source_reference,
         "finality_status": row.finality_status,
+        **(
+            {
+                "swap": {
+                    "pool_id": row.swap_pool_id,
+                    "dex": row.swap_dex,
+                    "version": row.swap_version,
+                    "event_topic": row.swap_event_topic,
+                    "log_address": _lower(row.log_address),
+                    "token_in": _lower(row.token_in_contract),
+                    "token_out": _lower(row.token_out_contract),
+                    "token_in_raw_amount": row.token_in_raw_amount,
+                    "token_out_raw_amount": row.token_out_raw_amount,
+                    "token_in_amount": str(row.token_in_amount),
+                    "token_out_amount": str(row.token_out_amount),
+                    "target_asset": _lower(row.target_asset_contract),
+                    "trade_direction": row.trade_direction,
+                    "attributed_wallet": _lower(row.attributed_wallet) if row.attributed_wallet else None,
+                    "attribution_status": row.attribution_status,
+                    "attribution_reason": row.attribution_reason,
+                    "receipt_from": _lower(row.receipt_from) if row.receipt_from else None,
+                    "receipt_status": row.receipt_status,
+                    "wallet_code": row.wallet_code,
+                    "swap_status": row.swap_status,
+                    "rpc_request_count": row.rpc_request_count,
+                }
+            }
+            if row.event_type == "dex_swap"
+            else {}
+        ),
     }
 
 
@@ -224,6 +255,7 @@ def verify_observation(
     trust: EvidenceTrust | Mapping[str, Ed25519PublicKey],
     *,
     as_of: datetime | None = None,
+    pool: DexPoolConfig | None = None,
 ) -> RawOnChainObservation:
     from hunter.automation.issue_agent_state import LedgerError, canonical_json, verify_record_signature
 
@@ -257,7 +289,7 @@ def verify_observation(
         verify_record_signature(payload, keys, domain=EVIDENCE_SIGNING_DOMAIN)
     except (LedgerError, ValueError, TypeError) as exc:
         raise CapitalFlowEvidenceError("capital-flow evidence signature does not verify") from exc
-    _validate_observation(observation, surface, as_of or datetime.now(UTC))
+    _validate_observation(observation, surface, as_of or datetime.now(UTC), pool=pool)
     return observation
 
 
@@ -269,6 +301,50 @@ def verified_capital_flow_rows(
     repository: Any | None = None,
     trust: EvidenceTrust | Mapping[str, Ed25519PublicKey] | None = None,
     as_of: datetime | None = None,
+) -> tuple[RawOnChainObservation, ...]:
+    return _verified_rows(
+        project,
+        rows,
+        event_types=frozenset({"erc20_transfer"}),
+        config=config,
+        repository=repository,
+        trust=trust,
+        as_of=as_of,
+        resolver=_transfer_surface,
+    )
+
+
+def verified_swap_rows(
+    project: str,
+    rows: Iterable[RawOnChainObservation | Mapping[str, Any]],
+    *,
+    config: OnChainConfig | None = None,
+    repository: Any | None = None,
+    trust: EvidenceTrust | Mapping[str, Ed25519PublicKey] | None = None,
+    as_of: datetime | None = None,
+) -> tuple[RawOnChainObservation, ...]:
+    return _verified_rows(
+        project,
+        rows,
+        event_types=frozenset({"dex_swap"}),
+        config=config,
+        repository=repository,
+        trust=trust,
+        as_of=as_of,
+        resolver=_swap_pool,
+    )
+
+
+def _verified_rows(
+    project: str,
+    rows: Iterable[RawOnChainObservation | Mapping[str, Any]],
+    *,
+    event_types: frozenset[str],
+    config: OnChainConfig | None,
+    repository: Any | None,
+    trust: EvidenceTrust | Mapping[str, Ed25519PublicKey] | None,
+    as_of: datetime | None,
+    resolver: Callable[[RawOnChainObservation, OnChainConfig, str], tuple[Any, DexPoolConfig | None] | None],
 ) -> tuple[RawOnChainObservation, ...]:
     from hunter.automation.issue_agent_state import canonical_json
     from hunter.onchain.repository import OnChainRepository
@@ -285,7 +361,7 @@ def verified_capital_flow_rows(
         row
         for row in rows
         if _field(row, "project") == project
-        and _field(row, "event_type") == "erc20_transfer"
+        and _field(row, "event_type") in event_types
         and _field(row, "finality_status") == "finalized"
     ]
     accepted: dict[str, RawOnChainObservation] = {}
@@ -293,20 +369,11 @@ def verified_capital_flow_rows(
     for row in relevant:
         try:
             candidate = as_observation(row)
-            surface = next(
-                (
-                    item
-                    for item in resolved_config.surfaces
-                    if item.active
-                    and item.project == project
-                    and item.chain_id == candidate.chain_id
-                    and item.address.lower() == candidate.observed_address.lower()
-                ),
-                None,
-            )
-            if surface is None:
+            resolved = resolver(candidate, resolved_config, project)
+            if resolved is None:
                 continue
-            verified = verify_observation(candidate, signatures, surface, resolved_trust, as_of=cutoff)
+            surface, pool = resolved
+            verified = verify_observation(candidate, signatures, surface, resolved_trust, as_of=cutoff, pool=pool)
         except (
             CapitalFlowEvidenceError,
             ValueError,
@@ -328,6 +395,41 @@ def verified_capital_flow_rows(
     return tuple(
         sorted(accepted.values(), key=lambda item: (item.block_number, item.log_index or -1, item.evidence_id))
     )
+
+
+def _transfer_surface(
+    row: RawOnChainObservation, config: OnChainConfig, project: str
+) -> tuple[Any, DexPoolConfig | None] | None:
+    surface = next(
+        (
+            item
+            for item in config.surfaces
+            if item.active
+            and item.project == project
+            and item.chain_id == row.chain_id
+            and item.address.lower() == row.observed_address.lower()
+        ),
+        None,
+    )
+    return None if surface is None else (surface, None)
+
+
+def _swap_pool(
+    row: RawOnChainObservation, config: OnChainConfig, project: str
+) -> tuple[Any, DexPoolConfig | None] | None:
+    pool = next(
+        (
+            item
+            for item in config.dex_pools
+            if item.active
+            and item.project == project
+            and item.chain_id == row.chain_id
+            and item.address == row.observed_address.lower()
+            and item.pool_id == row.swap_pool_id
+        ),
+        None,
+    )
+    return None if pool is None else (pool.as_surface(), pool)
 
 
 def as_observation(value: RawOnChainObservation | Mapping[str, Any]) -> RawOnChainObservation:
@@ -365,10 +467,40 @@ def as_observation(value: RawOnChainObservation | Mapping[str, Any]) -> RawOnCha
         receipt_log_digest=_optional_str(get("receipt_log_digest")),
         log_topics=tuple(str(item) for item in (get("log_topics") or ())),
         log_data=str(get("log_data") or ""),
+        log_address=_optional_str(get("log_address")),
+        swap_pool_id=_optional_str(get("swap_pool_id")),
+        swap_dex=_optional_str(get("swap_dex")),
+        swap_version=_optional_str(get("swap_version")),
+        swap_event_topic=_optional_str(get("swap_event_topic")),
+        token_in_contract=_optional_str(get("token_in_contract")),
+        token_out_contract=_optional_str(get("token_out_contract")),
+        token_in_raw_amount=_optional_str(get("token_in_raw_amount")),
+        token_out_raw_amount=_optional_str(get("token_out_raw_amount")),
+        token_in_amount=_optional_decimal(get("token_in_amount")),
+        token_out_amount=_optional_decimal(get("token_out_amount")),
+        target_asset_contract=_optional_str(get("target_asset_contract")),
+        trade_direction=str(get("trade_direction") or "unknown"),
+        attributed_wallet=_optional_str(get("attributed_wallet")),
+        attribution_status=str(get("attribution_status") or "UNAVAILABLE"),
+        attribution_reason=_optional_str(get("attribution_reason")),
+        receipt_from=_optional_str(get("receipt_from")),
+        receipt_status=_optional_str(get("receipt_status")),
+        wallet_code=_optional_str(get("wallet_code")),
+        swap_status=str(get("swap_status") or "UNAVAILABLE"),
+        rpc_request_count=_as_int(get("rpc_request_count") or 0),
     )
 
 
-def _validate_observation(row: RawOnChainObservation, surface: Any, as_of: datetime) -> None:
+def _validate_observation(
+    row: RawOnChainObservation,
+    surface: Any,
+    as_of: datetime,
+    *,
+    pool: DexPoolConfig | None = None,
+) -> None:
+    if row.event_type == "dex_swap":
+        _validate_swap_observation(row, surface, pool, as_of)
+        return
     if row.project != surface.project or row.chain_id != surface.chain_id:
         raise CapitalFlowEvidenceError("evidence project or chain attribution does not match the surface")
     if row.observed_address.lower() != surface.address.lower():
@@ -457,6 +589,129 @@ def _validate_observation(row: RawOnChainObservation, surface: Any, as_of: datet
         raise CapitalFlowEvidenceError("evidence is stale, future-dated, or internally inconsistent in time")
 
 
+def _validate_swap_observation(
+    row: RawOnChainObservation,
+    surface: Any,
+    pool: DexPoolConfig | None,
+    as_of: datetime,
+) -> None:
+    if pool is None:
+        raise CapitalFlowEvidenceError("swap evidence has no verified pool configuration")
+    if row.project != pool.project or row.project != surface.project:
+        raise CapitalFlowEvidenceError("swap evidence project attribution does not match the verified pool")
+    if row.chain_id != pool.chain_id or row.chain_id != surface.chain_id:
+        raise CapitalFlowEvidenceError("swap evidence chain attribution does not match the verified pool")
+    if row.observed_address.lower() != pool.address or row.observed_address.lower() != surface.address.lower():
+        raise CapitalFlowEvidenceError("swap evidence observed address is not the verified pool")
+    if row.finality_status != "finalized":
+        raise CapitalFlowEvidenceError("swap evidence is not finalized")
+    if row.transaction_hash is None or _HASH.fullmatch(row.transaction_hash.lower()) is None:
+        raise CapitalFlowEvidenceError("swap evidence transaction hash is malformed")
+    if row.block_hash is None or _HASH.fullmatch(row.block_hash.lower()) is None:
+        raise CapitalFlowEvidenceError("swap evidence block hash is malformed")
+    if row.log_index is None or row.log_index < 0 or row.block_number <= 0:
+        raise CapitalFlowEvidenceError("swap evidence log location is malformed")
+    if (
+        identity(
+            "onchain-evm-log",
+            {"chain_id": row.chain_id, "transaction_hash": row.transaction_hash.lower(), "log_index": row.log_index},
+        )
+        != row.evidence_id
+    ):
+        raise CapitalFlowEvidenceError("swap evidence id does not bind the transaction and log")
+    if row.log_address is None or row.log_address.lower() != pool.address:
+        raise CapitalFlowEvidenceError("swap log emitter is not the verified pool")
+    expected_topic = V2_SWAP_TOPIC if pool.version == "v2" else V3_SWAP_TOPIC if pool.version == "v3" else None
+    if expected_topic is None or row.swap_event_topic is None or row.swap_event_topic.lower() != expected_topic:
+        raise CapitalFlowEvidenceError("swap event topic is not an explicitly supported DEX schema")
+    if row.swap_dex != pool.dex or row.swap_version != pool.version or row.swap_pool_id != pool.pool_id:
+        raise CapitalFlowEvidenceError("swap DEX identity does not match the verified pool")
+    if re.fullmatch(r"0x[0-9a-f]+", row.log_data.lower()) is None:
+        raise CapitalFlowEvidenceError("swap log data is malformed")
+    if len(row.log_topics) != 3 or row.log_topics[0].lower() != expected_topic:
+        raise CapitalFlowEvidenceError("swap log topics are malformed")
+    decoded = decode_swap_log(
+        pool,
+        {"address": row.log_address, "topics": row.log_topics, "data": row.log_data},
+    )
+    if decoded.status != "AVAILABLE" or decoded.sender is None:
+        raise CapitalFlowEvidenceError("swap log cannot be decoded from the verified pool schema")
+    if (
+        decoded.dex != row.swap_dex
+        or decoded.version != row.swap_version
+        or decoded.pool_id != row.swap_pool_id
+        or decoded.event_topic != row.swap_event_topic
+    ):
+        raise CapitalFlowEvidenceError("decoded swap identity does not match signed evidence")
+    if (
+        _lower(row.token_in_contract) != decoded.token_in
+        or _lower(row.token_out_contract) != decoded.token_out
+        or row.token_in_raw_amount != str(decoded.raw_amount_in)
+        or row.token_out_raw_amount != str(decoded.raw_amount_out)
+        or row.token_in_amount != decoded.amount_in
+        or row.token_out_amount != decoded.amount_out
+        or row.trade_direction != decoded.trade_direction
+    ):
+        raise CapitalFlowEvidenceError("decoded swap amounts or direction do not match signed evidence")
+    if _lower(row.target_asset_contract) != pool.target_asset:
+        raise CapitalFlowEvidenceError("swap target asset is not the verified pool target")
+    if row.receipt_log_digest is None or row.receipt_log_digest != receipt_log_digest(row):
+        raise CapitalFlowEvidenceError("swap receipt log digest does not match the signed log")
+    if row.receipt_validation_policy != CORROBORATION_POLICY:
+        raise CapitalFlowEvidenceError("swap evidence did not use the independent corroboration policy")
+    if not row.log_endpoint or not row.receipt_endpoint:
+        raise CapitalFlowEvidenceError("swap evidence is missing log or receipt endpoint provenance")
+    corroborating = {endpoint_identity(item) for item in row.corroborating_endpoints}
+    if (
+        len(corroborating) < 2
+        or endpoint_identity(row.log_endpoint) in corroborating
+        or endpoint_identity(row.receipt_endpoint) in corroborating
+        or len(corroborating) != len(row.corroborating_endpoints)
+    ):
+        raise CapitalFlowEvidenceError("swap evidence lacks independent RPC corroboration")
+    if row.receipt_verified_at is None:
+        raise CapitalFlowEvidenceError("swap evidence has no verification timestamp")
+    latest = max(row.acquisition_timestamp, row.receipt_verified_at, as_of)
+    if (
+        row.block_timestamp > as_of + FUTURE_TOLERANCE
+        or row.acquisition_timestamp > as_of + FUTURE_TOLERANCE
+        or row.receipt_verified_at > as_of + FUTURE_TOLERANCE
+        or row.receipt_verified_at < row.block_timestamp - FUTURE_TOLERANCE
+        or row.acquisition_timestamp < row.block_timestamp - FUTURE_TOLERANCE
+        or latest - row.block_timestamp > MAX_EVIDENCE_AGE
+    ):
+        raise CapitalFlowEvidenceError("swap evidence is stale, future-dated, or internally inconsistent in time")
+    if not 1 <= row.rpc_request_count <= MAX_SWAP_RPC_REQUESTS:
+        raise CapitalFlowEvidenceError("swap evidence used an unbounded RPC budget")
+    _validate_swap_attribution(row, pool)
+    if row.log_topics[2].lower() != "0x" + (decoded.recipient or "")[2:].zfill(64):
+        raise CapitalFlowEvidenceError("swap log recipient does not match decoded swap")
+
+
+def _validate_swap_attribution(row: RawOnChainObservation, pool: DexPoolConfig) -> None:
+    excluded = {pool.address, *pool.routers}
+    if row.attribution_status == "AVAILABLE":
+        if row.attributed_wallet is None or _ADDRESS.fullmatch(row.attributed_wallet.lower()) is None:
+            raise CapitalFlowEvidenceError("available swap attribution lacks a wallet address")
+        if row.receipt_from is None or row.receipt_from.lower() != row.attributed_wallet.lower():
+            raise CapitalFlowEvidenceError("attributed wallet is not the transaction sender")
+        if row.attributed_wallet.lower() in excluded:
+            raise CapitalFlowEvidenceError("router or pool cannot be attributed as trader")
+        if row.wallet_code != "0x":
+            raise CapitalFlowEvidenceError("attributed wallet is not an externally owned account")
+        if row.receipt_status != "0x1" or row.swap_status not in {"AVAILABLE", "AMBIGUOUS"}:
+            raise CapitalFlowEvidenceError("swap is not successfully attributed")
+        return
+    if row.attribution_status not in {"UNAVAILABLE", "AMBIGUOUS"}:
+        raise CapitalFlowEvidenceError("swap attribution status is unsupported")
+    if row.attributed_wallet is not None:
+        raise CapitalFlowEvidenceError("unavailable swap attribution must not name a wallet")
+    if not row.attribution_reason:
+        raise CapitalFlowEvidenceError("unavailable swap attribution lacks a reason")
+    if row.receipt_status != "0x1":
+        raise CapitalFlowEvidenceError("unattributed swap has no successful receipt")
+
+
 def _comparison_value(row: RawOnChainObservation) -> dict[str, Any]:
     return {
         "project": row.project,
@@ -483,6 +738,33 @@ def _comparison_value(row: RawOnChainObservation) -> dict[str, Any]:
         "validation_policy": row.receipt_validation_policy,
         "receipt_log_digest": row.receipt_log_digest,
         "receipt_verified_at": _instant(row.receipt_verified_at) if row.receipt_verified_at else None,
+        **(
+            {
+                "swap_pool_id": row.swap_pool_id,
+                "swap_dex": row.swap_dex,
+                "swap_version": row.swap_version,
+                "swap_event_topic": row.swap_event_topic,
+                "log_address": row.log_address,
+                "token_in_contract": row.token_in_contract,
+                "token_out_contract": row.token_out_contract,
+                "token_in_raw_amount": row.token_in_raw_amount,
+                "token_out_raw_amount": row.token_out_raw_amount,
+                "token_in_amount": str(row.token_in_amount),
+                "token_out_amount": str(row.token_out_amount),
+                "target_asset_contract": row.target_asset_contract,
+                "trade_direction": row.trade_direction,
+                "attributed_wallet": row.attributed_wallet,
+                "attribution_status": row.attribution_status,
+                "attribution_reason": row.attribution_reason,
+                "receipt_from": row.receipt_from,
+                "receipt_status": row.receipt_status,
+                "wallet_code": row.wallet_code,
+                "swap_status": row.swap_status,
+                "rpc_request_count": row.rpc_request_count,
+            }
+            if row.event_type == "dex_swap"
+            else {}
+        ),
     }
 
 
@@ -513,6 +795,12 @@ def _optional_str(value: object) -> str | None:
 
 def _optional_int(value: object) -> int | None:
     return None if value is None else _as_int(value)
+
+
+def _optional_decimal(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    return Decimal(str(value))
 
 
 def _as_int(value: object) -> int:

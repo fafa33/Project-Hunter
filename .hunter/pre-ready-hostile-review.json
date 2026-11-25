@@ -3,25 +3,25 @@
     "acceptance_criteria": [
       {
         "criterion": "Free-provider capacity is inventoried with explicit provenance and observed consumption is persisted without paid API use.",
-        "evidence": "No paid API path was added; historical USD valuation reads repository-declared persisted evidence and discovery helpers remain budget-metered.",
+        "evidence": "No paid API path was added; bounded E2E used public RPC and free CoinGecko history with exact provenance, while historical USD reads persisted repository evidence.",
         "id": "AC-587-01",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Global discovery uses bounded, resumable free capacity and truthful DexScreener batching without a parallel daemon.",
-        "evidence": "Cursor, case fidelity and shared budget guards remain; automation now fails closed on a partial discovery job set.",
+        "evidence": "Swap acquisition is wired into the existing CapitalFlowEngine.sync seam with a declared 12-call chain budget; no parallel daemon or autonomous trade path exists.",
         "id": "AC-587-02",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
-        "evidence": "Coverage denominator and replay guards remain; historical USD is causal, exact, provenance-bound and never canonical valuation or wallet inference.",
+        "evidence": "Swap and wallet evidence is pool/receipt/identity-bound; ambiguous multi-hop, unattributed or insufficient-inventory cases remain UNAVAILABLE rather than ranked.",
         "id": "AC-587-03",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "Fresh judgement for staged candidate content; scoped tests, Ruff, Black and full Mypy pass; PR #788 remains Draft and no authority or merge is asserted.",
+        "evidence": "Fresh judgement for staged candidate content; 215 focused tests; Ruff, Black and full Mypy pass; bounded finalized public-source E2E tx 0xf0fcd4cb4990b4313eadb7bc86c8a88308096d34b1f56c033cbbe7cdb1c0440f; PR #788 remains Draft and no authority or merge is asserted.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -37,17 +37,24 @@
       "discovery-cursor",
       "execution-budget",
       "fail-closed",
+      "fifo-inventory",
       "freshness-ceiling",
       "identity-handoff",
       "inclusive-range-boundary",
       "malformed-unknown-authority",
       "monotonicity",
+      "multi-hop-ambiguity",
       "numeric-precision",
       "persistence-restrictions",
+      "pool-identity",
       "price-provenance",
+      "receipt-corroboration",
       "replay",
       "restart-crash-retry",
+      "router-attribution",
+      "rpc-budget",
       "shared-execution-budget",
+      "signed-swap-replay",
       "static-analysis-findings",
       "tamper-resistance",
       "transaction-snapshot-consistency",
@@ -210,6 +217,16 @@
         "evidence": "Historical USD valuation is causal, exact, fresh, provenance-bound and non-inferential.",
         "family": "DFF-069",
         "outcome": "repaired"
+      },
+      {
+        "evidence": "Verified pool identity, explicit V2/V3 decode, finalized receipt plus two independent endpoints, exact tx/log binding, router exclusion, multi-hop ambiguity and bounded RPC budget regress-tested.",
+        "family": "DFF-070",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Verified attributed swaps feed deterministic exact-Decimal FIFO per chain/wallet; partial inventory, missing fees, net P&L and unrealized values remain UNAVAILABLE and SPM context is covered.",
+        "family": "DFF-071",
+        "outcome": "clear"
       }
     ],
     "findings": [],
@@ -234,8 +251,20 @@
         "status": "added"
       },
       {
-        "blob_sha": "6f4ae723998153efda233e3b35c12254e6647e86",
+        "blob_sha": "b486a7e019bf0c1fcd5d415286b105861ee9b7a9",
+        "path": "src/hunter/onchain/dex.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "0c1776eebe5317ea871b445a0c47344c0154ca21",
         "path": "src/hunter/onchain/evidence.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "7fe97290f7e9cf1e52f990fbf8e2febb3abf29b0",
+        "path": "src/hunter/onchain/wallet_performance.py",
         "previous_path": "",
         "status": "added"
       },
@@ -246,19 +275,25 @@
         "status": "added"
       },
       {
+        "blob_sha": "08083edc6772ec811c98ede7b7f0c1282d55bcac",
+        "path": "tests/test_onchain_swap_wallet_evidence.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
         "blob_sha": "0d1e022142bf539d4045222ff9652d861d4ae8a8",
         "path": "configs/automation.yaml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "7e54cba1c7fcb3fdcc0b37367276270d0ab1d9c6",
+        "blob_sha": "08a86743feb8b9bb55662c84751c587b9f60900e",
         "path": "configs/onchain.yaml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "144af853263cc0ccde172cce7f694e2df6303649",
+        "blob_sha": "951b0de927ef5d6aff98e1df99db09525c02cb8b",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -342,31 +377,31 @@
         "status": "modified"
       },
       {
-        "blob_sha": "6ab504b41470bf2b599f30507ab01939ab46a066",
+        "blob_sha": "5cdfe0b28ef2b4f73f1fbe8cbb4c06af7cf170e0",
         "path": "src/hunter/market_validation/acquisition_sources.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "87fe0d4c1569ce2e24fc2cd7cb9ee98b117d7edd",
+        "blob_sha": "3135d5fb489c4c57b17b31f2fcef78e2b68a90d5",
         "path": "src/hunter/onchain/adapters.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "fb97c555cbc324ea69d4616e619b98ff1ffc91a8",
+        "blob_sha": "a8b3019e4ebbb54feb4e1c9e23b9745e7ca1d895",
         "path": "src/hunter/onchain/configuration.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "e66289eb0f6c6969a8ce3dc327c70344d3513edb",
+        "blob_sha": "057f230f7f4422be40c3375788b7de52f95b21fa",
         "path": "src/hunter/onchain/engine.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "f4d0c4809b18290ba41c32c9721255e18c8cb7b6",
+        "blob_sha": "a4cc7c2feeeb88194a2c532a73960ffe2c43aa81",
         "path": "src/hunter/onchain/models.py",
         "previous_path": "",
         "status": "modified"
@@ -384,7 +419,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "9c4c0411830cb45402086ce34bc46346b872c996",
+        "blob_sha": "a23b1e35bd741d7c20b0c0fea33a30957eede415",
         "path": "tests/test_engineering_context_authority.py",
         "previous_path": "",
         "status": "modified"
@@ -426,16 +461,16 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "4a2c15185d8f317e07ee0d69be59d6c8e98c7afce5ae7f9b3fa214ba0032a534"
+    "review_target_digest": "5cbaaaa90fc3a25b434bf7f2f02fa1ab9b30759fe4e91f10f256ddaef3c0bb32"
   },
   "review_eligibility": {
     "mode": "pre_deployment",
     "pr_number": 788,
     "repository": "fafa33/Project-Hunter"
   },
-  "review_id": "0626053474e06f43b865a6185d9631c892d58e43e1a1593af8fa6729df59fe99",
+  "review_id": "707741b3ea34f7db327ea142a8e2f87151741ab5db5636c1d82a54efee66596f",
   "review_request": {
-    "claims_id": "0626053474e06f43b865a6185d9631c892d58e43e1a1593af8fa6729df59fe99",
+    "claims_id": "707741b3ea34f7db327ea142a8e2f87151741ab5db5636c1d82a54efee66596f",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
