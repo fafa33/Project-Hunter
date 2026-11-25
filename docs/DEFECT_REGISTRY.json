@@ -1242,6 +1242,16 @@
       "guard": "Return a consistently typed Sequence[EngineValidationSource] from _whale_engine_sources (empty list when unavailable, one-element list when present). The unavailable and available paths have one sequence contract and all existing caller extension behavior is unchanged.",
       "test": "tests/test_whale_acquisition.py::test_whale_engine_sources_returns_consistent_sequence_when_unavailable; tests/test_whale_acquisition.py::test_whale_source_connects_to_market_validation_weighting",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-139",
+      "class": "unbounded-rpc-execution-without-machine-checkable-budget",
+      "source": "Issue #587 / PR #788 during bounded live E2E: an initial sync lido validation invoked existing public RPC acquisition without a machine-checkable request cap, per-request timeout, retry ceiling, or wall-clock deadline; the owner had to abort it. An external abort is not a terminal validation result and cannot distinguish insufficient evidence from a runaway execution.",
+      "classification": "systemic",
+      "guard_boundary": "SPM-compiled onchain E2E execution boundary, before any live RPC request is issued",
+      "guard": "Every live onchain acquisition/E2E run must declare and enforce five bounds before dispatch: REQUEST_LIMIT=40 total RPC requests counted at the transport, TIMEOUT_SECONDS=8 per request, retry_limit=0, DEADLINE_SECONDS=180 wall clock, and max_block_range=100 per eth_getLogs query. A missing or relaxed bound is BLOCKED before network work; exceeding a bound fails closed. The defect is promoted into DFF-059 so the same invariant reaches EngineeringContextAuthority/SPM for any onchain surface, and the bounded regression proves the family is compiled into the engineering.implement context.",
+      "test": "tests/test_engineering_context_authority.py::test_onchain_execution_budget_family_reaches_spm_context; tests/test_onchain_capital_flow_acquisition.py::test_evm_adapter_finality_retry_logs_and_timeout_failure; tests/test_onchain_capital_flow_acquisition.py::test_tracked_transfer_acquisition_retains_real_log_and_deduplicates",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -3041,6 +3051,36 @@
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #588 / PR #757; stuck collector run 44354491426 despite exact-head Codex completion; Hosted Pre-PR run 44362780632 and Trusted Preflight run 44362790081 exposed GITHUB_ACTIONS-only context leakage; fixed on signed PR #757 lineage after repository binding was added."
+      ]
+    },
+    {
+      "id": "DFF-059",
+      "title": "unbounded-rpc-execution-without-spm-budget",
+      "invariant": "Any live on-chain acquisition or E2E run, including one continued from an earlier session, must carry a machine-checkable execution budget before any RPC request is issued: REQUEST_LIMIT total RPC requests counted at the transport, TIMEOUT_SECONDS per request, retry_limit=0 automatic retries, DEADLINE_SECONDS overall wall clock, and max_block_range per eth_getLogs query. An owner abort, CI timeout, or best-effort harness is never evidence of a bounded run; a missing or weakened bound fails closed as BLOCKED before network work, and a bound breach terminates the run without claiming success. This invariant must be present in the canonical defect registry so EngineeringContextAuthority/SPM compiles it into the engineering.implement context for any change touching onchain acquisition, configuration, or its Whale/Market Validation consumers.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/",
+          "configs/onchain.yaml",
+          "src/hunter/market_validation/acquisition_sources.py",
+          "src/hunter/intelligence/engines/whale/engine.py",
+          "tests/test_onchain_capital_flow_acquisition.py",
+          "tests/test_whale_acquisition.py"
+        ],
+        "rationale": "These surfaces own RPC dispatch, acquisition windows, signing/corroboration, and the downstream Whale/Market Validation consumers. Removing or relaxing any budget there can turn an unbounded exploratory run into apparent validation evidence."
+      },
+      "prevention": {
+        "mechanism": "SPM/engineering.implement prevention context must include DFF-059 for any onchain-surface scope; execution must be wrapped by a counting transport that refuses the next request at REQUEST_LIMIT, urlopen/read timeout of TIMEOUT_SECONDS, retry_limit=0 at the adapter/config boundary, a monotonic or POSIX DEADLINE_SECONDS alarm, and adapter.logs rejection of any window wider than max_block_range. Live E2E evidence must report the measured request count, timeout, retries, deadline, and block range; absent or out-of-bounds values are BLOCKED, not E2E_SUCCESS or a passive INSUFFICIENT_EVIDENCE verdict.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/evidence_intelligence/engineering_context_authority.py::EngineeringContextAuthority::compile"
+      },
+      "regression_evidence": [
+        "tests/test_engineering_context_authority.py::test_onchain_execution_budget_family_reaches_spm_context",
+        "tests/test_onchain_capital_flow_acquisition.py::test_evm_adapter_finality_retry_logs_and_timeout_failure",
+        "tests/test_onchain_capital_flow_acquisition.py::test_tracked_transfer_acquisition_retains_real_log_and_deduplicates"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788, 2026-11-25: an initial sync lido public-RPC validation ran without a machine-checkable request cap, timeout ceiling, retry ceiling, or wall-clock deadline and was aborted by the owner. The corrected bounded Compound/USDC known-transaction run used 17 of 40 RPC requests, 8-second timeout, 0 retries, a 180-second deadline, 100-block windows, free public sources, and isolated repository/signing material, and produced signed corroborated evidence for tx 0x45c0ca210996e6ec93766efb228971eaa01e74285329524bffdea63a922eb5eb in block 26491366."
       ]
     }
   ]

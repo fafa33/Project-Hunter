@@ -489,3 +489,17 @@ def test_trusted_publisher_learning_is_selected_for_exact_workflow() -> None:
     families = context["applicable_defect_families"]
     assert isinstance(families, list)
     assert any(family["id"] == "DFF-014" for family in families)
+
+
+def test_onchain_execution_budget_family_reaches_spm_context() -> None:
+    context = EngineeringContextAuthority().compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        scope=_scope("src/hunter/onchain/", "configs/onchain.yaml"),
+        budget_bytes=1_000_000,
+    )
+    families = cast(list[dict[str, object]], context["applicable_defect_families"])
+    family = next((item for item in families if item.get("id") == "DFF-059"), None)
+    assert family is not None
+    invariant = str(family.get("invariant", ""))
+    for token in ("REQUEST_LIMIT", "TIMEOUT_SECONDS", "retry_limit", "DEADLINE_SECONDS", "max_block_range"):
+        assert token in invariant
