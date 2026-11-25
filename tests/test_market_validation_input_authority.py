@@ -1,15 +1,45 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
+from hunter.historical_acquisition.usd_valuation import UsdValuation
 from hunter.jsonl_contract import JsonlWritePlan, envelope, normalize_record
-from hunter.market_validation.acquisition_sources import _timing_engine_sources
+from hunter.market_validation.acquisition_sources import _timing_engine_sources, capital_flow_usd_metrics
 from hunter.market_validation.models import EngineValidationSource, ProjectValidationTarget
 from hunter.market_validation.runner import EvidenceBackedProjectExecutor
 from hunter.timing.models import TimingAssessment
 from hunter.timing.repository import TIMING_JSONL_SCHEMA, timing_assessment_from_payload
 
 NOW = datetime(2026, 7, 19, 12, tzinfo=UTC)
+
+
+def test_capital_flow_usd_metrics_preserve_evidence_and_never_infer_wallet_performance() -> None:
+    valuation = UsdValuation(
+        status="AVAILABLE",
+        chain_id=1,
+        asset_contract="0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+        coingecko_id="usd-coin",
+        effective_at=datetime(2026, 11, 25, 9, 0, tzinfo=UTC),
+        retrieval_at=datetime(2026, 11, 25, 10, 0, tzinfo=UTC),
+        price_usd=Decimal("0.9995440023519918"),
+        amount=Decimal("17000"),
+        value_usd=Decimal("16992.2480399838606"),
+        source_record_id="historical:usdc:09-00",
+        source_url="https://api.coingecko.com/api/v3/coins/usd-coin/market_chart/range",
+        freshness_seconds=2495,
+    )
+
+    metrics = capital_flow_usd_metrics((valuation,))
+
+    assert metrics["economic_value_usd"] == "16992.2480399838606"
+    assert metrics["usd_price"] == "0.9995440023519918"
+    assert metrics["usd_effective_at"] == "2026-11-25T09:00:00+00:00"
+    assert metrics["usd_retrieval_at"] == "2026-11-25T10:00:00+00:00"
+    assert metrics["usd_source_record_ids"] == "historical:usdc:09-00"
+    assert metrics["usd_freshness_seconds"] == 2495
+    assert "wallet_attribution" not in metrics
+    assert "wallet_performance" not in metrics
 
 
 def test_graph_centrality_cannot_populate_necessity_gap() -> None:

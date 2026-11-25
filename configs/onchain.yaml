@@ -139,6 +139,7 @@ tracked_assets:
     asset_type: stablecoin
     decimals: 6
     contract_address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    coingecko_id: usd-coin
   - chain_id: 1
     symbol: USDT
     asset_type: stablecoin

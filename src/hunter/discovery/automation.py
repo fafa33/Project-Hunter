@@ -41,6 +41,24 @@ def discovery_automation_status(path: Path = Path("configs/automation.yaml")) ->
     }
 
 
+def require_discovery_automation(path: Path = Path("configs/automation.yaml")) -> tuple[str, ...]:
+    payload = _load_yaml(path)
+    present = {
+        str(job.get("job_id")): job
+        for job in payload.get("jobs", ())
+        if isinstance(job, dict) and job.get("job_id") in DISCOVERY_JOB_IDS
+    }
+    if not present:
+        return ()
+    missing = tuple(
+        job_id for job_id in DISCOVERY_JOB_IDS if job_id not in present or present[job_id].get("enabled") is not True
+    )
+    if missing:
+        msg = "incomplete discovery automation configuration; missing or disabled jobs: " + ", ".join(missing)
+        raise ValueError(msg)
+    return DISCOVERY_JOB_IDS
+
+
 def _discovery_jobs() -> tuple[dict[str, Any], ...]:
     return (
         _job("discovery-source-health", "Discovery source health check", "hourly", "discovery_source_health"),

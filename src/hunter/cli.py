@@ -83,6 +83,7 @@ from hunter.discovery import (
     discovery_automation_status,
     install_discovery_jobs,
     load_discovery_config,
+    require_discovery_automation,
 )
 from hunter.economic import EconomicDependencyGraphEngine, EconomicGraphRepository
 from hunter.economic.engine import economic_path
@@ -833,6 +834,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{run.automation_run_id}\t{run.status}")
         return 0 if run.status in {"succeeded", "partial"} else 2
     if args.automation_command == "start":
+        require_discovery_automation(Path(args.config))
         scheduler.run_loop(max_iterations=args.max_iterations)
         print("scheduler started")
         return 0

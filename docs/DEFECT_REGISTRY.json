@@ -1352,6 +1352,26 @@
       "guard": "Normalize with a local Decimal precision derived from the raw digit count plus token decimals, using exact scaling, so high-precision zero-decimal and other large values survive without rounding.",
       "test": "tests/test_onchain_capital_flow_acquisition.py::test_engine_acquires_high_precision_zero_decimal_amount_without_rounding",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-150",
+      "class": "automation-starts-with-partial-discovery-job-set",
+      "source": "Issue #587 live scheduler evidence at deployed head 87f87d6a3ab845c9428984a4c893cb5667883d09: discovery-identity-resolution was absent from the deployed automation and discovery configs, producing zero identity_results while 19,500 rows remained not_resolved and 16,076 candidates had no primary_chain.",
+      "classification": "systemic",
+      "guard_boundary": "automation start before scheduler loop entry",
+      "guard": "Require the full discovery job set before automation starts; if discovery jobs are present but any required job is missing or disabled, fail closed before scheduler.run_loop. Keep no-op behavior only when discovery automation is entirely absent.",
+      "test": "tests/test_discovery_identity_handoff.py::test_V_partial_discovery_automation_fails_closed",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-151",
+      "class": "historical-usd-value-not-causal-exact-or-evidence-bound",
+      "source": "Issue #587 market-validation checkpoint at head a1a81a106396992e05b275ae77512231ad9e696a: point-in-time USD value was unavailable although the repository-declared free CoinGecko history source supplied a prior at-or-before price with exact source provenance.",
+      "classification": "systemic",
+      "guard_boundary": "historical USD valuation and market-validation economic context",
+      "guard": "Require an exact chain/contract provider mapping, a causal at-or-before price point, a freshness ceiling, exact Decimal valuation, and persisted source provenance; expose the result only as economic context and never as canonical valuation, wallet attribution, or wallet performance.",
+      "test": "tests/test_historical_acquisition.py::test_historical_usd_valuation_is_exact_and_evidence_bound; tests/test_historical_acquisition.py::test_historical_usd_valuation_fails_closed_for_wrong_chain_stale_and_future_points; tests/test_market_validation_input_authority.py::test_capital_flow_usd_metrics_preserve_evidence_and_never_infer_wallet_performance",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -3400,6 +3420,67 @@
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: _amount used Decimal(raw)/(10**decimals) under 28-digit precision and rounded a high-precision zero-decimal amount that exact validation rejected."
+      ]
+    },
+    {
+      "id": "DFF-068",
+      "title": "automation-must-not-start-with-partial-discovery-job-set",
+      "invariant": "Automated discovery start must fail closed before the scheduler loop when any configured discovery job is missing or disabled, and may be a no-op only when discovery automation is entirely absent.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/cli.py",
+          "src/hunter/discovery/automation.py",
+          "src/hunter/discovery/__init__.py",
+          "tests/test_discovery_identity_handoff.py"
+        ],
+        "rationale": "These paths assemble and start automated jobs. A partial job set can run indefinitely while silently skipping identity resolution and leaving unresolved candidates without primary chain identity."
+      },
+      "prevention": {
+        "mechanism": "Validate the required discovery job set before scheduler.run_loop, return no-op only for a completely empty discovery job set, and regress missing/disabled identity resolution at the CLI automation boundary.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/automation.py::require_discovery_automation"
+      },
+      "regression_evidence": [
+        "tests/test_discovery_identity_handoff.py::test_V_partial_discovery_automation_fails_closed",
+        "tests/test_engineering_context_authority.py::test_issue_587_identity_and_usd_evidence_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 live scheduler evidence at deployed head 87f87d6a3ab845c9428984a4c893cb5667883d09: the deployed automation and discovery configs omitted discovery-identity-resolution, leaving zero identity_results while unresolved candidates accumulated."
+      ]
+    },
+    {
+      "id": "DFF-069",
+      "title": "historical-usd-evidence-must-be-causal-exact-and-non-inferential",
+      "invariant": "Historical USD context must use exact chain/contract provider mapping, at-or-before causal price availability, a freshness ceiling, exact Decimal multiplication, and persisted source provenance, and must never be represented as canonical valuation, wallet attribution, or wallet performance.",
+      "applicability": {
+        "changed_paths": [
+          "configs/onchain.yaml",
+          "src/hunter/historical_acquisition/usd_valuation.py",
+          "src/hunter/historical_acquisition/providers.py",
+          "src/hunter/market_validation/acquisition_sources.py",
+          "src/hunter/onchain/configuration.py",
+          "src/hunter/onchain/models.py",
+          "tests/test_historical_acquisition.py",
+          "tests/test_market_validation_input_authority.py"
+        ],
+        "rationale": "These paths map assets, select historical prices, compute economic values, and expose market-validation context. Future prices, fuzzy identifiers, rounded arithmetic, or wallet inference would fabricate point-in-time economic evidence."
+      },
+      "prevention": {
+        "mechanism": "Match exact chain/contract to one coingecko_id, select only at-or-before availability points, enforce freshness and positive exact amounts, multiply under bounded Decimal precision, record source and retrieval provenance, and expose metrics as non-inferential economic context only.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/historical_acquisition/usd_valuation.py::HistoricalUsdValuator::value"
+      },
+      "regression_evidence": [
+        "tests/test_historical_acquisition.py::test_closest_market_point_never_selects_a_future_point",
+        "tests/test_historical_acquisition.py::test_historical_usd_valuation_is_exact_and_evidence_bound",
+        "tests/test_historical_acquisition.py::test_historical_usd_valuation_fails_closed_for_wrong_chain_stale_and_future_points",
+        "tests/test_market_validation_input_authority.py::test_capital_flow_usd_metrics_preserve_evidence_and_never_infer_wallet_performance",
+        "tests/test_engineering_context_authority.py::test_issue_587_identity_and_usd_evidence_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 market-validation checkpoint at head a1a81a106396992e05b275ae77512231ad9e696a: point-in-time USD value was unavailable and the existing closest-point behavior was mischaracterized as future-selecting; live CoinGecko history supplied an at-or-before point with source provenance."
       ]
     }
   ]

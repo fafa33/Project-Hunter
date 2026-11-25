@@ -80,6 +80,7 @@ def _asset(raw: dict[str, Any]) -> AssetConfig:
         asset_type=str(raw["asset_type"]),
         decimals=int(raw["decimals"]),
         contract_address=str(address).lower() if address else None,
+        coingecko_id=str(raw["coingecko_id"]) if raw.get("coingecko_id") else None,
     )
 
 

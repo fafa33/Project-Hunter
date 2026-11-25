@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, localcontext
+from pathlib import Path
 from typing import Any
 
 from hunter.acquisition.models import EvidenceValidation, NormalizedEvidence
@@ -12,12 +14,15 @@ from hunter.economic.models import EconomicEdge, EconomicGraphMetrics
 from hunter.economic.repository import EconomicGraphRepository
 from hunter.graph.models import TechnologyEdge, TechnologyGraphMetrics
 from hunter.graph.repository import TechnologyGraphRepository
+from hunter.historical_acquisition.repository import HistoricalEvidenceRepository
+from hunter.historical_acquisition.usd_valuation import HistoricalUsdValuator, UsdValuation
 from hunter.jsonl_contract import JsonlRecord
 from hunter.macro import MacroRepository, MacroSnapshot
 from hunter.market_validation.models import EngineValidationSource, Scalar
 from hunter.narrative.provider import NARRATIVE_ENGINES, NARRATIVE_METRIC
-from hunter.onchain.configuration import OnChainConfig
+from hunter.onchain.configuration import OnChainConfig, load_onchain_config
 from hunter.onchain.evidence import EvidenceTrust, verified_capital_flow_rows
+from hunter.onchain.models import RawOnChainObservation
 from hunter.onchain.repository import OnChainRepository
 from hunter.scenario import SCENARIO_ENGINES, ScenarioRepository
 from hunter.scenario.models import ScenarioImpact
@@ -68,7 +73,9 @@ def acquisition_engine_sources(
     repository: InMemoryAcquisitionRepository,
     *,
     as_of: datetime | None = None,
+    usd_valuator: Callable[[RawOnChainObservation], UsdValuation] | None = None,
 ) -> dict[str, tuple[EngineValidationSource, ...]]:
+    resolved_usd_valuator = usd_valuator or _default_usd_valuator()
     evidence_by_project = _latest_valid_evidence(repository)
     sources: dict[str, list[EngineValidationSource]] = defaultdict(list)
     for project_id, evidence_by_key in evidence_by_project.items():
@@ -96,7 +103,9 @@ def acquisition_engine_sources(
         for project_id in evidence_by_project:
             sources[project_id].extend(macro_sources)
             sources[project_id].extend(_whale_engine_sources(as_of=as_of, project_id=project_id))
-            contextual = _capital_whale_context(project_id, capital_rows, as_of=as_of)
+            contextual = _capital_whale_context(
+                project_id, capital_rows, as_of=as_of, usd_valuator=resolved_usd_valuator
+            )
             if contextual is not None:
                 sources[project_id].append(contextual)
         for project_id, graph_sources in _graph_engine_sources(as_of=as_of).items():
@@ -212,6 +221,7 @@ def _capital_whale_context(
     config: OnChainConfig | None = None,
     repository: Any | None = None,
     trust: EvidenceTrust | None = None,
+    usd_valuator: Callable[[RawOnChainObservation], UsdValuation] | None = None,
 ) -> EngineValidationSource | None:
     cutoff = as_of or datetime.now(UTC)
     verified = verified_capital_flow_rows(
@@ -226,6 +236,14 @@ def _capital_whale_context(
     if not accepted:
         return None
     ids = tuple(sorted(accepted))
+    valuations = tuple(usd_valuator(row) for row in verified) if usd_valuator is not None else ()
+    usd_metrics = capital_flow_usd_metrics(valuations)
+    missing_fields = ["wallet_attribution", "trade_direction"]
+    if not usd_metrics:
+        missing_fields.append("economic_value")
+    warnings = ["unattributed_transfer_not_whale_signal"]
+    if usd_metrics:
+        warnings.append("usd_valuation_context_not_whale_signal")
     return EngineValidationSource(
         engine="whale_intelligence",
         score=0.0,
@@ -239,10 +257,49 @@ def _capital_whale_context(
         collector="onchain-repository",
         validation_status="PARTIAL",
         status="UNAVAILABLE",
-        missing_fields=("wallet_attribution", "economic_value", "trade_direction"),
-        warnings=("unattributed_transfer_not_whale_signal",),
-        raw_input_metrics={"context_transfer_count": len(ids)},
+        missing_fields=tuple(missing_fields),
+        warnings=tuple(warnings),
+        raw_input_metrics={"context_transfer_count": len(ids), **usd_metrics},
     )
+
+
+def capital_flow_usd_metrics(valuations: tuple[UsdValuation, ...]) -> dict[str, Scalar]:
+    available = tuple(
+        item
+        for item in valuations
+        if item.status == "AVAILABLE" and item.value_usd is not None and item.price_usd is not None
+    )
+    if not available:
+        return {}
+    with localcontext() as context:
+        context.prec = max(
+            28,
+            *(len(item.value_usd.as_tuple().digits) for item in available),
+            *(len(item.price_usd.as_tuple().digits) for item in available),
+        )
+        total = sum((item.value_usd for item in available), Decimal(0))
+    effective_values = tuple(item.effective_at for item in available if item.effective_at is not None)
+    retrieval_values = tuple(item.retrieval_at for item in available if item.retrieval_at is not None)
+    source_ids = tuple(sorted({item.source_record_id for item in available if item.source_record_id}))
+    return {
+        "economic_value_usd": str(total),
+        "usd_price": str(available[-1].price_usd),
+        "usd_effective_at": max(effective_values).isoformat() if effective_values else "",
+        "usd_retrieval_at": max(retrieval_values).isoformat() if retrieval_values else "",
+        "usd_source_record_ids": ",".join(source_ids),
+        "usd_freshness_seconds": max(
+            (item.freshness_seconds or 0 for item in available),
+            default=0,
+        ),
+        "usd_provenance": "coingecko-historical-market-chart",
+    }
+
+
+def _default_usd_valuator() -> Callable[[RawOnChainObservation], UsdValuation] | None:
+    path = Path("data/historical_acquisition/raw.jsonl")
+    if not path.exists():
+        return None
+    return HistoricalUsdValuator(load_onchain_config(), HistoricalEvidenceRepository(path.parent)).value
 
 
 def _whale_source(engine: str, snapshot: WhaleSnapshot, timestamp: datetime) -> EngineValidationSource:

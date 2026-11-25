@@ -68,6 +68,7 @@ class AssetConfig:
     asset_type: str
     decimals: int
     contract_address: str | None = None
+    coingecko_id: str | None = None
 
 
 @dataclass(frozen=True)

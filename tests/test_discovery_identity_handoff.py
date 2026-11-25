@@ -12,6 +12,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
 from hunter.data_ops import OPERATION_COMMANDS, READ_ONLY_DISCOVERY_OPERATIONS
@@ -24,6 +25,7 @@ from hunter.discovery import (
     CandidateScreeningResult,
     CandidateSource,
 )
+from hunter.discovery.automation import require_discovery_automation
 from hunter.discovery.configuration import DiscoveryConfig
 from hunter.discovery.identity import identity_is_accepted
 from hunter.discovery.models import (
@@ -556,3 +558,15 @@ def test_U_identity_row_legacy_and_current_columns(tmp_path) -> None:
     assert _identity_from_row(current).evidence_fingerprint
     assert _identity_from_row(legacy).policy_version == "identity-policy-v1"
     assert _identity_from_row(legacy).evidence_fingerprint == ""
+
+
+def test_V_partial_discovery_automation_fails_closed(tmp_path) -> None:
+    payload = yaml.safe_load(Path("configs/automation.yaml").read_text(encoding="utf-8"))
+    payload["jobs"] = [
+        job for job in payload["jobs"] if isinstance(job, dict) and job.get("job_id") != "discovery-identity-resolution"
+    ]
+    path = tmp_path / "automation.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(ValueError, match="discovery-identity-resolution"):
+        require_discovery_automation(path)

@@ -548,3 +548,30 @@ def test_issue_587_review_remediation_families_reach_spm_context() -> None:
     assert "catalogue" in str(by_id["DFF-065"].get("invariant", "")).lower()
     assert "replay" in str(by_id["DFF-066"].get("invariant", "")).lower()
     assert "precision" in str(by_id["DFF-067"].get("invariant", "")).lower()
+
+
+def test_issue_587_identity_and_usd_evidence_families_reach_spm_context() -> None:
+    context = EngineeringContextAuthority().compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        scope=_scope(
+            "configs/onchain.yaml",
+            "src/hunter/cli.py",
+            "src/hunter/discovery/",
+            "src/hunter/historical_acquisition/",
+            "src/hunter/market_validation/",
+            "src/hunter/onchain/",
+            "tests/test_discovery_identity_handoff.py",
+            "tests/test_historical_acquisition.py",
+            "tests/test_market_validation_input_authority.py",
+        ),
+        budget_bytes=1_000_000,
+    )
+    families = cast(list[dict[str, object]], context["applicable_defect_families"])
+    by_id = {str(item.get("id")): item for item in families}
+
+    for family_id in ("DFF-068", "DFF-069"):
+        assert family_id in by_id
+    assert "fail closed" in str(by_id["DFF-068"].get("invariant", "")).lower()
+    assert "causal" in str(by_id["DFF-069"].get("invariant", "")).lower()
+    assert "canonical valuation" in str(by_id["DFF-069"].get("invariant", "")).lower()
+    assert "wallet performance" in str(by_id["DFF-069"].get("invariant", "")).lower()
