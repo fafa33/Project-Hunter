@@ -1222,6 +1222,26 @@
       "guard": "The production automation start default stays indefinite by owner design (the LaunchAgent deliberately omits --max-iterations); the deterministic suite supplies its own finite bound. test_cli_commands now invokes automation start with --max-iterations 1, so the CLI test terminates on the command's own contract instead of an external CI timeout. No scheduler, deployment configuration, production default or iteration ceiling was changed.",
       "test": "tests/test_automation.py::test_cli_commands",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-137",
+      "class": "signed-capital-flow-amount-normalization-loses-precision",
+      "source": "Issue #587 / PR #788 at head 5e672a033b889c80d089a82ea48188881d05db1a: SonarCloud pythonbugs:S3518 (AaISLpJSkxhTJ_ZpaeYi) flagged Decimal(10) ** Decimal(decimals) as division by zero in _validate_observation; a 40-digit raw amount with decimals=0 was rejected because the default Decimal context rounded the quotient before comparison",
+      "classification": "isolated",
+      "guard_boundary": "canonical signed evidence validation, before any capital-flow row is accepted by Whale or Market Validation",
+      "guard": "Normalize raw amounts with Decimal.scaleb inside a localcontext precision derived from the validated digit count and decimal exponent. The divisor expression is removed, zero-decimal amounts stay exact, and malformed amounts still fail closed before signature or digest acceptance.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_capital_flow_evidence_preserves_high_precision_zero_decimal_amount; tests/test_onchain_capital_flow_acquisition.py::test_capital_flow_evidence_hostile_cases",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-138",
+      "class": "market-validation-source-adapter-returns-inconsistent-tuple-lengths",
+      "source": "Issue #587 / PR #788 at head 5e672a033b889c80d089a82ea48188881d05db1a: SonarCloud python:S8495 (AaISLpPtkxhTJ_ZpaeYj) flagged _whale_engine_sources returning both a 0-tuple and a 1-tuple",
+      "classification": "isolated",
+      "guard_boundary": "market-validation acquisition source assembly, before whale context reaches weighting",
+      "guard": "Return a consistently typed Sequence[EngineValidationSource] from _whale_engine_sources (empty list when unavailable, one-element list when present). The unavailable and available paths have one sequence contract and all existing caller extension behavior is unchanged.",
+      "test": "tests/test_whale_acquisition.py::test_whale_engine_sources_returns_consistent_sequence_when_unavailable; tests/test_whale_acquisition.py::test_whale_source_connects_to_market_validation_weighting",
+      "status": "guarded"
     }
   ],
   "families": [

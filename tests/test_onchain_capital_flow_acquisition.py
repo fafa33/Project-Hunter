@@ -714,6 +714,21 @@ def test_capital_flow_evidence_hostile_cases(tmp_path, case) -> None:
     assert bool(accepted) is (case == "valid")
 
 
+def test_capital_flow_evidence_preserves_high_precision_zero_decimal_amount(tmp_path) -> None:
+    raw_amount = "1234567890123456789012345678901234567890"
+    row, _signed, cfg, repo, trust, _, _ = signed_transfer(
+        tmp_path,
+        raw_amount=raw_amount,
+        decimals=0,
+        normalized_amount=Decimal(raw_amount),
+        log_data="0x" + format(int(raw_amount), "064x"),
+    )
+
+    accepted = verified_capital_flow_rows("aave", (row,), config=cfg, repository=repo, trust=trust, as_of=NOW)
+
+    assert [item.evidence_id for item in accepted] == [row.evidence_id]
+
+
 def test_evidence_trust_rejects_wrong_schema(tmp_path) -> None:
     key, _key_path, trust_path, _trust = signing_material(tmp_path)
     assert key is not None

@@ -6,7 +6,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, localcontext
 from pathlib import Path
 from typing import Any
 
@@ -397,7 +397,9 @@ def _validate_observation(row: RawOnChainObservation, surface: Any, as_of: datet
         raise CapitalFlowEvidenceError("evidence decimals are malformed")
     if row.normalized_amount is None or not row.normalized_amount.is_finite() or row.normalized_amount <= 0:
         raise CapitalFlowEvidenceError("evidence normalized amount is malformed")
-    expected_amount = Decimal(int(row.raw_amount)) / (Decimal(10) ** Decimal(row.decimals))
+    with localcontext() as context:
+        context.prec = max(len(row.raw_amount) + row.decimals + 1, 28)
+        expected_amount = Decimal(row.raw_amount).scaleb(-row.decimals)
     if row.normalized_amount != expected_amount:
         raise CapitalFlowEvidenceError("evidence normalized amount does not match its raw amount")
     if len(row.log_topics) != 3 or row.log_topics[0].lower() != TRANSFER_TOPIC:

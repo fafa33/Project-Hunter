@@ -3,7 +3,7 @@
     "acceptance_criteria": [
       {
         "criterion": "Free-provider capacity is inventoried with explicit provenance and observed consumption is persisted without paid API use.",
-        "evidence": "Existing capacity inventory and acquisition code retained from c6cca495; current staged candidate adds signed, corroborated on-chain capital-flow evidence without paid API use. 62 focused tests passed in tests/test_onchain_capital_flow_acquisition.py and tests/test_whale_acquisition.py; Ruff, Black and Mypy pass. Live billing is not independently certified.",
+        "evidence": "Existing capacity inventory and acquisition code retained from c6cca495; current staged candidate adds signed, corroborated on-chain capital-flow evidence without paid API use. 64 focused tests pass in tests/test_onchain_capital_flow_acquisition.py and tests/test_whale_acquisition.py; Ruff, Black and Mypy pass. Live billing is not independently certified.",
         "id": "AC-587-01",
         "verdict": "pending-deployment"
       },
@@ -15,13 +15,13 @@
       },
       {
         "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
-        "evidence": "Earlier registry regression evidence retained: test_S reproduced stale shortlist eligibility after new ticker collision and current alias groups feed queue, manifest and reconciliation. Current staged candidate adds explicit signer trust, independent host corroboration and fail-closed rejection for unavailable or tampered capital-flow evidence. No new global coverage claim.",
+        "evidence": "Earlier registry regression evidence retained: test_S reproduced stale shortlist eligibility after new ticker collision and current alias groups feed queue, manifest and reconciliation. Current staged candidate adds explicit signer trust, independent host corroboration and fail-closed rejection for unavailable or tampered capital-flow evidence. Sonar findings on amount normalization and source-adapter tuple shape are remediated with regressions. No new global coverage claim.",
         "id": "AC-587-03",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "Staged tree on e6ef9f294c41ee603dd9208d7ed74a81d66e2227; 62 focused tests passed in 5.55s, Ruff, Black and Mypy pass, git diff --check passes. This is a writer request only: no reviewer authority is asserted, no merge is authorized, and PR #788 remains Draft.",
+        "evidence": "Staged tree b4b14e145e91a590b15c9135ad90b458e9ac4d01 on e6ef9f294c41ee603dd9208d7ed74a81d66e2227; 64 focused tests passed in 5.50s, Ruff, Black and Mypy pass, git diff --check passes. This is a writer request only: no reviewer authority is asserted, no merge is authorized, and PR #788 remains Draft.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -33,9 +33,11 @@
       "fail-closed",
       "malformed-unknown-authority",
       "monotonicity",
+      "numeric-precision",
       "persistence-restrictions",
       "replay",
       "restart-crash-retry",
+      "static-analysis-findings",
       "tamper-resistance",
       "transaction-snapshot-consistency"
     ],
@@ -43,7 +45,7 @@
     "base_sha": "a4a9b9e173bb15afaed2c162bda9708e93eb2411",
     "defect_families": [
       {
-        "evidence": "Current candidate binds signatures to canonical observation payloads with normalized timestamps and deterministic log digests; timestamp parsing in As_observation and _instant uses timezone-aware UTC only. Identity regression cases pass.",
+        "evidence": "Current candidate binds signatures to canonical observation payloads with normalized timestamps and deterministic log digests; timestamp parsing in as_observation and _instant uses timezone-aware UTC only. Identity regression cases pass.",
         "family": "DFF-001",
         "outcome": "repaired"
       },
@@ -53,7 +55,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Signed evidence binds project, chain, surface, evidence id, transaction hash, log topics and log data; hostile cases reject forged digests, mismatched amounts and wrong evidence attribution.",
+        "evidence": "Signed evidence binds project, chain, surface, evidence id, transaction hash, log topics and log data; hostile cases reject forged digests, mismatched amounts and wrong evidence attribution. High-precision zero-decimal normalization now uses localcontext scaleb and its regression accepts the exact 40-digit amount.",
         "family": "DFF-003",
         "outcome": "repaired"
       },
@@ -88,7 +90,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Configured owner name Farhad5778 and signing key path are unchanged; the candidate commit uses git commit -S.",
+        "evidence": "Configured owner name Farhad5778 and signing key path are unchanged; the candidate commit will use git commit -S.",
         "family": "DFF-010",
         "outcome": "clear"
       },
@@ -98,7 +100,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "The stale request was rejected by the canonical verifier; a new request is generated from the staged candidate content before the signed commit.",
+        "evidence": "The stale request was rejected by the canonical verifier after the prior head change; a new request is generated from the staged candidate content before the signed commit.",
         "family": "DFF-012",
         "outcome": "clear"
       },
@@ -113,7 +115,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Existing PRH-136 registry record is retained without family lifecycle promotion.",
+        "evidence": "PRH-137 and PRH-138 are recorded as isolated findings with fixes and regression tests; no family lifecycle promotion is claimed.",
         "family": "DFF-015",
         "outcome": "clear"
       },
@@ -123,7 +125,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "62 focused tests are diagnostic only; no hosted proof or push claim is embedded in this request.",
+        "evidence": "64 focused tests are diagnostic only; SonarCloud findings are remediated locally but no hosted proof or push claim is embedded in this request.",
         "family": "DFF-029",
         "outcome": "clear"
       },
@@ -138,7 +140,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Defect registry is retained from the earlier candidate; no SPM compiler or prevention-context change.",
+        "evidence": "Defect registry records PRH-137 and PRH-138 with provenance, guards and regression tests; no SPM compiler or prevention-context change.",
         "family": "DFF-045",
         "outcome": "clear"
       }
@@ -159,7 +161,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "bc575e526c97d71c033e69f7aca14f1c897cf709",
+        "blob_sha": "a2b1b1b214108452683d5d3672c94915fabe9228",
         "path": "src/hunter/onchain/evidence.py",
         "previous_path": "",
         "status": "added"
@@ -183,7 +185,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "16d9d9f7348ed20ddb6879a4c758f1407d2db8af",
+        "blob_sha": "5b8a37d346c153f3cb60f9cf77b1cfa06063fd5c",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -255,7 +257,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "2bcf3d2d4bbe0dada139c46a6a9873f6391b7ac4",
+        "blob_sha": "3aa0823ea01dece67ced7e6b5b8d22fe6c2adf65",
         "path": "src/hunter/market_validation/acquisition_sources.py",
         "previous_path": "",
         "status": "modified"
@@ -297,28 +299,28 @@
         "status": "modified"
       },
       {
-        "blob_sha": "b9520cddfb39e41dd81f19e86947b5863118c297",
+        "blob_sha": "f0bebf9434471656d477d5abb9ac72cfcbee9b2b",
         "path": "tests/test_onchain_capital_flow_acquisition.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "5e0ddc03dc2c7bdade01bf5494bb19621e1495de",
+        "blob_sha": "919a99af0f0d56f7c3b824ed6f7cc2d934940af6",
         "path": "tests/test_whale_acquisition.py",
         "previous_path": "",
         "status": "modified"
       }
     ],
-    "review_target_digest": "7256603428a0009346fc7e4ba7fd12b18ff29e9485a3bf0a026bfca95e56403e"
+    "review_target_digest": "50c50a1cf4bd8d48be32d6250102d1b0cc474cd78e81bcedffa48c7e169be2eb"
   },
   "review_eligibility": {
     "mode": "pre_deployment",
     "pr_number": 788,
     "repository": "fafa33/Project-Hunter"
   },
-  "review_id": "f976d0024b9acaddec68f84e9457b13d260985f085a703fbe48a47c9df61c48b",
+  "review_id": "6527f8ec231b277159c9ac7268c3085c821dddef70c2e4fce8806e44f6106d67",
   "review_request": {
-    "claims_id": "f976d0024b9acaddec68f84e9457b13d260985f085a703fbe48a47c9df61c48b",
+    "claims_id": "6527f8ec231b277159c9ac7268c3085c821dddef70c2e4fce8806e44f6106d67",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

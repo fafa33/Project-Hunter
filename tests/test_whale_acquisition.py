@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from hunter.cli import main
-from hunter.market_validation import MarketValidationRunner
+from hunter.market_validation import MarketValidationRunner, acquisition_sources
 from hunter.market_validation.acquisition_sources import _whale_engine_sources
 from hunter.market_validation.configuration import load_market_validation_config
 from hunter.market_validation.runner import EvidenceBackedProjectExecutor
@@ -233,6 +233,12 @@ def test_derivatives_data_does_not_infer_wallet_metrics(tmp_path) -> None:
 
     assert "top_holder_concentration" not in snapshot.normalized_metrics
     assert "whale_accumulation" not in snapshot.normalized_metrics
+
+
+def test_whale_engine_sources_returns_consistent_sequence_when_unavailable(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(acquisition_sources, "WhaleRepository", lambda: WhaleRepository(tmp_path))
+
+    assert acquisition_sources._whale_engine_sources(as_of=NOW) == []
 
 
 def test_whale_source_connects_to_market_validation_weighting(tmp_path, monkeypatch) -> None:

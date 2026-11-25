@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -166,24 +166,22 @@ def _macro_score(engine: str, snapshot: MacroSnapshot) -> float:
     )
 
 
-def _whale_engine_sources(
-    *, as_of: datetime | None, project_id: str | None = None
-) -> tuple[EngineValidationSource, ...]:
+def _whale_engine_sources(*, as_of: datetime | None, project_id: str | None = None) -> Sequence[EngineValidationSource]:
     # Aggregate derivatives evidence is market context, not project wallet attribution.
     # Until an authoritative project-wallet mapping exists, do not score it as whale evidence.
     snapshot = WhaleRepository().latest_snapshot()
     cutoff = as_of or datetime.now(UTC)
     if snapshot is None or not snapshot.evidence or not cutoff - timedelta(hours=24) <= snapshot.generated_at <= cutoff:
-        return ()
+        return []
     if any(
         item.validation_status != "VALID"
         or not cutoff - timedelta(hours=24) <= item.metric.timestamp <= cutoff
         or item.metric.retrieval_time > cutoff
         for item in snapshot.evidence
     ):
-        return ()
+        return []
     # Preserve market context for explainability without contributing a project score.
-    return (
+    return [
         EngineValidationSource(
             engine="whale_intelligence",
             score=0.0,
@@ -203,7 +201,7 @@ def _whale_engine_sources(
             warnings=("market_context_not_project_whale_signal",),
             raw_input_metrics=dict(snapshot.raw_metrics),
         ),
-    )
+    ]
 
 
 def _capital_whale_context(
