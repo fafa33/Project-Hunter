@@ -503,3 +503,24 @@ def test_onchain_execution_budget_family_reaches_spm_context() -> None:
     invariant = str(family.get("invariant", ""))
     for token in ("REQUEST_LIMIT", "TIMEOUT_SECONDS", "retry_limit", "DEADLINE_SECONDS", "max_block_range"):
         assert token in invariant
+
+
+def test_onchain_range_and_provenance_families_reach_spm_context() -> None:
+    context = EngineeringContextAuthority().compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        scope=_scope(
+            "src/hunter/onchain/",
+            "configs/onchain.yaml",
+            "tests/test_onchain_capital_flow_acquisition.py",
+        ),
+        budget_bytes=1_000_000,
+    )
+    families = cast(list[dict[str, object]], context["applicable_defect_families"])
+    range_family = next((item for item in families if item.get("id") == "DFF-060"), None)
+    provenance_family = next((item for item in families if item.get("id") == "DFF-061"), None)
+
+    assert range_family is not None
+    assert provenance_family is not None
+    assert "inclusive" in str(range_family.get("invariant", ""))
+    assert "acquisition_timestamp" in str(provenance_family.get("invariant", ""))
+    assert "receipt_verified_at" in str(provenance_family.get("invariant", ""))

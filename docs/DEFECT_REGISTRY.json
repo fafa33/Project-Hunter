@@ -1252,6 +1252,26 @@
       "guard": "Every live onchain acquisition/E2E run must declare and enforce five bounds before dispatch: REQUEST_LIMIT=40 total RPC requests counted at the transport, TIMEOUT_SECONDS=8 per request, retry_limit=0, DEADLINE_SECONDS=180 wall clock, and max_block_range=100 per eth_getLogs query. A missing or relaxed bound is BLOCKED before network work; exceeding a bound fails closed. The defect is promoted into DFF-059 so the same invariant reaches EngineeringContextAuthority/SPM for any onchain surface, and the bounded regression proves the family is compiled into the engineering.implement context.",
       "test": "tests/test_engineering_context_authority.py::test_onchain_execution_budget_family_reaches_spm_context; tests/test_onchain_capital_flow_acquisition.py::test_evm_adapter_finality_retry_logs_and_timeout_failure; tests/test_onchain_capital_flow_acquisition.py::test_tracked_transfer_acquisition_retains_real_log_and_deduplicates",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-140",
+      "class": "inclusive-block-range-off-by-one",
+      "source": "Issue #587 / PR #788 independent review at head 4d9e0a1fb351bd28655db3d97c2ff76dca833305: max_block_range=100 was treated as a difference, so engine.sync requested [end-100,end] (101 inclusive blocks) and EVMJsonRpcAdapter.logs accepted to_block-from_block==100.",
+      "classification": "systemic",
+      "guard_boundary": "onchain block-window construction and RPC adapter before eth_getLogs",
+      "guard": "Treat max_block_range as an inclusive block count. Construct windows with end - window + 1 and reject any request whose to_block - from_block + 1 exceeds the configured maximum. Boundary regressions pin 1, 100 and 101 inclusive blocks, and DFF-060 carries the invariant into the SPM engineering.implement context.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_evm_adapter_enforces_inclusive_block_range; tests/test_onchain_capital_flow_acquisition.py::test_engine_constructs_inclusive_max_block_window; tests/test_engineering_context_authority.py::test_onchain_range_and_provenance_families_reach_spm_context",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-141",
+      "class": "historical-block-timestamp-used-as-evidence-provenance",
+      "source": "Issue #587 / PR #788 independent review at head 4d9e0a1fb351bd28655db3d97c2ff76dca833305: CapitalFlowEngine._observations reused the historical block timestamp for acquisition_timestamp and receipt_verified_at, so signed provenance could not distinguish when evidence was acquired from when the receipt was independently verified.",
+      "classification": "systemic",
+      "guard_boundary": "onchain evidence construction and canonical signature verification",
+      "guard": "Inject a Clock into CapitalFlowEngine, sample acquisition_timestamp after native/log acquisition and receipt_verified_at only after successful independent receipt corroboration, keep block_timestamp bound to chain history, and sign/reverify both sampled values. Regression coverage pins distinct deterministic timestamps and rejects tampering with either signed field.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_engine_records_distinct_acquisition_and_verification_timestamps; tests/test_onchain_capital_flow_acquisition.py::test_capital_flow_evidence_hostile_cases; tests/test_engineering_context_authority.py::test_onchain_range_and_provenance_families_reach_spm_context",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -3056,7 +3076,7 @@
     {
       "id": "DFF-059",
       "title": "unbounded-rpc-execution-without-spm-budget",
-      "invariant": "Any live on-chain acquisition or E2E run, including one continued from an earlier session, must carry a machine-checkable execution budget before any RPC request is issued: REQUEST_LIMIT total RPC requests counted at the transport, TIMEOUT_SECONDS per request, retry_limit=0 automatic retries, DEADLINE_SECONDS overall wall clock, and max_block_range per eth_getLogs query. An owner abort, CI timeout, or best-effort harness is never evidence of a bounded run; a missing or weakened bound fails closed as BLOCKED before network work, and a bound breach terminates the run without claiming success. This invariant must be present in the canonical defect registry so EngineeringContextAuthority/SPM compiles it into the engineering.implement context for any change touching onchain acquisition, configuration, or its Whale/Market Validation consumers.",
+      "invariant": "Any live on-chain acquisition or E2E run, including one continued from an earlier session, must carry a machine-checkable execution budget before any RPC request is issued: REQUEST_LIMIT total RPC requests counted at the transport, TIMEOUT_SECONDS per request, retry_limit=0 automatic retries, DEADLINE_SECONDS overall wall clock, and max_block_range as an inclusive block count per eth_getLogs query. An owner abort, CI timeout, or best-effort harness is never evidence of a bounded run; a missing or weakened bound fails closed as BLOCKED before network work, and a bound breach terminates the run without claiming success. This invariant must be present in the canonical defect registry so EngineeringContextAuthority/SPM compiles it into the engineering.implement context for any change touching onchain acquisition, configuration, or its Whale/Market Validation consumers.",
       "applicability": {
         "changed_paths": [
           "src/hunter/onchain/",
@@ -3069,7 +3089,7 @@
         "rationale": "These surfaces own RPC dispatch, acquisition windows, signing/corroboration, and the downstream Whale/Market Validation consumers. Removing or relaxing any budget there can turn an unbounded exploratory run into apparent validation evidence."
       },
       "prevention": {
-        "mechanism": "SPM/engineering.implement prevention context must include DFF-059 for any onchain-surface scope; execution must be wrapped by a counting transport that refuses the next request at REQUEST_LIMIT, urlopen/read timeout of TIMEOUT_SECONDS, retry_limit=0 at the adapter/config boundary, a monotonic or POSIX DEADLINE_SECONDS alarm, and adapter.logs rejection of any window wider than max_block_range. Live E2E evidence must report the measured request count, timeout, retries, deadline, and block range; absent or out-of-bounds values are BLOCKED, not E2E_SUCCESS or a passive INSUFFICIENT_EVIDENCE verdict.",
+        "mechanism": "SPM/engineering.implement prevention context must include DFF-059 for any onchain-surface scope; execution must be wrapped by a counting transport that refuses the next request at REQUEST_LIMIT, urlopen/read timeout of TIMEOUT_SECONDS, retry_limit=0 at the adapter/config boundary, a monotonic or POSIX DEADLINE_SECONDS alarm, and adapter.logs rejection of any window wider than max_block_range. adapter.logs must reject any window whose to_block - from_block + 1 exceeds max_block_range, and engine windows must use end - window + 1. Live E2E evidence must report the measured request count, timeout, retries, deadline, and inclusive block count; absent or out-of-bounds values are BLOCKED, not E2E_SUCCESS or a passive INSUFFICIENT_EVIDENCE verdict.",
         "boundary": "hosted-gate",
         "guard_reference": "src/hunter/evidence_intelligence/engineering_context_authority.py::EngineeringContextAuthority::compile"
       },
@@ -3080,7 +3100,63 @@
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "Issue #587 / PR #788, 2026-11-25: an initial sync lido public-RPC validation ran without a machine-checkable request cap, timeout ceiling, retry ceiling, or wall-clock deadline and was aborted by the owner. The corrected bounded Compound/USDC known-transaction run used 17 of 40 RPC requests, 8-second timeout, 0 retries, a 180-second deadline, 100-block windows, free public sources, and isolated repository/signing material, and produced signed corroborated evidence for tx 0x45c0ca210996e6ec93766efb228971eaa01e74285329524bffdea63a922eb5eb in block 26491366."
+        "Issue #587 / PR #788, 2026-11-25: an initial sync lido public-RPC validation ran without a machine-checkable request cap, timeout ceiling, retry ceiling, or wall-clock deadline and was aborted by the owner. The corrected bounded Compound/USDC known-transaction run used 17 of 40 RPC requests, 8-second timeout, 0 retries, a 180-second deadline, nominally 100-block windows, free public sources, and isolated repository/signing material, and produced signed corroborated evidence for tx 0x45c0ca210996e6ec93766efb228971eaa01e74285329524bffdea63a922eb5eb in block 26491366. Independent review later found those windows spanned 101 inclusive blocks; PRH-140/DFF-060 correct the bound to 100 inclusive blocks and the Stage 4 harness must rerun with the corrected window and verified network finality."
+      ]
+    },
+    {
+      "id": "DFF-060",
+      "title": "inclusive-range-boundary-off-by-one",
+      "invariant": "A configured maximum block range is an inclusive block count: every constructed window and adapter RPC request must satisfy end - start + 1 <= max_block_range, including one-block, exact-limit, and limit-plus-one boundaries.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/adapters.py",
+          "configs/onchain.yaml",
+          "tests/test_onchain_capital_flow_acquisition.py"
+        ],
+        "rationale": "These paths construct the acquisition window, enforce the RPC range cap, configure its value, and pin the one-block/exact-limit/limit-plus-one boundary. Treating max_block_range as a subtraction treats a configured limit of 100 as 101 inclusive blocks and lets an oversized eth_getLogs request reach the provider."
+      },
+      "prevention": {
+        "mechanism": "SPM/engineering.implement prevention context must include DFF-060 for onchain-surface scope. CapitalFlowEngine must construct windows as end - window + 1 and EVMJsonRpcAdapter.logs must reject requests whose to_block - from_block + 1 exceeds max_block_range before any RPC call. Boundary tests pin 1, 100 and 101 inclusive blocks.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/adapters.py::EVMJsonRpcAdapter::logs"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_capital_flow_acquisition.py::test_evm_adapter_enforces_inclusive_block_range",
+        "tests/test_onchain_capital_flow_acquisition.py::test_engine_constructs_inclusive_max_block_window",
+        "tests/test_engineering_context_authority.py::test_onchain_range_and_provenance_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 independent review at head 4d9e0a1fb351bd28655db3d97c2ff76dca833305: engine start_block = end_block - max_range and adapter range check to_block - from_block > max_range both permitted 101 blocks under max_block_range=100."
+      ]
+    },
+    {
+      "id": "DFF-061",
+      "title": "historical-timestamp-reused-as-provenance",
+      "invariant": "block_timestamp is chain history; acquisition_timestamp and receipt_verified_at must be independently sampled from a trusted runtime clock after their corresponding acquisition and receipt-verification events, remain distinct from the historical block timestamp where runtime time differs, and stay bound to the signed evidence payload.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/evidence.py",
+          "src/hunter/execution/clock.py",
+          "tests/test_onchain_capital_flow_acquisition.py"
+        ],
+        "rationale": "These paths create the evidence rows, sign and verify their provenance fields, supply the injectable clock, and pin distinct/tampered timestamp behavior. Assigning the historical block timestamp to acquisition and receipt verification fields makes signed provenance indistinguishable from chain-history metadata and defeats deterministic temporal validation."
+      },
+      "prevention": {
+        "mechanism": "CapitalFlowEngine accepts an injectable Clock, samples acquisition_timestamp after native/log acquisition and receipt_verified_at only after successful independent receipt corroboration, and signs those sampled values. Canonical verification rejects tampering with either field and tests use FixedClock/SequenceClock for deterministic contracts.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/engine.py::CapitalFlowEngine::sync"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_capital_flow_acquisition.py::test_engine_records_distinct_acquisition_and_verification_timestamps",
+        "tests/test_onchain_capital_flow_acquisition.py::test_capital_flow_evidence_hostile_cases",
+        "tests/test_engineering_context_authority.py::test_onchain_range_and_provenance_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 independent review at head 4d9e0a1fb351bd28655db3d97c2ff76dca833305: CapitalFlowEngine._observations set both acquisition_timestamp and receipt_verified_at to the historical block timestamp."
       ]
     }
   ]

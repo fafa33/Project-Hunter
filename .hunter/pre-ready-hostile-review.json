@@ -3,25 +3,25 @@
     "acceptance_criteria": [
       {
         "criterion": "Free-provider capacity is inventoried with explicit provenance and observed consumption is persisted without paid API use.",
-        "evidence": "Existing capacity inventory and acquisition code retained from c6cca495; current candidate adds signed, corroborated on-chain capital-flow evidence without paid API use. Bounded known-transaction E2E used only free endpoints, 17 of 40 RPC requests, and produced verdict E2E_SUCCESS for transaction 0x45c0ca210996e6ec93766efb228971eaa01e74285329524bffdea63a922eb5eb. 64 focused tests pass in tests/test_onchain_capital_flow_acquisition.py and tests/test_whale_acquisition.py; Ruff, Black and Mypy pass. Live billing is not independently certified.",
+        "evidence": "Existing capacity inventory and acquisition code retained from prior candidate. Corrected Stage 4 bounded run used only free dRPC, Flashbots and MEV Blocker endpoints: 19 of 40 RPC requests, 8-second timeout, 0 retries, 180-second deadline, no paid API, and verdict E2E_SUCCESS for transaction 0x45c0ca210996e6ec93766efb228971eaa01e74285329524bffdea63a922eb5eb. Result: /var/folders/4b/tvf7qwyj4fx67pn_rkjn_9wh0000gn/T/opencode/hunter_compound_usdc_known_tx_e2e_corrected_result.json. Live billing is not independently certified.",
         "id": "AC-587-01",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Global discovery uses bounded, resumable free capacity and truthful DexScreener batching without a parallel daemon.",
-        "evidence": "Earlier regression evidence retained: test_T reproduced 12 evaluations for limit 3, now four batches cover 12 with at most 3 evaluations each, and test_E covers cursor rotation. Current staged candidate does not modify that path; no parallel daemon is introduced. No deployment is claimed.",
+        "evidence": "Prior regression evidence retained: test_T reproduced 12 evaluations for limit 3, now four batches cover 12 with at most 3 evaluations each, and test_E covers cursor rotation. Current staged candidate does not modify that path; no parallel daemon is introduced. No deployment is claimed.",
         "id": "AC-587-02",
         "verdict": "satisfied"
       },
       {
         "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
-        "evidence": "Earlier registry regression evidence retained: test_S reproduced stale shortlist eligibility after new ticker collision and current alias groups feed queue, manifest and reconciliation. Current staged candidate adds explicit signer trust, independent host corroboration and fail-closed rejection for unavailable or tampered capital-flow evidence. The strict 100-block no-transfer run was recorded as INSUFFICIENT_EVIDENCE rather than an evidence claim, and the known historical transfer E2E was separately accepted with signed evidence and independent receipt corroboration. Sonar findings on amount normalization and source-adapter tuple shape are remediated with regressions. No new global coverage claim.",
+        "evidence": "Prior registry regression evidence retained for stale shortlist eligibility, alias groups, queue, manifest and reconciliation. Current candidate adds explicit signer trust, independent host corroboration, fail-closed rejection for unavailable or tampered capital-flow evidence, and bounded historical acquisition after verified network finality. The strict 100-block no-transfer run was recorded as INSUFFICIENT_EVIDENCE rather than an evidence claim; the corrected known historical transfer E2E was accepted with signed evidence and independent receipt corroboration. Snapshot still discloses complete_transfer_coverage, aggregate_economic_flow, point_in_time_price and usd_value as unavailable. Sonar findings on amount normalization and source-adapter tuple shape remain remediated with regressions. No new global coverage claim.",
         "id": "AC-587-03",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "Staged tree 003f1ed6ca82bc37e4c701393902fed65c93b326 on e6ef9f294c41ee603dd9208d7ed74a81d66e2227; four focused post-remediation tests passed in 3.12s including the new SPM defect-family regression and prior Sonar regressions. This is a writer request only: no reviewer authority is asserted, no merge is authorized, and PR #788 remains Draft.",
+        "evidence": "Staged tree 211d60fe2d8cfed071c603f3bc7a5d26c0efe07b on base a4a9b9e173bb15afaed2c162bda9708e93eb2411. 109 focused tests pass in 5.88s across onchain acquisition, engineering context, Whale acquisition and market-validation input authority; defect prevention preflight, Ruff, Black and Mypy pass. This is a writer request only: no reviewer authority is asserted, no hosted proof is claimed for the new head, no merge is authorized, and PR #788 remains Draft.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -32,6 +32,7 @@
       "cutoff-history",
       "execution-budget",
       "fail-closed",
+      "inclusive-range-boundary",
       "malformed-unknown-authority",
       "monotonicity",
       "numeric-precision",
@@ -46,32 +47,32 @@
     "base_sha": "a4a9b9e173bb15afaed2c162bda9708e93eb2411",
     "defect_families": [
       {
-        "evidence": "Current candidate binds signatures to canonical observation payloads with normalized timestamps and deterministic log digests; timestamp parsing in as_observation and _instant uses timezone-aware UTC only. Identity regression cases pass.",
+        "evidence": "Signatures bind canonical observation payloads with normalized timestamps and deterministic log digests. Distinct block, acquisition and verification timestamps are now signed; tampered acquisition and verification timestamp cases are rejected by canonical verification.",
         "family": "DFF-001",
         "outcome": "repaired"
       },
       {
-        "evidence": "Atomic repository upsert and save_evidence_signatures write raw observations and Ed25519 signatures in the same sync path; transfer dedup test passes after two syncs. Concurrent snapshot atomicity remains deployment-pending.",
+        "evidence": "Atomic repository upsert and save_evidence_signatures write raw observations and Ed25519 signatures in the same sync path; transfer dedup test passes after two syncs with a deterministic clock. Concurrent snapshot atomicity remains deployment-pending.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Signed evidence binds project, chain, surface, evidence id, transaction hash, log topics and log data; hostile cases reject forged digests, mismatched amounts and wrong evidence attribution. High-precision zero-decimal normalization uses localcontext scaleb and its regression accepts the exact 40-digit amount.",
+        "evidence": "Signed evidence binds project, chain, surface, evidence id, transaction hash, log topics and log data; hostile cases reject forged digests, mismatched amounts, wrong evidence attribution and altered signed timestamps. High-precision zero-decimal normalization regression remains passing.",
         "family": "DFF-003",
         "outcome": "repaired"
       },
       {
-        "evidence": "Trust document schema, signing domain, key-id verification, signer allowlist and signature domain are checked before any evidence is accepted; hostile signer/domain/schema cases pass.",
+        "evidence": "Trust document schema, signing domain, key-id verification, signer allowlist and signature domain are checked before evidence is accepted; hostile signer/domain/schema cases pass with the new verification-time fields included in the signed record.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "New log_topics, log_data and signature fields are persisted with atomic writes; repository collision and conflicting-signature regressions pass while provider state upsert behavior is retained.",
+        "evidence": "Log topics, log data, acquisition timestamp, receipt verification timestamp and signature fields are persisted with atomic writes; repository collision and conflicting-signature regressions pass while provider state upsert behavior is retained.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Existing durable cursor rotation and bounded evaluation regressions retained from earlier candidate; current focused suite does not modify that path.",
+        "evidence": "Durable cursor rotation and bounded evaluation regressions retained; current focused suite does not modify that path.",
         "family": "DFF-006",
         "outcome": "clear"
       },
@@ -96,12 +97,12 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Local candidate remains one new commit on e6ef9f294c41ee603dd9208d7ed74a81d66e2227; no remote rewrite or intermediate publication is assumed by this request.",
+        "evidence": "Local candidate remains one new commit on 4d9e0a1fb351bd28655db3d97c2ff76dca833305; no remote rewrite or intermediate publication is assumed by this request.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "The stale request was rejected by the canonical verifier after the prior head change; this request is regenerated from the staged candidate content before the signed commit.",
+        "evidence": "The stale request is rejected by the canonical verifier after the prior head change; this request is regenerated from staged tree 211d60fe2d8cfed071c603f3bc7a5d26c0efe07b before the signed commit.",
         "family": "DFF-012",
         "outcome": "clear"
       },
@@ -116,7 +117,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "PRH-137 and PRH-138 are recorded as isolated findings with fixes and regression tests; PRH-139 is now recorded for unbounded RPC execution without a machine-checkable budget, and no family lifecycle promotion beyond DFF-059 is claimed.",
+        "evidence": "PRH-137, PRH-138 and PRH-139 remain recorded. PRH-140 records the inclusive block-range off-by-one and PRH-141 records historical-timestamp provenance reuse, each with guard boundary and regression evidence; no family lifecycle promotion beyond DFF-060/DFF-061 is claimed.",
         "family": "DFF-015",
         "outcome": "clear"
       },
@@ -126,7 +127,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Focused tests are diagnostic only; SonarCloud findings are remediated locally but no hosted proof or push claim is embedded in this request.",
+        "evidence": "Focused tests are diagnostic only; no hosted proof or push claim is embedded in this request. SonarCloud findings were previously remediated and are not re-asserted for the new head.",
         "family": "DFF-029",
         "outcome": "clear"
       },
@@ -136,18 +137,28 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Earlier bounded CLI regression is retained unchanged; current candidate adds fail-closed evidence verification tests and no hosted proof claim.",
+        "evidence": "Earlier bounded CLI regression is retained unchanged; current candidate adds inclusive-window and fail-closed finality regressions plus timestamp provenance tests, with no hosted proof claim.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Defect registry records PRH-137, PRH-138 and PRH-139 with provenance, guards and regression tests; the new regression proves the onchain execution-budget family reaches the SPM engineering.implement context.",
+        "evidence": "Defect registry records PRH-140 and PRH-141 with provenance, guards and regression tests; SPM family regressions prove DFF-060 and DFF-061 reach the engineering.implement context for onchain scope.",
         "family": "DFF-045",
         "outcome": "repaired"
       },
       {
-        "evidence": "DFF-059 records the observed unbounded RPC execution defect as regression-tested with hosted-gate boundary; test_onchain_execution_budget_family_reaches_spm_context failed before the registry addition and passes after it, and the bounded known-transaction E2E records the machine-checkable budget evidence.",
+        "evidence": "DFF-059 records bounded RPC execution. Corrected Stage 4 run verified network finalized head 26492344 before acquisition, used a 100-inclusive-block window [26491267,26491366], 19/40 requests, 8-second timeout, 0 retries and 180-second deadline, and recorded E2E_SUCCESS with preserved known transaction evidence.",
         "family": "DFF-059",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "DFF-060 records the inclusive-range boundary invariant. Adapter and engine now treat max_block_range as an inclusive count; one-block, exact-limit and limit-plus-one regressions pass, and the corrected Stage 4 result reports inclusive_block_count=100 with max_blocks=100.",
+        "family": "DFF-060",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "DFF-061 records independent acquisition and verification provenance. CapitalFlowEngine injects a Clock, samples native/log acquisition and post-corroboration verification times separately, signs those values, and rejects tampered acquisition/verification timestamps; deterministic and hostile regressions pass.",
+        "family": "DFF-061",
         "outcome": "repaired"
       }
     ],
@@ -191,7 +202,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "022d4b9e9e8335586bba62c59997b0b04d0b670e",
+        "blob_sha": "6a52237415f7ebf9289cd5d6636d15baad324728",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -269,13 +280,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "d5f7b84ed69ab4f9464454b3ef7c51191e2675ff",
+        "blob_sha": "87fe0d4c1569ce2e24fc2cd7cb9ee98b117d7edd",
         "path": "src/hunter/onchain/adapters.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "e59b488d2aead3c316b2c0a83d9986ff83469d7a",
+        "blob_sha": "f11decb5d8e71651231b4ab990d3e82d2e3548d1",
         "path": "src/hunter/onchain/engine.py",
         "previous_path": "",
         "status": "modified"
@@ -299,7 +310,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "63688680c795949cbb06a2a87e2c81d67c728a0c",
+        "blob_sha": "f0c5d7c92cc77e36d61e4ed9eab3d145b72d9a64",
         "path": "tests/test_engineering_context_authority.py",
         "previous_path": "",
         "status": "modified"
@@ -311,7 +322,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "f0bebf9434471656d477d5abb9ac72cfcbee9b2b",
+        "blob_sha": "59fc5f23534308c3254ba5ab3945bfe115bdb13d",
         "path": "tests/test_onchain_capital_flow_acquisition.py",
         "previous_path": "",
         "status": "modified"
@@ -323,16 +334,16 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "0ec97d1fb6a62ed864891592e062a0828a5c05e214087a44dc594549c6927bf5"
+    "review_target_digest": "2c698759b4ed0437ff56ea33aa8454b5264552a1298db4d8b541de7600e597db"
   },
   "review_eligibility": {
     "mode": "pre_deployment",
     "pr_number": 788,
     "repository": "fafa33/Project-Hunter"
   },
-  "review_id": "613b6d0a1de630c265c87991c9b57c40c25a740de28ecc4e03433d214706f705",
+  "review_id": "4da7489b9046b06d218770d614dc447d3a987786497be4e34309266790dfac66",
   "review_request": {
-    "claims_id": "613b6d0a1de630c265c87991c9b57c40c25a740de28ecc4e03433d214706f705",
+    "claims_id": "4da7489b9046b06d218770d614dc447d3a987786497be4e34309266790dfac66",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

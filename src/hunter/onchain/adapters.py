@@ -166,7 +166,7 @@ class EVMJsonRpcAdapter:
     def logs(
         self, *, address: str | None, from_block: int, to_block: int, topics: tuple[str | None, ...]
     ) -> tuple[dict[str, Any], ...]:
-        if to_block - from_block > self.config.max_block_range:
+        if to_block - from_block + 1 > self.config.max_block_range:
             raise EVMProviderUnavailable(
                 "requested block range exceeds configured maximum", failure_type="invalid_response"
             )

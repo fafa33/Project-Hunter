@@ -7,6 +7,7 @@ from decimal import Decimal
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from hunter.execution.clock import Clock, SystemClock
 from hunter.execution.identity import identity
 from hunter.market_validation.configuration import load_market_validation_config
 from hunter.onchain.adapters import EVMJsonRpcAdapter, EVMProviderUnavailable
@@ -39,8 +40,10 @@ class CapitalFlowEngine:
         repository: OnChainRepository | None = None,
         adapters: dict[int, EVMJsonRpcAdapter] | None = None,
         evidence_signing_key: Ed25519PrivateKey | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self.config = config or load_onchain_config()
+        self.clock = clock or SystemClock()
         self.evidence_signing_key = (
             evidence_signing_key if evidence_signing_key is not None else configured_signing_key()
         )
@@ -54,7 +57,7 @@ class CapitalFlowEngine:
             if chain.enabled and chain.family == "evm"
         }
 
-    def sync(self, project: str | None = None) -> tuple[CapitalFlowSnapshot, ...]:
+    def sync(self, project: str | None = None, end_block: int | None = None) -> tuple[CapitalFlowSnapshot, ...]:
         if not self.config.enabled:
             return ()
         surfaces = tuple(
@@ -78,11 +81,15 @@ class CapitalFlowEngine:
                     self.repository.save_snapshots((snapshot,))
                     snapshots.append(snapshot)
                     continue
-                end_block = adapter.finalized_block_number()
+                finalized_block = adapter.finalized_block_number()
+                selected_end_block = finalized_block if end_block is None else end_block
+                if selected_end_block < 0 or selected_end_block > finalized_block:
+                    raise EVMProviderUnavailable("requested block is not finalized")
+                end_block = selected_end_block
                 block = adapter.block(end_block)
                 block_hash = str(block.get("hash", ""))
                 end_timestamp = adapter.block_timestamp(end_block)
-                start_block = max(0, end_block - self._block_window(surface.chain_id, "24h"))
+                start_block = max(0, end_block - self._block_window(surface.chain_id, "24h") + 1)
                 observations, signatures, acquisition_unavailable = self._observations(
                     surface, adapter, start_block, end_block, block_hash, end_timestamp
                 )
@@ -175,6 +182,7 @@ class CapitalFlowEngine:
         end_timestamp: datetime,
     ) -> tuple[tuple[RawOnChainObservation, ...], tuple[dict[str, object], ...], tuple[str, ...]]:
         raw_balance = adapter.native_balance(surface.address, end_block)
+        native_acquired_at = self.clock.now().astimezone(UTC)
         rows = [
             RawOnChainObservation(
                 project=surface.project,
@@ -185,7 +193,7 @@ class CapitalFlowEngine:
                 block_hash=block_hash,
                 block_timestamp=end_timestamp,
                 observed_address=surface.address,
-                acquisition_timestamp=end_timestamp,
+                acquisition_timestamp=native_acquired_at,
                 finality_status="finalized",
                 source_reference=surface.source_url,
                 evidence_id=identity(
@@ -213,6 +221,7 @@ class CapitalFlowEngine:
                     logs = adapter.logs(
                         address=asset.contract_address, from_block=start_block, to_block=end_block, topics=topics
                     )
+                    log_acquired_at = self.clock.now().astimezone(UTC)
                     log_endpoint = adapter.endpoint_identity
                     for log in logs:
                         try:
@@ -266,6 +275,7 @@ class CapitalFlowEngine:
                                 for _, other in corroborations
                             ):
                                 continue
+                            verified_at = self.clock.now().astimezone(UTC)
                             timestamp = datetime.fromtimestamp(int(str(block["timestamp"]), 16), tz=UTC)
                             incoming = recipient == surface.address.lower()
                             row = RawOnChainObservation(
@@ -277,7 +287,7 @@ class CapitalFlowEngine:
                                 block_hash=block_hash_value,
                                 block_timestamp=timestamp,
                                 observed_address=surface.address,
-                                acquisition_timestamp=timestamp,
+                                acquisition_timestamp=log_acquired_at,
                                 finality_status="finalized",
                                 source_reference=surface.source_url,
                                 evidence_id=evidence_id,
@@ -295,12 +305,14 @@ class CapitalFlowEngine:
                                 receipt_endpoint=receipt_endpoint,
                                 corroborating_endpoints=tuple(sorted(name for name, _ in corroborations)),
                                 receipt_validation_policy=CORROBORATION_POLICY,
-                                receipt_verified_at=timestamp,
+                                receipt_verified_at=verified_at,
                                 log_topics=tuple(topics_raw),
                                 log_data=data,
                             )
                             row = replace(row, receipt_log_digest=receipt_log_digest(row))
-                            signed = sign_observation(row, surface, self.evidence_signing_key)
+                            signed = sign_observation(
+                                row, surface, self.evidence_signing_key, verification_timestamp=verified_at
+                            )
                             rows.append(row)
                             signatures.append(signed)
                             seen.add(evidence_id)

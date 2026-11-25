@@ -10,6 +10,7 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from hunter.automation.issue_agent_state import sign_record
+from hunter.execution import Clock, FixedClock
 from hunter.onchain.adapters import EVMJsonRpcAdapter, EVMProviderUnavailable
 from hunter.onchain.automation import ONCHAIN_AUTOMATION_JOBS, OnChainAutomationManager
 from hunter.onchain.configuration import OnChainConfig
@@ -38,6 +39,8 @@ from hunter.onchain.registry import SurfaceRegistry
 from hunter.onchain.repository import OnChainRepository
 
 NOW = datetime(2026, 7, 13, tzinfo=UTC)
+ACQUIRED_AT = NOW + timedelta(minutes=1)
+VERIFIED_AT = NOW + timedelta(minutes=2)
 SURFACE_ADDRESS = "0x87870bca3f3fd6335c3f4ce8392d69350b4fa4e2"
 OTHER_SURFACE = "0x0000000000000000000000000000000000000a01"
 COUNTERPARTY = "0x0000000000000000000000000000000000000b02"
@@ -66,6 +69,14 @@ class StaticTransport:
         if method == "eth_getLogs":
             return [{"transactionHash": "0xtx", "logIndex": hex(7)}]
         raise AssertionError(method)
+
+
+class SequenceClock:
+    def __init__(self, *values: datetime) -> None:
+        self._values = iter(values)
+
+    def now(self) -> datetime:
+        return next(self._values)
 
 
 def chain(chain_id: int = 1, *, enabled: bool = True, finality_depth: int = 64, retry_limit: int = 1) -> ChainConfig:
@@ -251,6 +262,27 @@ def test_evm_adapter_finality_retry_logs_and_timeout_failure() -> None:
         failing.latest_finalized_block()
 
 
+@pytest.mark.parametrize(
+    "from_block,to_block,accepted",
+    [
+        (100, 100, True),
+        (100, 199, True),
+        (100, 200, False),
+    ],
+)
+def test_evm_adapter_enforces_inclusive_block_range(from_block: int, to_block: int, accepted: bool) -> None:
+    transport = StaticTransport()
+    adapter = EVMJsonRpcAdapter(replace(chain(), max_block_range=100, retry_limit=0), transport=transport)
+
+    if accepted:
+        assert adapter.logs(address=SURFACE_ADDRESS, from_block=from_block, to_block=to_block, topics=("0xtopic",))
+        assert transport.calls.count("eth_getLogs") == 1
+    else:
+        with pytest.raises(EVMProviderUnavailable, match="range exceeds configured maximum"):
+            adapter.logs(address=SURFACE_ADDRESS, from_block=from_block, to_block=to_block, topics=("0xtopic",))
+        assert "eth_getLogs" not in transport.calls
+
+
 def test_repository_compacts_repeated_sync_data_by_deterministic_identity(tmp_path) -> None:
     repo = OnChainRepository(tmp_path)
     raw = observation(evm_log_evidence_id(1, "0xABC", 7), log_index=7)
@@ -326,6 +358,83 @@ def test_successful_sync_is_idempotent_uses_finalized_block_and_links_evidence(t
     assert len(repo.flows()) == 1
     assert len(repo.snapshots()) == 1
     assert second[0].evidence_ids == first[0].evidence_ids
+
+
+@pytest.mark.parametrize(
+    "finalized_block,expected_start",
+    [
+        (0, 0),
+        (99, 0),
+        (100, 1),
+    ],
+)
+def test_engine_constructs_inclusive_max_block_window(tmp_path, finalized_block: int, expected_start: int) -> None:
+    class WindowTransport(StaticTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.windows: list[tuple[int, int]] = []
+
+        def rpc(self, method: str, params: tuple[object, ...]) -> object:
+            if method == "eth_getBlockByNumber" and params and params[0] == "finalized":
+                return {
+                    "number": hex(finalized_block),
+                    "hash": "0x" + "ef" * 32,
+                    "timestamp": hex(int(NOW.timestamp())),
+                }
+            if method == "eth_getLogs":
+                request = params[0]
+                assert isinstance(request, dict)
+                self.windows.append((int(str(request["fromBlock"]), 16), int(str(request["toBlock"]), 16)))
+                return []
+            return super().rpc(method, params)
+
+    transport = WindowTransport()
+    bounded_chain = replace(chain(), max_block_range=100, retry_limit=0)
+    bounded_config = replace(
+        config(surface(), chains=(bounded_chain,)),
+        tracked_assets=(AssetConfig(1, "TEST", "stablecoin", 6, PROJECT_TOKEN),),
+    )
+    repo = OnChainRepository(tmp_path)
+    engine = CapitalFlowEngine(
+        bounded_config,
+        repository=repo,
+        evidence_signing_key=Ed25519PrivateKey.generate(),
+        adapters={1: EVMJsonRpcAdapter(bounded_chain, transport=transport)},
+    )
+
+    snapshot = engine.sync()[0]
+
+    assert snapshot.end_block == finalized_block
+    assert snapshot.start_block == expected_start
+    assert finalized_block - expected_start + 1 <= 100
+    assert transport.windows == [(expected_start, finalized_block), (expected_start, finalized_block)]
+
+
+def test_engine_only_accepts_finalized_explicit_end_block(tmp_path) -> None:
+    class FinalityTransport(StaticTransport):
+        def rpc(self, method: str, params: tuple[object, ...]) -> object:
+            if method == "eth_getBlockByNumber" and params and params[0] == "finalized":
+                return {
+                    "number": hex(150),
+                    "hash": "0x" + "ef" * 32,
+                    "timestamp": hex(int(NOW.timestamp())),
+                }
+            return super().rpc(method, params)
+
+    bounded_chain = replace(chain(), max_block_range=100, retry_limit=0)
+    engine = CapitalFlowEngine(
+        replace(config(), chains=(bounded_chain,)),
+        repository=OnChainRepository(tmp_path),
+        evidence_signing_key=Ed25519PrivateKey.generate(),
+        adapters={1: EVMJsonRpcAdapter(bounded_chain, transport=FinalityTransport())},
+    )
+
+    accepted = engine.sync(end_block=100)[0]
+    rejected = engine.sync(end_block=151)[0]
+
+    assert accepted.end_block == 100
+    assert accepted.start_block == 1
+    assert rejected.status == "provider_unavailable"
 
 
 def test_provider_pool_failover_cooldown_wrong_chain_and_status_persistence(tmp_path) -> None:
@@ -418,6 +527,7 @@ def test_tracked_transfer_acquisition_retains_real_log_and_deduplicates(tmp_path
         cfg,
         repository=repo,
         evidence_signing_key=key,
+        clock=FixedClock(NOW),
         adapters={
             1: EVMJsonRpcAdapter(
                 replace(
@@ -447,6 +557,65 @@ def test_tracked_transfer_acquisition_retains_real_log_and_deduplicates(tmp_path
     assert snapshot.status == "partial"
     assert "aggregate_economic_flow" in snapshot.unavailable_fields
     assert any(row["category"] == "external_inflow" for row in repo.flows())
+
+
+def test_engine_records_distinct_acquisition_and_verification_timestamps(tmp_path, monkeypatch) -> None:
+    key, _key_path, trust_path, trust = signing_material(tmp_path)
+    monkeypatch.setenv(TRUST_FILE_ENV, str(trust_path))
+
+    class TransferTransport(StaticTransport):
+        def rpc(self, method: str, params: tuple[object, ...]) -> object:
+            if method == "eth_getTransactionReceipt":
+                logs = self.rpc("eth_getLogs", ())
+                assert isinstance(logs, list)
+                return {**logs[0], "status": "0x1", "logs": logs}
+            if method == "eth_getLogs":
+                return [
+                    {
+                        "address": PROJECT_TOKEN,
+                        "topics": [
+                            TRANSFER_TOPIC,
+                            "0x" + COUNTERPARTY[2:].zfill(64),
+                            "0x" + SURFACE_ADDRESS[2:].zfill(64),
+                        ],
+                        "data": "0x" + format(2500000, "064x"),
+                        "transactionHash": "0x" + "ab" * 32,
+                        "logIndex": "0x7",
+                        "blockNumber": "0x384",
+                        "blockHash": "0x" + "ef" * 32,
+                    }
+                ]
+            return super().rpc(method, params)
+
+    cfg = replace(config(), tracked_assets=(AssetConfig(1, "TEST", "stablecoin", 6, PROJECT_TOKEN),))
+    repo = OnChainRepository(tmp_path / "runtime")
+    clock: Clock = SequenceClock(ACQUIRED_AT, ACQUIRED_AT, VERIFIED_AT, ACQUIRED_AT)
+    engine = CapitalFlowEngine(
+        cfg,
+        repository=repo,
+        evidence_signing_key=key,
+        clock=clock,
+        adapters={
+            1: EVMJsonRpcAdapter(
+                replace(
+                    chain(),
+                    rpc_endpoints=("https://first.example", "https://second.example", "https://third.example"),
+                ),
+                transport_factory=lambda _: TransferTransport(),
+            )
+        },
+    )
+
+    engine.sync()
+
+    transfer = next(row for row in repo.raw() if row["event_type"] == "erc20_transfer")
+    assert transfer["block_timestamp"].startswith(NOW.isoformat())
+    assert transfer["acquisition_timestamp"].startswith(ACQUIRED_AT.isoformat())
+    assert transfer["receipt_verified_at"].startswith(VERIFIED_AT.isoformat())
+    accepted = verified_capital_flow_rows(
+        "aave", repo.raw(), config=cfg, repository=repo, trust=trust, as_of=VERIFIED_AT + timedelta(minutes=1)
+    )
+    assert [row.evidence_id for row in accepted] == [transfer["evidence_id"]]
 
 
 @pytest.mark.parametrize(
@@ -612,6 +781,8 @@ def test_hostile_rpc_corroboration(tmp_path, mode, expected) -> None:
         "same_host_corroboration",
         "conflicting_signature",
         "tampered_row",
+        "tampered_acquisition_timestamp",
+        "tampered_verification_timestamp",
     ],
 )
 def test_capital_flow_evidence_hostile_cases(tmp_path, case) -> None:
@@ -697,6 +868,12 @@ def test_capital_flow_evidence_hostile_cases(tmp_path, case) -> None:
         conflicting = True
     elif case == "tampered_row":
         row = replace(base, raw_amount="9999999")
+        signatures = (signature,)
+    elif case == "tampered_acquisition_timestamp":
+        row = replace(base, acquisition_timestamp=NOW + timedelta(minutes=1))
+        signatures = (signature,)
+    elif case == "tampered_verification_timestamp":
+        row = replace(base, receipt_verified_at=NOW + timedelta(minutes=1))
         signatures = (signature,)
 
     repo = OnChainRepository(tmp_path / "verification")
