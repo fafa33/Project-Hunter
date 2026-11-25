@@ -15,6 +15,8 @@ from hunter.intelligence.engines.whale.configuration import WhaleEngineConfigura
 from hunter.intelligence.engines.whale.exceptions import WhaleCollectionError
 from hunter.intelligence.engines.whale.models import WHALE_SIGNAL_TYPES, WhaleAnalysis, WhaleDataset
 from hunter.intelligence.engines.whale.normalization import WhaleNormalizer
+from hunter.onchain.configuration import OnChainConfig
+from hunter.onchain.evidence import EvidenceTrust, verified_capital_flow_rows
 from hunter.plugins.contracts import PipelineContext, PluginMetadata
 
 
@@ -27,8 +29,14 @@ class WhaleIntelligenceEngine(BaseIntelligenceEngine):
         normalizer: WhaleNormalizer | None = None,
         confidence_model: WhaleConfidenceModel | None = None,
         configuration: WhaleEngineConfiguration | None = None,
+        capital_flow_trust: EvidenceTrust | None = None,
+        onchain_config: OnChainConfig | None = None,
+        onchain_repository: Any | None = None,
     ) -> None:
         self.configuration = configuration or WhaleEngineConfigurationLoader().load()
+        self.capital_flow_trust = capital_flow_trust
+        self.onchain_config = onchain_config
+        self.onchain_repository = onchain_repository
         self.metadata = EngineMetadata(
             id=self.configuration.engine_id,
             name="Whale Intelligence Engine",
@@ -79,6 +87,26 @@ class WhaleIntelligenceEngine(BaseIntelligenceEngine):
             )
             for event in self._latest_dataset.events
         )
+        # Transfer evidence is contextual only: it cannot establish whale ownership or buying.
+        transfer_evidence = {}
+        for row in verified_capital_flow_rows(
+            self.configuration.project,
+            context.get("capital_flow_observations", ()),
+            config=self.onchain_config,
+            repository=self.onchain_repository,
+            trust=self.capital_flow_trust,
+            as_of=generated_at,
+        ):
+            transfer_evidence[row.evidence_id] = Evidence(
+                id=f"capital-context-{row.evidence_id}",
+                source=row.provider,
+                collected_at=row.block_timestamp,
+                reliability=0.5,
+                freshness=max(0.0, 1.0 - (generated_at - row.block_timestamp).total_seconds() / 86400),
+                reference=row.source_reference,
+                raw_data=row,
+                metadata={"classification": "unattributed_transfer", "asset": row.asset_contract},
+            )
         observations = tuple(
             Observation(
                 id=f"whale-observation-{signal.name}",
@@ -108,7 +136,7 @@ class WhaleIntelligenceEngine(BaseIntelligenceEngine):
                 )
                 for signal in analysis.signals
             ),
-            evidence=evidence,
+            evidence=evidence + tuple(transfer_evidence.values()),
             observations=observations,
             insights=self._insights(analysis, observations),
             confidence=confidence,

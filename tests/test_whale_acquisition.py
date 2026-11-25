@@ -1,14 +1,30 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from urllib.parse import urlsplit
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from hunter.cli import main
 from hunter.market_validation import MarketValidationRunner
 from hunter.market_validation.acquisition_sources import _whale_engine_sources
 from hunter.market_validation.configuration import load_market_validation_config
 from hunter.market_validation.runner import EvidenceBackedProjectExecutor
+from hunter.onchain.configuration import load_onchain_config
+from hunter.onchain.engine import TRANSFER_TOPIC, evm_log_evidence_id
+from hunter.onchain.evidence import (
+    CORROBORATION_POLICY,
+    load_trust,
+    receipt_log_digest,
+    sign_observation,
+    write_signing_key,
+    write_trust_document,
+)
+from hunter.onchain.models import RawOnChainObservation
+from hunter.onchain.repository import OnChainRepository
 from hunter.whale import (
     REQUIRED_WHALE_METRICS,
     WhaleIntelligenceEvidenceEngine,
@@ -234,11 +250,10 @@ def test_whale_source_connects_to_market_validation_weighting(tmp_path, monkeypa
         transport=_whale_transport,
     )
     WhaleIntelligenceEvidenceEngine(repository=repository, registry=registry).sync(now=NOW)
-    monkeypatch.setattr("hunter.market_validation.acquisition_sources.WhaleRepository", lambda: repository)
 
     sources = _whale_engine_sources(as_of=NOW)
 
-    assert {source.engine for source in sources}.issuperset({"whale_intelligence", "risk", "committee"})
+    assert all(source.status == "UNAVAILABLE" for source in sources)
     assert all(source.evidence_ids for source in sources)
 
 
@@ -257,7 +272,6 @@ def test_whale_evidence_reaches_explainability_and_committee_path(tmp_path, monk
         transport=_whale_transport,
     )
     WhaleIntelligenceEvidenceEngine(repository=repository, registry=registry).sync(now=NOW)
-    monkeypatch.setattr("hunter.market_validation.acquisition_sources.WhaleRepository", lambda: repository)
     market_config = load_market_validation_config()
     sources = {"bitcoin": _whale_engine_sources(as_of=NOW)}
 
@@ -272,8 +286,8 @@ def test_whale_evidence_reaches_explainability_and_committee_path(tmp_path, monk
     )
 
     whale = next(source for source in result.engine_sources if source.engine == "whale_intelligence")
-    assert whale.base_weight > 0.0
-    assert whale.weighted_contribution > 0.0
+    assert whale.status == "UNAVAILABLE"
+    assert whale.weighted_contribution == 0.0
     assert result.committee_decision == "INSUFFICIENT_EVIDENCE"
 
 
@@ -334,3 +348,77 @@ def _whale_transport(url: str) -> str:
 
 def _raise(exc: Exception) -> str:
     raise exc
+
+
+def _signed_capital_row(tmp_path):
+    cfg = load_onchain_config()
+    surface = next(item for item in cfg.surfaces if item.active and item.project == "aave" and item.chain_id == 1)
+    key = Ed25519PrivateKey.generate()
+    key_path = tmp_path / "signing.key"
+    trust_path = tmp_path / "trust.json"
+    write_signing_key(key_path, key)
+    write_trust_document(trust_path, key)
+    tx = "0x" + "ab" * 32
+    counterparty = "0x" + "22" * 20
+    row = RawOnChainObservation(
+        project="aave",
+        chain_id=1,
+        provider="evm-json-rpc",
+        endpoint_identity="eth.drpc.org",
+        block_number=900,
+        block_hash="0x" + "ef" * 32,
+        block_timestamp=NOW - timedelta(minutes=1),
+        observed_address=surface.address,
+        acquisition_timestamp=NOW,
+        finality_status="finalized",
+        source_reference="https://example.com/tx/" + tx,
+        evidence_id=evm_log_evidence_id(1, tx, 0),
+        transaction_hash=tx,
+        log_index=0,
+        counterparty_address=counterparty,
+        asset_contract="0x" + "cd" * 20,
+        asset_symbol="TEST",
+        raw_amount="1000000",
+        decimals=6,
+        normalized_amount=Decimal("1"),
+        direction="in",
+        event_type="erc20_transfer",
+        log_endpoint="https://eth.drpc.org",
+        receipt_endpoint="https://eth.drpc.org",
+        corroborating_endpoints=("https://rpc.flashbots.net", "https://rpc.mevblocker.io"),
+        receipt_validation_policy=CORROBORATION_POLICY,
+        receipt_verified_at=NOW,
+        log_topics=(
+            TRANSFER_TOPIC,
+            "0x" + counterparty[2:].zfill(64),
+            "0x" + surface.address[2:].zfill(64),
+        ),
+        log_data="0x" + format(1000000, "064x"),
+    )
+    row = replace(row, receipt_log_digest=receipt_log_digest(row))
+    repo = OnChainRepository(tmp_path / "runtime")
+    repo.save_raw((row,))
+    repo.save_evidence_signatures((sign_observation(row, surface, key, verification_timestamp=NOW),))
+    return row, cfg, repo, load_trust(trust_path)
+
+
+def test_capital_context_is_project_scoped_and_never_weighted(tmp_path) -> None:
+    from hunter.market_validation.acquisition_sources import _capital_whale_context
+
+    row, cfg, repo, trust = _signed_capital_row(tmp_path)
+    source = _capital_whale_context("aave", (row, row), as_of=NOW, config=cfg, repository=repo, trust=trust)
+    assert source is not None
+    assert source.status == "UNAVAILABLE"
+    assert source.confidence == source.score == 0
+    assert source.evidence_ids == (row.evidence_id,)
+    assert _capital_whale_context("bitcoin", (row,), as_of=NOW, config=cfg, repository=repo, trust=trust) is None
+
+    hostile = (
+        replace(row, evidence_id="forged"),
+        replace(row, log_index=-1),
+        replace(row, block_hash="fake"),
+        replace(row, finality_status="pending"),
+        replace(row, block_timestamp=NOW - timedelta(days=2)),
+    )
+    for candidate in hostile:
+        assert _capital_whale_context("aave", (candidate,), as_of=NOW, config=cfg, repository=repo, trust=trust) is None

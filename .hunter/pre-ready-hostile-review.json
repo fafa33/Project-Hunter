@@ -3,25 +3,25 @@
     "acceptance_criteria": [
       {
         "criterion": "Free-provider capacity is inventoried with explicit provenance and observed consumption is persisted without paid API use.",
-        "evidence": "Existing capacity inventory and acquisition code retained from c6cca495; 96 isolated tests passed with Python socket connect/connect_ex/getaddrinfo blocked. Live billing is not independently certified.",
+        "evidence": "Existing capacity inventory and acquisition code retained from c6cca495; current staged candidate adds signed, corroborated on-chain capital-flow evidence without paid API use. 62 focused tests passed in tests/test_onchain_capital_flow_acquisition.py and tests/test_whale_acquisition.py; Ruff, Black and Mypy pass. Live billing is not independently certified.",
         "id": "AC-587-01",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Global discovery uses bounded, resumable free capacity and truthful DexScreener batching without a parallel daemon.",
-        "evidence": "test_T reproduced 12 evaluations for limit 3, now four batches cover 12 with at most 3 evaluations each. test_E covers cursor rotation. Existing scheduler PID 13716 remains running; no deployment.",
+        "evidence": "Earlier regression evidence retained: test_T reproduced 12 evaluations for limit 3, now four batches cover 12 with at most 3 evaluations each, and test_E covers cursor rotation. Current staged candidate does not modify that path; no parallel daemon is introduced. No deployment is claimed.",
         "id": "AC-587-02",
         "verdict": "satisfied"
       },
       {
         "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
-        "evidence": "test_S reproduced stale shortlist eligibility after new ticker collision; current alias groups now feed queue, manifest and reconciliation. Registry regression suite passes; no new global coverage claim.",
+        "evidence": "Earlier registry regression evidence retained: test_S reproduced stale shortlist eligibility after new ticker collision and current alias groups feed queue, manifest and reconciliation. Current staged candidate adds explicit signer trust, independent host corroboration and fail-closed rejection for unavailable or tampered capital-flow evidence. No new global coverage claim.",
         "id": "AC-587-03",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "Aligned staged tree on c6cca495, retained PRH-136 bounded CLI test; 96 tests passed in 20.59s, Ruff Black Mypy pass. Local writer request only, no independent reviewer authority, push or merge.",
+        "evidence": "Staged tree on e6ef9f294c41ee603dd9208d7ed74a81d66e2227; 62 focused tests passed in 5.55s, Ruff, Black and Mypy pass, git diff --check passes. This is a writer request only: no reviewer authority is asserted, no merge is authorized, and PR #788 remains Draft.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -43,42 +43,42 @@
     "base_sha": "a4a9b9e173bb15afaed2c162bda9708e93eb2411",
     "defect_families": [
       {
-        "evidence": "Identity fingerprint excludes volatile timestamps; test_B/C cover unchanged and changed evidence. No new caller time admission parameter.",
+        "evidence": "Current candidate binds signatures to canonical observation payloads with normalized timestamps and deterministic log digests; timestamp parsing in As_observation and _instant uses timezone-aware UTC only. Identity regression cases pass.",
         "family": "DFF-001",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
-        "evidence": "test_S covers sequential acquisition then read-only manifest and reconciliation; current alias groups replace stale stored collision membership. Concurrent acquisition snapshot atomicity is not independently established; deployment remains pending.",
+        "evidence": "Atomic repository upsert and save_evidence_signatures write raw observations and Ed25519 signatures in the same sync path; transfer dedup test passes after two syncs. Concurrent snapshot atomicity remains deployment-pending.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "test_D/S use immutable candidate IDs and current ticker groups; stale identity is rejected before handoff.",
+        "evidence": "Signed evidence binds project, chain, surface, evidence id, transaction hash, log topics and log data; hostile cases reject forged digests, mismatched amounts and wrong evidence attribution.",
         "family": "DFF-003",
         "outcome": "repaired"
       },
       {
-        "evidence": "test_I/K/S reject missing or stale identity; policy version and fingerprint remain required.",
+        "evidence": "Trust document schema, signing domain, key-id verification, signer allowlist and signature domain are checked before any evidence is accepted; hostile signer/domain/schema cases pass.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Patch introduces no new metadata persistence field; test_H covers provider upsert status preservation.",
+        "evidence": "New log_topics, log_data and signature fields are persisted with atomic writes; repository collision and conflicting-signature regressions pass while provider state upsert behavior is retained.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "test_E/T cover durable cursor rotation and bounded evaluation; unchanged evidence test_B passes.",
+        "evidence": "Existing durable cursor rotation and bounded evaluation regressions retained from earlier candidate; current focused suite does not modify that path.",
         "family": "DFF-006",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "No authorization code changed; writer finalizer derives new request from staged tree, not previous authority.",
+        "evidence": "No authorization path changed. The writer finalizer derives a new request from the staged candidate tree and never reuses prior reviewer authority.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Canonical finalizer computes content-bound request; no external reviewer signature asserted.",
+        "evidence": "Canonical finalizer computes a content-bound request; the judgement contains no reviewer signature or authority record.",
         "family": "DFF-008",
         "outcome": "clear"
       },
@@ -88,32 +88,32 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Configured owner name Farhad5778 and signing key unchanged; commit uses git commit -S.",
+        "evidence": "Configured owner name Farhad5778 and signing key path are unchanged; the candidate commit uses git commit -S.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Local candidate is aligned as a single new commit on c6cca495, no remote rewrite or intermediate publication.",
+        "evidence": "Local candidate is one new commit on e6ef9f294c41ee603dd9208d7ed74a81d66e2227; no remote rewrite or intermediate publication is assumed by this request.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Old request was rejected by hook; new request generated from current staged content before commit.",
+        "evidence": "The stale request was rejected by the canonical verifier; a new request is generated from the staged candidate content before the signed commit.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Local request only; PR stays Draft and independent exact-head hosted review remains outstanding.",
+        "evidence": "This is a local writer request only; PR #788 stays Draft and independent exact-head hosted review remains outstanding.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "No hosted publisher or readiness controller changed; no hosted result asserted for this candidate.",
+        "evidence": "No hosted publisher, merge-readiness controller or reviewer authority changed; no hosted result is asserted for this candidate.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Existing PRH-136 registry record retained verbatim from c6cca495; no family lifecycle promotion.",
+        "evidence": "Existing PRH-136 registry record is retained without family lifecycle promotion.",
         "family": "DFF-015",
         "outcome": "clear"
       },
@@ -123,7 +123,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "96 focused tests are diagnostic only; no hosted proof or push claimed.",
+        "evidence": "62 focused tests are diagnostic only; no hosted proof or push claim is embedded in this request.",
         "family": "DFF-029",
         "outcome": "clear"
       },
@@ -133,12 +133,12 @@
         "outcome": "clear"
       },
       {
-        "evidence": "96 tests executed with Python socket connections and DNS blocked; bounded CLI regression preserved.",
+        "evidence": "Earlier bounded CLI regression is retained unchanged; current candidate adds fail-closed evidence verification tests but no hosted proof claim.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Registry identical to c6cca495; no SPM compiler or prevention-context change.",
+        "evidence": "Defect registry is retained from the earlier candidate; no SPM compiler or prevention-context change.",
         "family": "DFF-045",
         "outcome": "clear"
       }
@@ -159,6 +159,12 @@
         "status": "added"
       },
       {
+        "blob_sha": "bc575e526c97d71c033e69f7aca14f1c897cf709",
+        "path": "src/hunter/onchain/evidence.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
         "blob_sha": "b9cad3eda93562cc8490289e4898a5367e0ff1bf",
         "path": "tests/test_discovery_identity_handoff.py",
         "previous_path": "",
@@ -167,6 +173,12 @@
       {
         "blob_sha": "0d1e022142bf539d4045222ff9652d861d4ae8a8",
         "path": "configs/automation.yaml",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "c625955d363e6eb44e773684276b58e280e9d7af",
+        "path": "configs/onchain.yaml",
         "previous_path": "",
         "status": "modified"
       },
@@ -237,6 +249,42 @@
         "status": "modified"
       },
       {
+        "blob_sha": "aba39f166541801b96d4b5d4b2b24e5e1c02ef72",
+        "path": "src/hunter/intelligence/engines/whale/engine.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "2bcf3d2d4bbe0dada139c46a6a9873f6391b7ac4",
+        "path": "src/hunter/market_validation/acquisition_sources.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "d5f7b84ed69ab4f9464454b3ef7c51191e2675ff",
+        "path": "src/hunter/onchain/adapters.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "e59b488d2aead3c316b2c0a83d9986ff83469d7a",
+        "path": "src/hunter/onchain/engine.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "3076a0951e510996a25afe0b30e68f5e513d98f2",
+        "path": "src/hunter/onchain/models.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "88d59b2e26a6f3151e03aca2bfb74e4736a81ec3",
+        "path": "src/hunter/onchain/repository.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "ae5ef28389c3a0340c4ea717cb35beae2a97e9e1",
         "path": "tests/test_automation.py",
         "previous_path": "",
@@ -247,18 +295,30 @@
         "path": "tests/test_global_discovery_candidate_registry.py",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "b9520cddfb39e41dd81f19e86947b5863118c297",
+        "path": "tests/test_onchain_capital_flow_acquisition.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "5e0ddc03dc2c7bdade01bf5494bb19621e1495de",
+        "path": "tests/test_whale_acquisition.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "2477a4c1e7e21cbd505ec946f176cfa8d4e7520cc25f11086030f4a3d795e5f5"
+    "review_target_digest": "7256603428a0009346fc7e4ba7fd12b18ff29e9485a3bf0a026bfca95e56403e"
   },
   "review_eligibility": {
     "mode": "pre_deployment",
     "pr_number": 788,
     "repository": "fafa33/Project-Hunter"
   },
-  "review_id": "e154cdf96c0bf1e4dc8bc3b7250bc7c441fa41e3df1bbf8692e9e5a0a347cc61",
+  "review_id": "f976d0024b9acaddec68f84e9457b13d260985f085a703fbe48a47c9df61c48b",
   "review_request": {
-    "claims_id": "e154cdf96c0bf1e4dc8bc3b7250bc7c441fa41e3df1bbf8692e9e5a0a347cc61",
+    "claims_id": "f976d0024b9acaddec68f84e9457b13d260985f085a703fbe48a47c9df61c48b",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

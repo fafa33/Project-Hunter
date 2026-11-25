@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
+from collections.abc import Callable
 from dataclasses import asdict
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from hunter.onchain.models import CapitalFlowRecord, CapitalFlowSnapshot, ProviderState, RawOnChainObservation
 
@@ -16,13 +19,17 @@ class OnChainRepository:
         self.root.mkdir(parents=True, exist_ok=True)
 
     def save_raw(self, rows: tuple[RawOnChainObservation, ...]) -> None:
-        self._upsert("raw_observations.jsonl", "evidence_id", (_payload(row) for row in rows))
+        self._upsert(
+            "raw_observations.jsonl",
+            lambda row: f"{row['project']}:{row['chain_id']}:{row['evidence_id']}",
+            (_payload(row) for row in rows),
+        )
 
     def save_flows(self, rows: tuple[CapitalFlowRecord, ...]) -> None:
-        self._upsert("capital_flows.jsonl", "flow_id", (_payload(row) for row in rows))
+        self._upsert("capital_flows.jsonl", lambda row: str(row["flow_id"]), (_payload(row) for row in rows))
 
     def save_snapshots(self, rows: tuple[CapitalFlowSnapshot, ...]) -> None:
-        self._upsert("snapshots.jsonl", "snapshot_id", (_payload(row) for row in rows))
+        self._upsert("snapshots.jsonl", lambda row: str(row["snapshot_id"]), (_payload(row) for row in rows))
 
     def save_provider_states(self, rows: tuple[ProviderState, ...]) -> None:
         payloads = []
@@ -30,12 +37,24 @@ class OnChainRepository:
             payload = _payload(row)
             payload["state_id"] = f"{row.chain_id}:{row.endpoint_identity}"
             payloads.append(payload)
-        self._upsert("provider_status.jsonl", "state_id", payloads)
+        self._upsert("provider_status.jsonl", lambda row: str(row["state_id"]), payloads)
+
+    def save_evidence_signatures(self, rows: tuple[dict[str, Any], ...]) -> None:
+        from hunter.automation.issue_agent_state import canonical_json
+
+        existing = {str(row["signature_id"]): row for row in self.evidence_signatures()}
+        for row in rows:
+            signature_id = str(row["signature_id"])
+            previous = existing.get(signature_id)
+            if previous is not None and canonical_json(previous) != canonical_json(row):
+                raise ValueError("conflicting capital-flow evidence signature")
+            existing[signature_id] = row
+        self._upsert("evidence_signatures.jsonl", lambda item: str(item["signature_id"]), tuple(existing.values()))
 
     def save_checkpoint(self, chain_id: int, project: str, block_number: int, block_hash: str) -> None:
         self._upsert(
             "checkpoints.jsonl",
-            "checkpoint_id",
+            lambda row: str(row["checkpoint_id"]),
             (
                 {
                     "checkpoint_id": f"{chain_id}:{project}",
@@ -63,15 +82,26 @@ class OnChainRepository:
     def checkpoints(self) -> tuple[dict[str, Any], ...]:
         return _read_jsonl(self.root / "checkpoints.jsonl")
 
-    def _upsert(self, name: str, key: str, rows: object) -> None:
+    def evidence_signatures(self) -> tuple[dict[str, Any], ...]:
+        return _read_jsonl(self.root / "evidence_signatures.jsonl")
+
+    def _upsert(self, name: str, key: Callable[[dict[str, Any]], str], rows: object) -> None:
         path = self.root / name
-        existing = {str(row[key]): row for row in _read_jsonl(path) if key in row}
+        existing = {key(row): row for row in _read_jsonl(path)}
         for row in rows:  # type: ignore[union-attr]
-            existing[str(row[key])] = row
-        with path.open("w", encoding="utf-8") as handle:
-            for row in sorted(existing.values(), key=lambda item: str(item[key])):
-                handle.write(json.dumps(row, sort_keys=True, default=_json_default))
-                handle.write("\n")
+            existing[key(row)] = row
+        temporary = path.with_name(f".{name}.{uuid4().hex}.tmp")
+        try:
+            with temporary.open("w", encoding="utf-8") as handle:
+                for row in sorted(existing.values(), key=key):
+                    handle.write(json.dumps(row, sort_keys=True, default=_json_default))
+                    handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
 
 
 def _payload(row: RawOnChainObservation | CapitalFlowRecord | CapitalFlowSnapshot | ProviderState) -> dict[str, Any]:

@@ -122,6 +122,14 @@ class RawOnChainObservation:
     normalized_amount: Decimal | None = None
     direction: str = "unknown"
     event_type: str = "unknown"
+    log_endpoint: str | None = None
+    receipt_endpoint: str | None = None
+    corroborating_endpoints: tuple[str, ...] = ()
+    receipt_validation_policy: str | None = None
+    receipt_verified_at: datetime | None = None
+    receipt_log_digest: str | None = None
+    log_topics: tuple[str, ...] = ()
+    log_data: str = ""
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "block_timestamp", self.block_timestamp.astimezone(UTC))

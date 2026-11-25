@@ -113,11 +113,44 @@ class EVMJsonRpcAdapter:
             raise EVMProviderUnavailable("eth_blockNumber returned invalid payload", failure_type="invalid_response")
         return max(int(latest, 16) - self.config.finality_depth, 0)
 
+    def finalized_block_number(self) -> int:
+        result = self._rpc("eth_getBlockByNumber", ("finalized", False))
+        if not isinstance(result, dict) or not isinstance(result.get("number"), str):
+            raise EVMProviderUnavailable("finalized block is unavailable", failure_type="invalid_response")
+        return int(str(result["number"]), 16)
+
     def block(self, number: int) -> dict[str, Any]:
         result = self._rpc("eth_getBlockByNumber", (hex(number), False))
         if not isinstance(result, dict):
             raise EVMProviderUnavailable("eth_getBlockByNumber returned no block", failure_type="invalid_response")
         return result
+
+    def transaction_receipt(self, tx: str) -> dict[str, Any]:
+        result = self._rpc("eth_getTransactionReceipt", (tx,))
+        if not isinstance(result, dict):
+            raise EVMProviderUnavailable("missing transaction receipt", failure_type="invalid_response")
+        return result
+
+    def corroborating_receipts(self, tx: str, *, exclude: tuple[str, ...]) -> tuple[tuple[str, dict[str, Any]], ...]:
+        results = []
+        seen = set(exclude)
+        for endpoint in self._ordered_endpoints():
+            name = endpoint_identity(endpoint)
+            if name in seen:
+                continue
+            seen.add(name)
+            cooldown = self._cooldown_until.get(endpoint)
+            if cooldown and cooldown > datetime.now(UTC):
+                continue
+            try:
+                if self._rpc_endpoint(endpoint, "eth_chainId", ()) != hex(self.config.chain_id):
+                    continue
+                receipt = self._rpc_endpoint(endpoint, "eth_getTransactionReceipt", (tx,))
+                if isinstance(receipt, dict):
+                    results.append((name, receipt))
+            except EVMProviderUnavailable:
+                continue
+        return tuple(results)
 
     def block_timestamp(self, number: int) -> datetime:
         block = self.block(number)
@@ -131,7 +164,7 @@ class EVMJsonRpcAdapter:
         return int(result, 16)
 
     def logs(
-        self, *, address: str | None, from_block: int, to_block: int, topics: tuple[str, ...]
+        self, *, address: str | None, from_block: int, to_block: int, topics: tuple[str | None, ...]
     ) -> tuple[dict[str, Any], ...]:
         if to_block - from_block > self.config.max_block_range:
             raise EVMProviderUnavailable(
@@ -264,18 +297,15 @@ class EVMJsonRpcAdapter:
         raise errors[-1] if errors else EVMProviderUnavailable("provider unavailable")
 
     def _ordered_endpoints(self) -> tuple[str, ...]:
-        endpoints = self.config.rpc_endpoints or (self.config.rpc_endpoint,)
-        if self._last_successful_provider in endpoints:
-            return (
-                self._last_successful_provider,
-                *(endpoint for endpoint in endpoints if endpoint != self._last_successful_provider),
-            )
-        return endpoints
+        return self.config.rpc_endpoints or (self.config.rpc_endpoint,)
 
 
 def endpoint_identity(endpoint: str) -> str:
-    parsed = urllib.parse.urlparse(endpoint)
-    return f"{parsed.scheme}://{parsed.netloc}"
+    value = endpoint.strip()
+    parsed = urllib.parse.urlparse(value if "://" in value else f"//{value}")
+    host = (parsed.hostname or value).lower()
+    port = parsed.port
+    return f"{host}:{port}" if port else host
 
 
 def _provider_state(

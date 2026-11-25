@@ -3,7 +3,8 @@ from __future__ import annotations
 from collections import defaultdict
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from hunter.acquisition.models import EvidenceValidation, NormalizedEvidence
 from hunter.acquisition.repositories import InMemoryAcquisitionRepository
@@ -15,11 +16,14 @@ from hunter.jsonl_contract import JsonlRecord
 from hunter.macro import MacroRepository, MacroSnapshot
 from hunter.market_validation.models import EngineValidationSource, Scalar
 from hunter.narrative.provider import NARRATIVE_ENGINES, NARRATIVE_METRIC
+from hunter.onchain.configuration import OnChainConfig
+from hunter.onchain.evidence import EvidenceTrust, verified_capital_flow_rows
+from hunter.onchain.repository import OnChainRepository
 from hunter.scenario import SCENARIO_ENGINES, ScenarioRepository
 from hunter.scenario.models import ScenarioImpact
 from hunter.timing.models import TimingAssessment
 from hunter.timing.repository import TIMING_JSONL_SCHEMA, TimingRepository, timing_assessment_from_payload
-from hunter.whale import WHALE_ENGINE_TARGETS, WhaleRepository, WhaleSnapshot
+from hunter.whale import WhaleRepository, WhaleSnapshot
 
 GRAPH_ENGINES: tuple[str, ...] = (
     "technology_necessity",
@@ -88,10 +92,13 @@ def acquisition_engine_sources(
     if hasattr(repository, "root"):
         timing_repository = TimingRepository()
         macro_sources = _macro_engine_sources(as_of=as_of)
-        whale_sources = _whale_engine_sources(as_of=as_of)
+        capital_rows = OnChainRepository().raw()
         for project_id in evidence_by_project:
             sources[project_id].extend(macro_sources)
-            sources[project_id].extend(whale_sources)
+            sources[project_id].extend(_whale_engine_sources(as_of=as_of, project_id=project_id))
+            contextual = _capital_whale_context(project_id, capital_rows, as_of=as_of)
+            if contextual is not None:
+                sources[project_id].append(contextual)
         for project_id, graph_sources in _graph_engine_sources(as_of=as_of).items():
             sources[project_id].extend(graph_sources)
         for project_id, economic_sources in _economic_graph_engine_sources(as_of=as_of).items():
@@ -159,11 +166,85 @@ def _macro_score(engine: str, snapshot: MacroSnapshot) -> float:
     )
 
 
-def _whale_engine_sources(*, as_of: datetime | None) -> tuple[EngineValidationSource, ...]:
+def _whale_engine_sources(
+    *, as_of: datetime | None, project_id: str | None = None
+) -> tuple[EngineValidationSource, ...]:
+    # Aggregate derivatives evidence is market context, not project wallet attribution.
+    # Until an authoritative project-wallet mapping exists, do not score it as whale evidence.
     snapshot = WhaleRepository().latest_snapshot()
-    if snapshot is None or not snapshot.evidence:
+    cutoff = as_of or datetime.now(UTC)
+    if snapshot is None or not snapshot.evidence or not cutoff - timedelta(hours=24) <= snapshot.generated_at <= cutoff:
         return ()
-    return tuple(_whale_source(engine, snapshot, snapshot.generated_at) for engine in WHALE_ENGINE_TARGETS)
+    if any(
+        item.validation_status != "VALID"
+        or not cutoff - timedelta(hours=24) <= item.metric.timestamp <= cutoff
+        or item.metric.retrieval_time > cutoff
+        for item in snapshot.evidence
+    ):
+        return ()
+    # Preserve market context for explainability without contributing a project score.
+    return (
+        EngineValidationSource(
+            engine="whale_intelligence",
+            score=0.0,
+            confidence=0.0,
+            timestamp=snapshot.generated_at,
+            freshness=snapshot.freshness,
+            source_record_ids=tuple(
+                f"{item.metric.provider}:{item.metric.asset}:{item.metric.name}" for item in snapshot.evidence
+            ),
+            evidence_ids=tuple(item.evidence_id for item in snapshot.evidence),
+            repository_ids=tuple(item.repository_id for item in snapshot.evidence),
+            source="whale-market-context",
+            collector="whale-repository",
+            validation_status="PARTIAL",
+            status="UNAVAILABLE",
+            missing_fields=("project_wallet_attribution",),
+            warnings=("market_context_not_project_whale_signal",),
+            raw_input_metrics=dict(snapshot.raw_metrics),
+        ),
+    )
+
+
+def _capital_whale_context(
+    project_id: str,
+    rows: tuple[dict[str, object], ...],
+    *,
+    as_of: datetime | None,
+    config: OnChainConfig | None = None,
+    repository: Any | None = None,
+    trust: EvidenceTrust | None = None,
+) -> EngineValidationSource | None:
+    cutoff = as_of or datetime.now(UTC)
+    verified = verified_capital_flow_rows(
+        project_id,
+        rows,
+        config=config,
+        repository=repository,
+        trust=trust,
+        as_of=cutoff,
+    )
+    accepted = {row.evidence_id: row.block_timestamp for row in verified}
+    if not accepted:
+        return None
+    ids = tuple(sorted(accepted))
+    return EngineValidationSource(
+        engine="whale_intelligence",
+        score=0.0,
+        confidence=0.0,
+        timestamp=max(accepted.values()),
+        freshness=0.0,
+        source_record_ids=ids,
+        evidence_ids=ids,
+        repository_ids=ids,
+        source="capital-flow-context",
+        collector="onchain-repository",
+        validation_status="PARTIAL",
+        status="UNAVAILABLE",
+        missing_fields=("wallet_attribution", "economic_value", "trade_direction"),
+        warnings=("unattributed_transfer_not_whale_signal",),
+        raw_input_metrics={"context_transfer_count": len(ids)},
+    )
 
 
 def _whale_source(engine: str, snapshot: WhaleSnapshot, timestamp: datetime) -> EngineValidationSource:

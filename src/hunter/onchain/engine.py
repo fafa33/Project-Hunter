@@ -1,12 +1,24 @@
 from __future__ import annotations
 
+import re
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from hunter.execution.identity import identity
 from hunter.market_validation.configuration import load_market_validation_config
 from hunter.onchain.adapters import EVMJsonRpcAdapter, EVMProviderUnavailable
 from hunter.onchain.configuration import OnChainConfig, load_onchain_config
+from hunter.onchain.evidence import (
+    CORROBORATION_POLICY,
+    TRANSFER_TOPIC,
+    CapitalFlowEvidenceError,
+    configured_signing_key,
+    receipt_log_digest,
+    sign_observation,
+)
 from hunter.onchain.models import (
     CapitalFlowRecord,
     CapitalFlowSnapshot,
@@ -17,7 +29,6 @@ from hunter.onchain.models import (
 from hunter.onchain.registry import SurfaceRegistry
 from hunter.onchain.repository import OnChainRepository
 
-TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
 
 
@@ -27,8 +38,12 @@ class CapitalFlowEngine:
         config: OnChainConfig | None = None,
         repository: OnChainRepository | None = None,
         adapters: dict[int, EVMJsonRpcAdapter] | None = None,
+        evidence_signing_key: Ed25519PrivateKey | None = None,
     ) -> None:
         self.config = config or load_onchain_config()
+        self.evidence_signing_key = (
+            evidence_signing_key if evidence_signing_key is not None else configured_signing_key()
+        )
         self.repository = repository or OnChainRepository(
             str(self.config.retention.get("runtime_root", "data/onchain/runtime"))
         )
@@ -63,20 +78,44 @@ class CapitalFlowEngine:
                     self.repository.save_snapshots((snapshot,))
                     snapshots.append(snapshot)
                     continue
-                end_block = adapter.latest_finalized_block()
+                end_block = adapter.finalized_block_number()
                 block = adapter.block(end_block)
                 block_hash = str(block.get("hash", ""))
                 end_timestamp = adapter.block_timestamp(end_block)
                 start_block = max(0, end_block - self._block_window(surface.chain_id, "24h"))
-                observations = self._observations(surface, adapter, start_block, end_block, block_hash, end_timestamp)
+                observations, signatures, acquisition_unavailable = self._observations(
+                    surface, adapter, start_block, end_block, block_hash, end_timestamp
+                )
             except EVMProviderUnavailable:
                 snapshot = _unavailable_snapshot(surface, "provider_unavailable", ("live_provider",))
                 self.repository.save_snapshots((snapshot,))
                 snapshots.append(snapshot)
                 continue
-            flows = normalize_flows(observations, (surface,))
+            flows = normalize_flows(
+                observations,
+                tuple(
+                    s
+                    for s in self.config.surfaces
+                    if s.active and s.project == surface.project and s.chain_id == surface.chain_id
+                ),
+            )
             snapshot = snapshot_from_flows(surface, "24h", start_block, end_block, flows, observations, end_timestamp)
+            # Bounded tracked-token evidence is not complete economic coverage.
+            snapshot = replace(
+                snapshot,
+                status="partial",
+                completeness=0.0,
+                unavailable_fields=tuple(
+                    set(snapshot.unavailable_fields)
+                    | {"complete_transfer_coverage", "aggregate_economic_flow"}
+                    | set(acquisition_unavailable)
+                ),
+                gross_inflow=Decimal(0),
+                gross_outflow=Decimal(0),
+                net_external_flow=Decimal(0),
+            )
             self.repository.save_raw(observations)
+            self.repository.save_evidence_signatures(signatures)
             self.repository.save_flows(flows)
             self.repository.save_snapshots((snapshot,))
             self.repository.save_checkpoint(surface.chain_id, surface.project, end_block, block_hash)
@@ -134,14 +173,8 @@ class CapitalFlowEngine:
         end_block: int,
         block_hash: str,
         end_timestamp: datetime,
-    ) -> tuple[RawOnChainObservation, ...]:
+    ) -> tuple[tuple[RawOnChainObservation, ...], tuple[dict[str, object], ...], tuple[str, ...]]:
         raw_balance = adapter.native_balance(surface.address, end_block)
-        try:
-            adapter.logs(address=surface.address, from_block=start_block, to_block=end_block, topics=(TRANSFER_TOPIC,))
-        except EVMProviderUnavailable:
-            # Public RPCs often restrict eth_getLogs. Preserve the finalized balance observation
-            # and leave transfer-derived capital classification unavailable.
-            pass
         rows = [
             RawOnChainObservation(
                 project=surface.project,
@@ -152,7 +185,7 @@ class CapitalFlowEngine:
                 block_hash=block_hash,
                 block_timestamp=end_timestamp,
                 observed_address=surface.address,
-                acquisition_timestamp=datetime.now(tz=UTC),
+                acquisition_timestamp=end_timestamp,
                 finality_status="finalized",
                 source_reference=surface.source_url,
                 evidence_id=identity(
@@ -166,7 +199,125 @@ class CapitalFlowEngine:
                 event_type="native_balance",
             )
         ]
-        return tuple(rows)
+        if self.evidence_signing_key is None:
+            return tuple(rows), (), ("evidence_signing_key",)
+        signatures: list[dict[str, object]] = []
+        unavailable: set[str] = set()
+        address_topic = "0x" + surface.address.lower()[2:].zfill(64)
+        seen: set[str] = set()
+        for asset in self.config.tracked_assets:
+            if asset.chain_id != surface.chain_id or not asset.contract_address:
+                continue
+            for topics in ((TRANSFER_TOPIC, address_topic), (TRANSFER_TOPIC, None, address_topic)):
+                try:
+                    logs = adapter.logs(
+                        address=asset.contract_address, from_block=start_block, to_block=end_block, topics=topics
+                    )
+                    log_endpoint = adapter.endpoint_identity
+                    for log in logs:
+                        try:
+                            topics_raw = [str(item).lower() for item in log["topics"]]
+                            if (
+                                len(topics_raw) != 3
+                                or topics_raw[0] != TRANSFER_TOPIC
+                                or log.get("removed")
+                                or str(log["address"]).lower() != asset.contract_address.lower()
+                            ):
+                                continue
+                            if any(
+                                len(t) != 66 or not t.startswith("0x") or t[2:26] != "0" * 24 for t in topics_raw[1:]
+                            ):
+                                continue
+                            sender, recipient = ("0x" + t[-40:] for t in topics_raw[1:])
+                            if surface.address.lower() not in (sender, recipient):
+                                continue
+                            number = int(str(log["blockNumber"]), 16)
+                            index = int(str(log["logIndex"]), 16)
+                            tx = str(log["transactionHash"]).lower()
+                            data = str(log["data"]).lower()
+                            block_hash_value = str(log["blockHash"]).lower()
+                            if (
+                                not start_block <= number <= end_block
+                                or index < 0
+                                or re.fullmatch(r"0x[0-9a-f]{64}", tx) is None
+                                or re.fullmatch(r"0x[0-9a-f]{64}", data) is None
+                                or re.fullmatch(r"0x[0-9a-f]{64}", block_hash_value) is None
+                            ):
+                                continue
+                            int(tx, 16)
+                            int(sender, 16)
+                            int(recipient, 16)
+                            amount = int(data, 16)
+                            evidence_id = evm_log_evidence_id(surface.chain_id, tx, index)
+                            if evidence_id in seen:
+                                continue
+                            block = adapter.block(number)
+                            if str(block.get("hash", "")).lower() != block_hash_value:
+                                continue
+                            receipt = adapter.transaction_receipt(tx)
+                            if not receipt_matches_log(receipt, {**log, "topics": topics_raw, "data": data}):
+                                continue
+                            receipt_endpoint = adapter.endpoint_identity
+                            corroborations = adapter.corroborating_receipts(
+                                tx, exclude=(log_endpoint, receipt_endpoint)
+                            )
+                            if not corroborations or not all(
+                                receipt_matches_log(other, {**log, "topics": topics_raw, "data": data})
+                                for _, other in corroborations
+                            ):
+                                continue
+                            timestamp = datetime.fromtimestamp(int(str(block["timestamp"]), 16), tz=UTC)
+                            incoming = recipient == surface.address.lower()
+                            row = RawOnChainObservation(
+                                project=surface.project,
+                                chain_id=surface.chain_id,
+                                provider=adapter.provider,
+                                endpoint_identity=adapter.endpoint_identity,
+                                block_number=number,
+                                block_hash=block_hash_value,
+                                block_timestamp=timestamp,
+                                observed_address=surface.address,
+                                acquisition_timestamp=timestamp,
+                                finality_status="finalized",
+                                source_reference=surface.source_url,
+                                evidence_id=evidence_id,
+                                transaction_hash=tx,
+                                log_index=index,
+                                counterparty_address=sender if incoming else recipient,
+                                asset_contract=asset.contract_address.lower(),
+                                asset_symbol=asset.symbol,
+                                raw_amount=str(amount),
+                                decimals=asset.decimals,
+                                normalized_amount=_amount(amount, asset.decimals),
+                                direction="in" if incoming else "out",
+                                event_type="erc20_transfer",
+                                log_endpoint=log_endpoint,
+                                receipt_endpoint=receipt_endpoint,
+                                corroborating_endpoints=tuple(sorted(name for name, _ in corroborations)),
+                                receipt_validation_policy=CORROBORATION_POLICY,
+                                receipt_verified_at=timestamp,
+                                log_topics=tuple(topics_raw),
+                                log_data=data,
+                            )
+                            row = replace(row, receipt_log_digest=receipt_log_digest(row))
+                            signed = sign_observation(row, surface, self.evidence_signing_key)
+                            rows.append(row)
+                            signatures.append(signed)
+                            seen.add(evidence_id)
+                        except (
+                            KeyError,
+                            TypeError,
+                            ValueError,
+                            AttributeError,
+                            OverflowError,
+                            CapitalFlowEvidenceError,
+                        ):
+                            unavailable.add("transfer_evidence_signing_failed")
+                            continue
+                except EVMProviderUnavailable:
+                    unavailable.add("transfer_corroboration_unavailable")
+                    continue
+        return tuple(rows), tuple(signatures), tuple(sorted(unavailable))
 
     def _block_window(self, chain_id: int, window: str) -> int:
         chain = next((item for item in self.config.chains if item.chain_id == chain_id), None)
@@ -300,6 +451,35 @@ def _sum(flows: tuple[CapitalFlowRecord, ...], categories: tuple[str, ...]) -> D
 
 def _amount(raw: int, decimals: int) -> Decimal:
     return Decimal(raw) / (Decimal(10) ** Decimal(decimals))
+
+
+def receipt_matches_log(receipt: dict[str, object], log: dict[str, object]) -> bool:
+    keys = ("address", "topics", "data", "transactionHash", "logIndex", "blockNumber", "blockHash")
+    entries = receipt.get("logs")
+    return (
+        str(receipt.get("status", "")).lower() == "0x1"
+        and all(
+            _receipt_value(receipt.get(key)) == _receipt_value(log.get(key))
+            for key in ("transactionHash", "blockNumber", "blockHash")
+        )
+        and isinstance(entries, list)
+        and any(
+            isinstance(entry, dict)
+            and not entry.get("removed")
+            and all(
+                key in entry and key in log and _receipt_value(entry[key]) == _receipt_value(log[key]) for key in keys
+            )
+            for entry in entries
+        )
+    )
+
+
+def _receipt_value(value: object) -> object:
+    if isinstance(value, list):
+        return tuple(_receipt_value(item) for item in value)
+    if isinstance(value, str) and value.startswith("0x"):
+        return value.lower()
+    return value
 
 
 def evm_log_evidence_id(chain_id: int, transaction_hash: str, log_index: int) -> str:

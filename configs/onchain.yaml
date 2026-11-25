@@ -6,12 +6,11 @@ chains:
     network: ethereum
     family: evm
     enabled: true
-    rpc_endpoint: https://ethereum.publicnode.com
+    rpc_endpoint: https://eth.drpc.org
     rpc_endpoints:
-      - https://ethereum.publicnode.com
+      - https://eth.drpc.org
       - https://rpc.flashbots.net
-      - https://eth.llamarpc.com
-      - https://rpc.ankr.com/eth
+      - https://rpc.mevblocker.io
     rpc_env: HUNTER_ETHEREUM_RPC_URL
     explorer_url: https://etherscan.io
     native_asset: ETH
