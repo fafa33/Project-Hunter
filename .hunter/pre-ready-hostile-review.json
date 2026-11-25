@@ -3,25 +3,25 @@
     "acceptance_criteria": [
       {
         "criterion": "Free-provider capacity is inventoried with explicit provenance and observed consumption is persisted without paid API use.",
-        "evidence": "The staged changes add no paid API or billing path. Historical USD valuation consumes only repository-declared persisted historical evidence, and the shared discovery ScanBudget still reaches DexScreener, CoinGecko and GeckoTerminal helpers. Hosted observation for the new exact head remains pending.",
+        "evidence": "No paid API path was added; historical USD valuation reads repository-declared persisted evidence and discovery helpers remain budget-metered.",
         "id": "AC-587-01",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Global discovery uses bounded, resumable free capacity and truthful DexScreener batching without a parallel daemon.",
-        "evidence": "The durable mode-specific enrichment cursor, case-sensitive identifiers, post-persistence cursor advancement and shared request meter remain intact. Automation now fails closed before the scheduler loop when discovery jobs are partially configured, including a missing identity job; no parallel daemon is introduced.",
+        "evidence": "Cursor, case fidelity and shared budget guards remain; automation now fails closed on a partial discovery job set.",
         "id": "AC-587-02",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
-        "evidence": "Global network coverage still derives from the persisted catalogue, and replay rejects malformed/post-cutoff rows. Historical USD context now requires an exact chain/contract mapping, an at-or-before price point, a freshness ceiling, exact Decimal arithmetic and source provenance, while canonical valuation, wallet attribution and wallet performance remain explicitly unavailable.",
+        "evidence": "Coverage denominator and replay guards remain; historical USD is causal, exact, provenance-bound and never canonical valuation or wallet inference.",
         "id": "AC-587-03",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "This judgement is regenerated for the staged candidate tree against base a4a9b9e173bb15afaed2c162bda9708e93eb2411. Focused regressions and Ruff, Black, Mypy and diff checks pass on the staged content; PR #788 remains Draft and no reviewer authority, hosted proof, Ready state or merge is asserted.",
+        "evidence": "Fresh judgement for staged candidate content; scoped tests, Ruff, Black and full Mypy pass; PR #788 remains Draft and no authority or merge is asserted.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -57,157 +57,157 @@
     "base_sha": "a4a9b9e173bb15afaed2c162bda9708e93eb2411",
     "defect_families": [
       {
-        "evidence": "Canonical signature verification and trusted-time regressions remain in force; no admission time authority was loosened.",
+        "evidence": "Trusted temporal authority unchanged.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Atomic raw/signature persistence, unchanged-pair preservation and conflicting-signature fail-closed behavior remain pinned.",
+        "evidence": "Atomic signed-pair persistence unchanged.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Signed evidence still binds project, chain, surface, evidence ID, transaction log fields and canonical values.",
+        "evidence": "Signed evidence binding unchanged.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Trust-document schema, signing domain, key ID and signer allowlist checks are unchanged.",
+        "evidence": "Trust-document authority unchanged.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Raw observations and signatures remain persisted through one repository operation with conflict fail-closed behavior.",
+        "evidence": "Conflict fail-closed persistence unchanged.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "DexScreener enrichment cursor rotation, case fidelity and post-persistence advancement remain in force.",
+        "evidence": "Discovery cursor guards unchanged.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "No authorization path changed; only the writer regenerates this request from fresh judgement.",
+        "evidence": "Authorization paths unchanged.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "The finalizer recomputes exact content claims; this judgement carries no reviewer authority.",
+        "evidence": "No reviewer authority in writer judgement.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Existing writer path and owner signing configuration are unchanged; no connector provenance claim is added.",
+        "evidence": "Connector provenance unchanged.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Configured owner name and signing key path are unchanged; the final commit uses the approved signed writer channel.",
+        "evidence": "Signed writer path unchanged.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "The candidate remains one local remediation layer on the existing branch; no remote rewrite is assumed.",
+        "evidence": "Single branch remediation unchanged.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "This request is regenerated from the staged candidate tree; no prior head-bound request is reused.",
+        "evidence": "Request regenerated from staged tree.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "This is a local writer request only; PR #788 stays Draft and independent hosted review remains outstanding.",
+        "evidence": "Draft PR and pending review preserved.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "No hosted publisher, merge-readiness controller or reviewer authority changed.",
+        "evidence": "Hosted publisher and readiness paths unchanged.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "PRH-142 through PRH-151 and DFF-062 through DFF-069 are recorded, and new families compile into SPM engineering.implement context for their changed paths.",
+        "evidence": "PRH-142 through PRH-151 and DFF-062 through DFF-069 compiled into SPM context.",
         "family": "DFF-015",
         "outcome": "repaired"
       },
       {
-        "evidence": "No merge-readiness or reviewer-pool change; no authority adoption or merge claim.",
+        "evidence": "Reviewer pool unchanged.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused tests and guards are diagnostic only; no hosted proof or push claim is embedded in this request.",
+        "evidence": "Local checks are diagnostic only.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Canonical review and defect registry paths are retained; no new governance asset path is invented.",
+        "evidence": "Governed artifact paths retained.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Current regressions add identity-handoff, causal USD, freshness and non-inference boundaries without hosted proof claims.",
+        "evidence": "New identity/USD fail-closed regressions added.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "DEFECT_REGISTRY.json records PRH-150/151 and DFF-068/069; tests/test_engineering_context_authority.py proves the new families reach compiled SPM context.",
+        "evidence": "PRH-150/151 and DFF-068/069 compiled into SPM context.",
         "family": "DFF-045",
         "outcome": "repaired"
       },
       {
-        "evidence": "Bounded RPC execution family remains recorded; no new live RPC run and no reuse of old-head E2E as candidate proof.",
+        "evidence": "No new live RPC run or old E2E reuse.",
         "family": "DFF-059",
         "outcome": "clear"
       },
       {
-        "evidence": "Inclusive block-range guards remain intact.",
+        "evidence": "Inclusive block-range guards unchanged.",
         "family": "DFF-060",
         "outcome": "clear"
       },
       {
-        "evidence": "Distinct trusted acquisition and verification timestamps remain signed.",
+        "evidence": "Trusted provenance timestamps unchanged.",
         "family": "DFF-061",
         "outcome": "clear"
       },
       {
-        "evidence": "Atomic raw/signature persistence and unchanged-pair preservation remain pinned by focused regressions.",
+        "evidence": "Immutable signed-pair guards unchanged.",
         "family": "DFF-062",
         "outcome": "clear"
       },
       {
-        "evidence": "Per-surface finalized height binding remains pinned.",
+        "evidence": "Per-surface finality guards unchanged.",
         "family": "DFF-063",
         "outcome": "clear"
       },
       {
-        "evidence": "Durable cursor rotation, case fidelity, persistence ordering and shared request budget remain pinned.",
+        "evidence": "Shared budget and cursor guards unchanged.",
         "family": "DFF-064",
         "outcome": "clear"
       },
       {
-        "evidence": "Catalogue-derived coverage denominator remains pinned.",
+        "evidence": "Catalogue-derived coverage guards unchanged.",
         "family": "DFF-065",
         "outcome": "clear"
       },
       {
-        "evidence": "Defensive conversion and strictly pre-cutoff replay remain pinned.",
+        "evidence": "Strict replay guards unchanged.",
         "family": "DFF-066",
         "outcome": "clear"
       },
       {
-        "evidence": "Exact amount normalization remains pinned.",
+        "evidence": "Exact amount normalization unchanged.",
         "family": "DFF-067",
         "outcome": "clear"
       },
       {
-        "evidence": "require_discovery_automation fails closed before scheduler.run_loop for a partial discovery job set, including a missing identity job; the regression is pinned in tests/test_discovery_identity_handoff.py.",
+        "evidence": "Partial discovery automation fails closed before scheduler loop.",
         "family": "DFF-068",
         "outcome": "repaired"
       },
       {
-        "evidence": "HistoricalUsdValuator uses exact chain/contract mapping, at-or-before availability, freshness, exact Decimal arithmetic and source provenance; market-validation metrics never represent canonical valuation, wallet attribution or wallet performance.",
+        "evidence": "Historical USD valuation is causal, exact, fresh, provenance-bound and non-inferential.",
         "family": "DFF-069",
         "outcome": "repaired"
       }
@@ -396,7 +396,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "787fe4989f2ed0abe40903b482a21a5b7bb71af7",
+        "blob_sha": "d3f883f48f3cacf2edc41b5f8f1e57d0f84c20ab",
         "path": "tests/test_historical_acquisition.py",
         "previous_path": "",
         "status": "modified"
@@ -426,16 +426,16 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "e39e749401e39a2e1730a0d2c34bd00c5acc42adc6ac4e859b67ad12681d1e43"
+    "review_target_digest": "4a2c15185d8f317e07ee0d69be59d6c8e98c7afce5ae7f9b3fa214ba0032a534"
   },
   "review_eligibility": {
     "mode": "pre_deployment",
     "pr_number": 788,
     "repository": "fafa33/Project-Hunter"
   },
-  "review_id": "d44096a4c6591d88d67724387e73769d939d2541d56f94925fcaeefd833eb626",
+  "review_id": "0626053474e06f43b865a6185d9631c892d58e43e1a1593af8fa6729df59fe99",
   "review_request": {
-    "claims_id": "d44096a4c6591d88d67724387e73769d939d2541d56f94925fcaeefd833eb626",
+    "claims_id": "0626053474e06f43b865a6185d9631c892d58e43e1a1593af8fa6729df59fe99",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

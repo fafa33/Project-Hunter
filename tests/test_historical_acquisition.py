@@ -265,7 +265,9 @@ def test_closest_market_point_never_selects_a_future_point() -> None:
     later = datetime(2026, 11, 25, 10, 0, tzinfo=UTC)
     points = {earlier: {"price": 0.9995440023519918}, later: {"price": 0.9995318372782404}}
 
-    selected_at, values = _closest_market_point(points, datetime(2026, 11, 25, 9, 41, tzinfo=UTC))
+    selected = _closest_market_point(points, datetime(2026, 11, 25, 9, 41, tzinfo=UTC))
+    assert selected is not None
+    selected_at, values = selected
 
     assert selected_at == earlier
     assert values["price"] == 0.9995440023519918
