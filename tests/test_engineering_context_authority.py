@@ -524,3 +524,27 @@ def test_onchain_range_and_provenance_families_reach_spm_context() -> None:
     assert "inclusive" in str(range_family.get("invariant", ""))
     assert "acquisition_timestamp" in str(provenance_family.get("invariant", ""))
     assert "receipt_verified_at" in str(provenance_family.get("invariant", ""))
+
+
+def test_issue_587_review_remediation_families_reach_spm_context() -> None:
+    context = EngineeringContextAuthority().compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        scope=_scope(
+            "src/hunter/onchain/",
+            "src/hunter/discovery/",
+            "tests/test_onchain_capital_flow_acquisition.py",
+            "tests/test_global_discovery_candidate_registry.py",
+        ),
+        budget_bytes=1_000_000,
+    )
+    families = cast(list[dict[str, object]], context["applicable_defect_families"])
+    by_id = {str(item.get("id")): item for item in families}
+
+    for family_id in ("DFF-062", "DFF-063", "DFF-064", "DFF-065", "DFF-066", "DFF-067"):
+        assert family_id in by_id
+    assert "signature" in str(by_id["DFF-062"].get("invariant", "")).lower()
+    assert "finalized" in str(by_id["DFF-063"].get("invariant", "")).lower()
+    assert "cursor" in str(by_id["DFF-064"].get("invariant", "")).lower()
+    assert "catalogue" in str(by_id["DFF-065"].get("invariant", "")).lower()
+    assert "replay" in str(by_id["DFF-066"].get("invariant", "")).lower()
+    assert "precision" in str(by_id["DFF-067"].get("invariant", "")).lower()

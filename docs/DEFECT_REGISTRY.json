@@ -1272,6 +1272,86 @@
       "guard": "Inject a Clock into CapitalFlowEngine, sample acquisition_timestamp after native/log acquisition and receipt_verified_at only after successful independent receipt corroboration, keep block_timestamp bound to chain history, and sign/reverify both sampled values. Regression coverage pins distinct deterministic timestamps and rejects tampering with either signed field.",
       "test": "tests/test_onchain_capital_flow_acquisition.py::test_engine_records_distinct_acquisition_and_verification_timestamps; tests/test_onchain_capital_flow_acquisition.py::test_capital_flow_evidence_hostile_cases; tests/test_engineering_context_authority.py::test_onchain_range_and_provenance_families_reach_spm_context",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-142",
+      "class": "signed-evidence-pair-mutated-by-repeated-acquisition",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: repeated sync with an advancing clock re-signed an unchanged transfer under the same signature ID after save_raw had already overwritten the raw observation.",
+      "classification": "systemic",
+      "guard_boundary": "onchain acquisition write boundary before any raw or signature persistence",
+      "guard": "Resolve and verify the complete signature set before writing raw observations; preserve acquisition_timestamp, receipt_verified_at, raw payload, and signature for an unchanged signed observation, and persist both stores through one repository operation that checks every signature conflict before any write.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_repeated_sync_preserves_immutable_signed_pair_with_advancing_clock; tests/test_onchain_capital_flow_acquisition.py::test_repository_conflicting_signature_never_overwrites_raw_observation",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-143",
+      "class": "requested-finalized-height-leaked-across-chain-surfaces",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: engine.sync mutated its requested end_block to the first surface's finalized height and reused that value for later surfaces.",
+      "classification": "systemic",
+      "guard_boundary": "per-surface onchain block selection and snapshot binding",
+      "guard": "Never mutate the caller's requested end_block. Select each surface's finalized height into a local value and bind that exact value to its window, observations, snapshot, and checkpoint.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_sync_keeps_each_chain_on_its_own_finalized_height",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-144",
+      "class": "discovery-enrichment-cursor-not-persisted",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: DexScreener backfill restarted from the same sorted contract identifiers, so bounded runs and empty-result cohorts never advanced.",
+      "classification": "systemic",
+      "guard_boundary": "discovery enrichment checkpoint boundary across process restarts",
+      "guard": "Persist a mode-specific identifier cursor, rotate through sorted contract identifiers with wrap-around, preserve case-sensitive identifier values verbatim, and advance only after processed assets have been persisted.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_cursor_rotates_past_empty_results_and_survives_restarts; tests/test_global_discovery_candidate_registry.py::test_dexscreener_processed_assets_preserve_case_sensitive_identifiers; tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_cursor_is_not_advanced_when_candidate_persistence_fails",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-145",
+      "class": "discovery-helper-requests-bypass-shared-scan-budget",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: sync_provider constructed a ScanBudget but DexScreener token-pairs and CoinGecko/GeckoTerminal corroboration helpers issued unbounded requests.",
+      "classification": "systemic",
+      "guard_boundary": "discovery provider request meter shared by discovery and all helper lookups",
+      "guard": "Pass the constructed ScanBudget through discover and every helper, meter all DexScreener, CoinGecko, and GeckoTerminal requests, and preserve accumulated rows when the shared budget is exhausted.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_dexscreener_sync_provider_shares_one_scan_budget_across_helpers",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-146",
+      "class": "coverage-denominator-from-current-scan-page",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: global_coverage used the network IDs on the current GeckoTerminal scan page as its catalogue denominator.",
+      "classification": "systemic",
+      "guard_boundary": "global coverage denominator derived from persisted network catalogue",
+      "guard": "Count catalogued_networks from persisted network_observations, count scanned_networks from persisted pool observations, and compute coverage as their intersection divided by the persisted catalogue size.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_global_network_coverage_uses_persisted_catalogue_not_current_page",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-147",
+      "class": "evidence-conversion-error-escapes-per-row-rejection",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: verified_capital_flow_rows called as_observation before the guarded verification block, so a malformed chain_id raised instead of rejecting that row.",
+      "classification": "systemic",
+      "guard_boundary": "per-row evidence admission before surface resolution and signature verification",
+      "guard": "Include observation conversion and preserved-row comparison inside per-row guards, reject malformed rows individually without allowing an invalid duplicate to evict a valid accepted observation with the same evidence ID, and never abort repeated acquisition on corrupt stored evidence.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_verified_rows_reject_malformed_context_rows_individually; tests/test_onchain_capital_flow_acquisition.py::test_corrupt_stored_amount_is_rejected_without_aborting_signed_row_preservation",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-148",
+      "class": "post-cutoff-provenance-admitted-by-replay",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: replay accepted acquisition and receipt-verification timestamps up to FUTURE_TOLERANCE after as_of, allowing knowledge acquired after the cutoff to influence a historical verdict.",
+      "classification": "systemic",
+      "guard_boundary": "replay cutoff for acquisition and receipt-verification provenance",
+      "guard": "Require acquisition_timestamp <= as_of and receipt_verified_at <= as_of; keep chain-timestamp skew tolerance only for block_timestamp and its derived chain-history consistency checks.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_capital_flow_evidence_hostile_cases",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-149",
+      "class": "acquired-amount-rounded-by-precision-context",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: _amount divided raw integers under the default Decimal precision, so acquisition could normalize a value that exact validation later rejected.",
+      "classification": "systemic",
+      "guard_boundary": "onchain amount normalization before signed evidence construction",
+      "guard": "Normalize with a local Decimal precision derived from the raw digit count plus token decimals, using exact scaling, so high-precision zero-decimal and other large values survive without rounding.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_engine_acquires_high_precision_zero_decimal_amount_without_rounding",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -3157,6 +3237,169 @@
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #587 / PR #788 independent review at head 4d9e0a1fb351bd28655db3d97c2ff76dca833305: CapitalFlowEngine._observations set both acquisition_timestamp and receipt_verified_at to the historical block timestamp."
+      ]
+    },
+    {
+      "id": "DFF-062",
+      "title": "signed-observation-pair-is-immutable-across-reacquisition",
+      "invariant": "An unchanged signed on-chain observation must keep its original raw payload, acquisition_timestamp, receipt_verified_at, and signature across repeated acquisition, and a conflicting signature for an existing signature ID must fail before any raw observation is overwritten.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/repository.py",
+          "src/hunter/onchain/evidence.py",
+          "tests/test_onchain_capital_flow_acquisition.py"
+        ],
+        "rationale": "These paths acquire raw observations, persist raw rows and signatures, and verify canonical evidence. Advancing runtime clocks must not re-sign immutable evidence, and a write-before-verify order can silently replace the raw payload behind an existing signature ID."
+      },
+      "prevention": {
+        "mechanism": "Resolve and verify all signatures before raw persistence, detect an unchanged observation by stable signed fields, preserve its original timestamps, and persist the raw/signature pair through one repository operation that fails closed on conflict.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/repository.py::OnChainRepository::save_acquired_evidence"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_capital_flow_acquisition.py::test_repeated_sync_preserves_immutable_signed_pair_with_advancing_clock",
+        "tests/test_onchain_capital_flow_acquisition.py::test_repository_conflicting_signature_never_overwrites_raw_observation",
+        "tests/test_engineering_context_authority.py::test_issue_587_review_remediation_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: repeated sync re-signed an unchanged transfer with advancing acquisition and verification timestamps after save_raw had already overwritten the raw row."
+      ]
+    },
+    {
+      "id": "DFF-063",
+      "title": "finalized-block-selection-is-per-surface",
+      "invariant": "A caller's requested end block is immutable, and each active on-chain surface binds its own finalized height to its log window, observation, snapshot, and checkpoint.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/adapters.py",
+          "tests/test_onchain_capital_flow_acquisition.py"
+        ],
+        "rationale": "These paths select finalized heights and construct per-surface acquisition windows. Mutating the shared requested height leaks one chain's finality to later chains and produces snapshots that do not describe the blocks they claim."
+      },
+      "prevention": {
+        "mechanism": "Select each surface's finalized height into a local variable, validate it against that surface's adapter, and use it consistently for start/end blocks, snapshots, and checkpoints without assigning back to the caller's requested end_block.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/engine.py::CapitalFlowEngine::sync"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_capital_flow_acquisition.py::test_sync_keeps_each_chain_on_its_own_finalized_height",
+        "tests/test_engineering_context_authority.py::test_issue_587_review_remediation_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: engine.sync mutated end_block to the first chain's finalized height and reused it for a second chain."
+      ]
+    },
+    {
+      "id": "DFF-064",
+      "title": "bounded-discovery-must-advance-and-share-its-request-budget",
+      "invariant": "Bounded discovery enrichment must persist a mode-specific cursor across restarts, preserve case-sensitive contract identifiers verbatim, rotate through identifiers including empty-result cohorts, advance only after processed assets are persisted, and meter every helper request against the same ScanBudget used by primary discovery.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/discovery/engine.py",
+          "src/hunter/discovery/providers.py",
+          "src/hunter/discovery/repository.py",
+          "tests/test_global_discovery_candidate_registry.py"
+        ],
+        "rationale": "These paths schedule enrichment, issue DexScreener/CoinGecko/GeckoTerminal requests, and persist discovery checkpoints. Restarting from the same identifiers defeats bounded backfill, and helper requests outside the budget defeat the request cap."
+      },
+      "prevention": {
+        "mechanism": "Persist the last processed identifier with wrap-around, preserve non-EVM identifier case, advance only after processed assets are persisted, pass the constructed ScanBudget through every helper, catch budget exhaustion without discarding accumulated rows, and regress cursor rotation, case fidelity, persistence ordering, and the shared request count.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/engine.py::CandidateDiscoveryEngine::enrich_dex_contracts"
+      },
+      "regression_evidence": [
+        "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_cursor_rotates_past_empty_results_and_survives_restarts",
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_processed_assets_preserve_case_sensitive_identifiers",
+        "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_cursor_is_not_advanced_when_candidate_persistence_fails",
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_sync_provider_shares_one_scan_budget_across_helpers",
+        "tests/test_engineering_context_authority.py::test_issue_587_review_remediation_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: enrichment restarted from the same first identifiers and token-pairs/corroboration helpers bypassed the constructed scan budget."
+      ]
+    },
+    {
+      "id": "DFF-065",
+      "title": "coverage-denominator-must-come-from-persisted-catalogue",
+      "invariant": "Global network coverage must use the persisted network catalogue as its denominator and persisted pool observations as scanned coverage, never the network IDs present on one current scan page.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/discovery/engine.py",
+          "src/hunter/discovery/repository.py",
+          "tests/test_global_discovery_candidate_registry.py"
+        ],
+        "rationale": "These paths persist catalogues/pools and compute reported coverage. A current-page denominator can make one scanned network appear to be the whole catalogue and inflate coverage."
+      },
+      "prevention": {
+        "mechanism": "Read catalogued_networks from repository.network_observations, read scanned networks from repository.pool_observations, compute their intersection divided by the catalogue size, and keep coverage unmeasured only when no catalogue is persisted.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/engine.py::CandidateDiscoveryEngine::global_coverage"
+      },
+      "regression_evidence": [
+        "tests/test_global_discovery_candidate_registry.py::test_global_network_coverage_uses_persisted_catalogue_not_current_page",
+        "tests/test_engineering_context_authority.py::test_issue_587_review_remediation_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: global_coverage used scan_state network_ids from the current page instead of the persisted network catalogue."
+      ]
+    },
+    {
+      "id": "DFF-066",
+      "title": "replay-evidence-is-defensive-and-strictly-pre-cutoff",
+      "invariant": "Historical replay must convert each evidence row defensively, reject malformed rows individually without evicting valid rows, and admit a signed row only when its acquisition and receipt-verification timestamps are at or before the replay cutoff.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/evidence.py",
+          "tests/test_onchain_capital_flow_acquisition.py"
+        ],
+        "rationale": "These paths convert, verify, compare, and replay signed evidence. Unhandled conversion errors can abort a whole replay or repeated acquisition, and tolerance applied to post-cutoff provenance admits knowledge that did not exist at the decision time."
+      },
+      "prevention": {
+        "mechanism": "Include conversion in the per-row verification guard and preserved-row comparison, reject only the malformed row, reserve conflict-based rejection for verified duplicate evidence IDs, require acquisition_timestamp <= as_of and receipt_verified_at <= as_of, and limit chain-skew tolerance to block_timestamp.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/evidence.py::verified_capital_flow_rows"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_capital_flow_acquisition.py::test_verified_rows_reject_malformed_context_rows_individually",
+        "tests/test_onchain_capital_flow_acquisition.py::test_corrupt_stored_amount_is_rejected_without_aborting_signed_row_preservation",
+        "tests/test_onchain_capital_flow_acquisition.py::test_capital_flow_evidence_hostile_cases",
+        "tests/test_engineering_context_authority.py::test_issue_587_review_remediation_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: as_observation ran outside the row guard and post-cutoff acquisition/receipt timestamps were admitted by FUTURE_TOLERANCE."
+      ]
+    },
+    {
+      "id": "DFF-067",
+      "title": "acquired-amount-normalization-is-exact",
+      "invariant": "Signed on-chain amount normalization must preserve the exact raw integer scaled by token decimals even when the digit count exceeds the ambient Decimal context precision.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "tests/test_onchain_capital_flow_acquisition.py"
+        ],
+        "rationale": "These paths turn raw transfer amounts into the signed normalized_amount field. Default Decimal precision can round acquisition while exact validation later rejects the same value, creating internally inconsistent evidence."
+      },
+      "prevention": {
+        "mechanism": "Use a local Decimal context with precision derived from the raw digit count plus decimals plus headroom and exact scaling, then regress high-precision and zero-decimal values through the engine acquisition path.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/engine.py::_amount"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_capital_flow_acquisition.py::test_engine_acquires_high_precision_zero_decimal_amount_without_rounding",
+        "tests/test_engineering_context_authority.py::test_issue_587_review_remediation_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: _amount used Decimal(raw)/(10**decimals) under 28-digit precision and rounded a high-precision zero-decimal amount that exact validation rejected."
       ]
     }
   ]

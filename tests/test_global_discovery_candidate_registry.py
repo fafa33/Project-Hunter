@@ -1317,6 +1317,7 @@ def test_dexscreener_tokens_v1_batches_thirty_contract_addresses(monkeypatch) ->
     assert all(path.startswith("/tokens/v1/ethereum/") or path.startswith("/tokens/v1/solana/") for path in paths)
     assert result.assets == 33
     assert result.processed == 33
+    assert result.processed_assets == assets
     assert result.batches == 3
     assert result.truncated is False
     assert len(result.candidates) == 33
@@ -1356,6 +1357,24 @@ def test_dexscreener_batch_truncation_is_reported_instead_of_silently_dropping_a
     assert result.batches == 1
     assert result.truncated is True
     assert result.candidates == ()
+
+
+def test_dexscreener_processed_assets_preserve_case_sensitive_identifiers(monkeypatch) -> None:
+    def fake_get(
+        source: DexScreenerDiscoveryProvider,
+        path: str,
+        *,
+        meter: Any = None,
+        dedup_key: str | None = None,
+        batch_size: int | None = None,
+    ) -> object:
+        return []
+
+    monkeypatch.setattr(DexScreenerDiscoveryProvider, "_get", fake_get)
+    assets = (("solana", "TokenOne"), ("solana", "TokenTwo"))
+    result = DexScreenerDiscoveryProvider(backoff_seconds=0).enrich_contracts(assets)
+
+    assert result.processed_assets == assets
 
 
 def test_dexscreener_backfill_disables_batch_deduplication(monkeypatch) -> None:
@@ -1810,3 +1829,199 @@ def test_incremental_automation_command_has_no_explicit_limit() -> None:
 
     assert OPERATION_COMMANDS["discovery_market_run"] == ("discovery", "run")
     assert "--limit" in OPERATION_COMMANDS["discovery_market_run_backfill"]
+
+
+def test_dexscreener_sync_provider_shares_one_scan_budget_across_helpers(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+    addresses = tuple(f"0x{index:040x}" for index in range(1, 4))
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        path = urllib.parse.urlparse(request.full_url).path
+        calls.append(path)
+        if path == "/token-profiles/latest/v1":
+            return _JsonResponse(
+                [
+                    {"chainId": "eth", "tokenAddress": address, "url": f"https://dexscreener.com/eth/{address}"}
+                    for address in addresses
+                ]
+            )
+        if path.startswith("/token-pairs/v1/"):
+            address = path.rsplit("/", 1)[-1]
+            return _JsonResponse(
+                [
+                    {
+                        "chainId": "eth",
+                        "pairAddress": f"pair-{address}",
+                        "baseToken": {"address": address, "name": "Token", "symbol": "TKN"},
+                        "liquidity": {"usd": 1000},
+                        "volume": {"h24": 25},
+                    }
+                ]
+            )
+        return _JsonResponse([])
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    path = str(tmp_path / "candidates.sqlite")
+    repository = CandidateRegistryRepository(path)
+    config = DiscoveryConfig(
+        registry_path=path,
+        providers={
+            "dexscreener": DiscoveryProviderConfig(
+                enabled=True, limit=250, max_requests_per_cycle=2, min_interval_seconds=0.0
+            )
+        },
+    )
+    provider = DexScreenerDiscoveryProvider(backoff_seconds=0)
+    engine = CandidateDiscoveryEngine(repository, config, providers={"dexscreener": provider})
+
+    run = engine.sync(provider="dexscreener")
+
+    assert len(calls) == 2
+    assert run.candidates_seen == len(addresses)
+    assert run.status == "succeeded"
+
+
+def test_dex_enrichment_cursor_rotates_past_empty_results_and_survives_restarts(tmp_path, monkeypatch) -> None:
+    path = str(tmp_path / "candidates.sqlite")
+    repository = CandidateRegistryRepository(path)
+    addresses = tuple(f"0x{index:040x}" for index in range(1, 6))
+    candidates = tuple(
+        DiscoveredCandidate(
+            provider="geckoterminal",
+            provider_id=f"eth_{address}",
+            slug=f"eth-{address}",
+            name=f"Token {index}",
+            symbol=f"T{index}",
+            primary_chain="eth",
+            candidate_type="token",
+            metadata={"chain": "eth", "contract_address": address},
+        )
+        for index, address in enumerate(addresses, 1)
+    )
+    engine = CandidateDiscoveryEngine(
+        repository,
+        DiscoveryConfig(registry_path=path, providers={}),
+        providers={
+            "geckoterminal": StaticDiscoveryProvider("geckoterminal", candidates),
+            "dexscreener": DexScreenerDiscoveryProvider(),
+        },
+    )
+    engine.sync(provider="geckoterminal", limit=10)
+    selected: list[tuple[tuple[str, str], ...]] = []
+
+    def fake_enrich(
+        self: DexScreenerDiscoveryProvider,
+        assets: tuple[tuple[str, str], ...] | list[tuple[str, str]],
+        *,
+        budget: ScanBudget | None = None,
+        max_batch_size: int = 30,
+        dedup: bool = True,
+    ) -> DexEnrichmentResult:
+        batch = tuple(assets)
+        selected.append(batch)
+        return DexEnrichmentResult((), len(batch), len(batch), 1, False, batch)
+
+    monkeypatch.setattr(DexScreenerDiscoveryProvider, "enrich_contracts", fake_enrich)
+
+    first = engine.enrich_dex_contracts(mode="backfill", limit=2)
+    restarted = CandidateDiscoveryEngine(
+        repository,
+        DiscoveryConfig(registry_path=path, providers={}),
+        providers={"dexscreener": DexScreenerDiscoveryProvider()},
+    )
+    restarted.enrich_dex_contracts(mode="backfill", limit=2)
+    restarted.enrich_dex_contracts(mode="backfill", limit=2)
+
+    assert first.status == "succeeded"
+    assert selected == [
+        (("eth", addresses[0]), ("eth", addresses[1])),
+        (("eth", addresses[2]), ("eth", addresses[3])),
+        (("eth", addresses[4]), ("eth", addresses[0])),
+    ]
+    assert repository.identifier_cursor("dexscreener-enrichment-backfill") == ("contract:eth", addresses[0])
+
+
+def test_dex_enrichment_cursor_is_not_advanced_when_candidate_persistence_fails(tmp_path, monkeypatch) -> None:
+    path = str(tmp_path / "candidates.sqlite")
+    repository = CandidateRegistryRepository(path)
+    addresses = tuple(f"0x{index:040x}" for index in range(1, 4))
+    candidates = tuple(
+        DiscoveredCandidate(
+            provider="geckoterminal",
+            provider_id=f"eth_{address}",
+            slug=f"eth-{address}",
+            name=f"Token {index}",
+            symbol=f"T{index}",
+            primary_chain="eth",
+            candidate_type="token",
+            metadata={"chain": "eth", "contract_address": address},
+        )
+        for index, address in enumerate(addresses, 1)
+    )
+    engine = CandidateDiscoveryEngine(
+        repository,
+        DiscoveryConfig(registry_path=path, providers={}),
+        providers={
+            "geckoterminal": StaticDiscoveryProvider("geckoterminal", candidates),
+            "dexscreener": DexScreenerDiscoveryProvider(),
+        },
+    )
+    engine.sync(provider="geckoterminal", limit=10)
+
+    def fake_enrich(
+        self: DexScreenerDiscoveryProvider,
+        assets: tuple[tuple[str, str], ...] | list[tuple[str, str]],
+        *,
+        budget: ScanBudget | None = None,
+        max_batch_size: int = 30,
+        dedup: bool = True,
+    ) -> DexEnrichmentResult:
+        batch = tuple(assets)
+        return DexEnrichmentResult((), len(batch), len(batch), 1, False, batch)
+
+    def fail_upsert(candidates: object) -> tuple[int, int]:
+        raise RuntimeError("candidate persistence unavailable")
+
+    monkeypatch.setattr(DexScreenerDiscoveryProvider, "enrich_contracts", fake_enrich)
+    monkeypatch.setattr(repository, "upsert_many", fail_upsert)
+
+    with pytest.raises(RuntimeError, match="candidate persistence unavailable"):
+        engine.enrich_dex_contracts(mode="backfill", limit=2)
+
+    assert repository.identifier_cursor("dexscreener-enrichment-backfill") is None
+
+
+def test_global_network_coverage_uses_persisted_catalogue_not_current_page(tmp_path) -> None:
+    path = str(tmp_path / "candidates.sqlite")
+    repository = CandidateRegistryRepository(path)
+    observed_at = datetime.now(tz=UTC).isoformat()
+    repository.save_network_observations(
+        tuple(
+            {
+                "network_id": network,
+                "name": network,
+                "source_url": "https://example.invalid",
+                "observed_at": observed_at,
+            }
+            for network in ("eth", "base", "solana")
+        )
+    )
+    repository.save_pool_observations(
+        (
+            {
+                "network": "eth",
+                "pool_address": "0xpool",
+                "contract_addresses": ("0xtoken",),
+                "source_url": "https://example.invalid/pool",
+                "observed_at": observed_at,
+            },
+        )
+    )
+    repository.save_scan_state("geckoterminal", {"network_ids": ["eth"]}, "succeeded")
+    engine = CandidateDiscoveryEngine(repository, DiscoveryConfig(registry_path=path, providers={}), providers={})
+
+    coverage = cast(dict[str, Any], engine.global_coverage()["networks"])
+
+    assert coverage["catalogued_networks"] == 3
+    assert coverage["scanned_networks"] == 1
+    assert coverage["coverage"] == 0.333333

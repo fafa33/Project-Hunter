@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, localcontext
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -16,9 +17,12 @@ from hunter.onchain.evidence import (
     CORROBORATION_POLICY,
     TRANSFER_TOPIC,
     CapitalFlowEvidenceError,
+    as_observation,
     configured_signing_key,
+    observation_comparison_value,
     receipt_log_digest,
     sign_observation,
+    signature_id,
 )
 from hunter.onchain.models import (
     CapitalFlowRecord,
@@ -85,13 +89,12 @@ class CapitalFlowEngine:
                 selected_end_block = finalized_block if end_block is None else end_block
                 if selected_end_block < 0 or selected_end_block > finalized_block:
                     raise EVMProviderUnavailable("requested block is not finalized")
-                end_block = selected_end_block
-                block = adapter.block(end_block)
+                block = adapter.block(selected_end_block)
                 block_hash = str(block.get("hash", ""))
-                end_timestamp = adapter.block_timestamp(end_block)
-                start_block = max(0, end_block - self._block_window(surface.chain_id, "24h") + 1)
+                end_timestamp = adapter.block_timestamp(selected_end_block)
+                start_block = max(0, selected_end_block - self._block_window(surface.chain_id, "24h") + 1)
                 observations, signatures, acquisition_unavailable = self._observations(
-                    surface, adapter, start_block, end_block, block_hash, end_timestamp
+                    surface, adapter, start_block, selected_end_block, block_hash, end_timestamp
                 )
             except EVMProviderUnavailable:
                 snapshot = _unavailable_snapshot(surface, "provider_unavailable", ("live_provider",))
@@ -106,7 +109,9 @@ class CapitalFlowEngine:
                     if s.active and s.project == surface.project and s.chain_id == surface.chain_id
                 ),
             )
-            snapshot = snapshot_from_flows(surface, "24h", start_block, end_block, flows, observations, end_timestamp)
+            snapshot = snapshot_from_flows(
+                surface, "24h", start_block, selected_end_block, flows, observations, end_timestamp
+            )
             # Bounded tracked-token evidence is not complete economic coverage.
             snapshot = replace(
                 snapshot,
@@ -121,11 +126,10 @@ class CapitalFlowEngine:
                 gross_outflow=Decimal(0),
                 net_external_flow=Decimal(0),
             )
-            self.repository.save_raw(observations)
-            self.repository.save_evidence_signatures(signatures)
+            self.repository.save_acquired_evidence(observations, signatures)
             self.repository.save_flows(flows)
             self.repository.save_snapshots((snapshot,))
-            self.repository.save_checkpoint(surface.chain_id, surface.project, end_block, block_hash)
+            self.repository.save_checkpoint(surface.chain_id, surface.project, selected_end_block, block_hash)
             snapshots.append(snapshot)
         return tuple(snapshots)
 
@@ -181,6 +185,10 @@ class CapitalFlowEngine:
         block_hash: str,
         end_timestamp: datetime,
     ) -> tuple[tuple[RawOnChainObservation, ...], tuple[dict[str, object], ...], tuple[str, ...]]:
+        existing_rows = {
+            f"{row.get('project')}:{row.get('chain_id')}:{row.get('evidence_id')}": row for row in self.repository.raw()
+        }
+        existing_signatures = {str(row["signature_id"]): row for row in self.repository.evidence_signatures()}
         raw_balance = adapter.native_balance(surface.address, end_block)
         native_acquired_at = self.clock.now().astimezone(UTC)
         rows = [
@@ -310,6 +318,12 @@ class CapitalFlowEngine:
                                 log_data=data,
                             )
                             row = replace(row, receipt_log_digest=receipt_log_digest(row))
+                            existing = existing_rows.get(f"{row.project}:{row.chain_id}:{row.evidence_id}")
+                            if existing is not None and signature_id(row) in existing_signatures:
+                                preserved = _preserved_signed_row(row, existing)
+                                if preserved is not None:
+                                    row = preserved
+                                    verified_at = row.receipt_verified_at or verified_at
                             signed = sign_observation(
                                 row, surface, self.evidence_signing_key, verification_timestamp=verified_at
                             )
@@ -462,7 +476,36 @@ def _sum(flows: tuple[CapitalFlowRecord, ...], categories: tuple[str, ...]) -> D
 
 
 def _amount(raw: int, decimals: int) -> Decimal:
-    return Decimal(raw) / (Decimal(10) ** Decimal(decimals))
+    with localcontext() as context:
+        context.prec = max(len(str(raw)) + decimals + 1, 28)
+        return Decimal(raw).scaleb(-decimals)
+
+
+def _preserved_signed_row(row: RawOnChainObservation, existing: Mapping[str, object]) -> RawOnChainObservation | None:
+    try:
+        previous = as_observation(existing)
+    except (
+        AttributeError,
+        CapitalFlowEvidenceError,
+        InvalidOperation,
+        KeyError,
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
+        return None
+    current_value = dict(observation_comparison_value(row))
+    previous_value = dict(observation_comparison_value(previous))
+    for value in (current_value, previous_value):
+        value.pop("acquisition_timestamp", None)
+        value.pop("receipt_verified_at", None)
+    if current_value != previous_value:
+        return None
+    return replace(
+        row,
+        acquisition_timestamp=previous.acquisition_timestamp,
+        receipt_verified_at=previous.receipt_verified_at,
+    )
 
 
 def receipt_matches_log(receipt: dict[str, object], log: dict[str, object]) -> bool:

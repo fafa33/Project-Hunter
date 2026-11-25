@@ -6,7 +6,7 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, localcontext
+from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from typing import Any
 
@@ -291,25 +291,31 @@ def verified_capital_flow_rows(
     accepted: dict[str, RawOnChainObservation] = {}
     rejected: set[str] = set()
     for row in relevant:
-        candidate = as_observation(row)
-        surface = next(
-            (
-                item
-                for item in resolved_config.surfaces
-                if item.active
-                and item.project == project
-                and item.chain_id == candidate.chain_id
-                and item.address.lower() == candidate.observed_address.lower()
-            ),
-            None,
-        )
-        if surface is None:
-            rejected.add(candidate.evidence_id)
-            continue
         try:
+            candidate = as_observation(row)
+            surface = next(
+                (
+                    item
+                    for item in resolved_config.surfaces
+                    if item.active
+                    and item.project == project
+                    and item.chain_id == candidate.chain_id
+                    and item.address.lower() == candidate.observed_address.lower()
+                ),
+                None,
+            )
+            if surface is None:
+                continue
             verified = verify_observation(candidate, signatures, surface, resolved_trust, as_of=cutoff)
-        except (CapitalFlowEvidenceError, ValueError, TypeError):
-            rejected.add(candidate.evidence_id)
+        except (
+            CapitalFlowEvidenceError,
+            ValueError,
+            TypeError,
+            KeyError,
+            AttributeError,
+            OverflowError,
+            InvalidOperation,
+        ):
             continue
         if candidate.evidence_id in accepted and canonical_json(
             _comparison_value(accepted[candidate.evidence_id])
@@ -442,8 +448,8 @@ def _validate_observation(row: RawOnChainObservation, surface: Any, as_of: datet
     latest = max(row.acquisition_timestamp, row.receipt_verified_at, as_of)
     if (
         row.block_timestamp > as_of + FUTURE_TOLERANCE
-        or row.acquisition_timestamp > as_of + FUTURE_TOLERANCE
-        or row.receipt_verified_at > as_of + FUTURE_TOLERANCE
+        or row.acquisition_timestamp > as_of
+        or row.receipt_verified_at > as_of
         or row.receipt_verified_at < row.block_timestamp - FUTURE_TOLERANCE
         or row.acquisition_timestamp < row.block_timestamp - FUTURE_TOLERANCE
         or latest - row.block_timestamp > MAX_EVIDENCE_AGE
@@ -478,6 +484,10 @@ def _comparison_value(row: RawOnChainObservation) -> dict[str, Any]:
         "receipt_log_digest": row.receipt_log_digest,
         "receipt_verified_at": _instant(row.receipt_verified_at) if row.receipt_verified_at else None,
     }
+
+
+def observation_comparison_value(row: RawOnChainObservation | Mapping[str, Any]) -> dict[str, Any]:
+    return _comparison_value(row)
 
 
 def _datetime(value: object) -> datetime:

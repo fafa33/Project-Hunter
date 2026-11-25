@@ -794,6 +794,24 @@ class CandidateRegistryRepository:
             return None
         return state if isinstance(state, dict) else None
 
+    def identifier_cursor(self, provider: str) -> tuple[str, str] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT cursor FROM checkpoints WHERE provider = ?", (provider,)).fetchone()
+        value = str(row["cursor"]) if row else ""
+        if not value.startswith("identifier:"):
+            return None
+        try:
+            parsed = json.loads(value[len("identifier:") :])
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, list) and len(parsed) == 2 and all(isinstance(item, str) for item in parsed):
+            return str(parsed[0]), str(parsed[1])
+        return None
+
+    def save_identifier_cursor(self, provider: str, namespace: str, value: str) -> None:
+        cursor = "identifier:" + json.dumps([namespace, value], sort_keys=True, separators=(",", ":"))
+        self.save_checkpoint(provider, cursor, "cursor")
+
     def save_universe_assets(self, provider: str, asset_ids: tuple[str, ...] | list[str], observed_at: str) -> None:
         with self._connect() as conn:
             conn.execute("BEGIN")

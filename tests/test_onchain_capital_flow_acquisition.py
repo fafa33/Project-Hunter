@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
@@ -17,6 +17,7 @@ from hunter.onchain.configuration import OnChainConfig
 from hunter.onchain.engine import (
     TRANSFER_TOPIC,
     CapitalFlowEngine,
+    _preserved_signed_row,
     evm_log_evidence_id,
     normalize_flows,
     snapshot_from_flows,
@@ -783,6 +784,7 @@ def test_hostile_rpc_corroboration(tmp_path, mode, expected) -> None:
         "tampered_row",
         "tampered_acquisition_timestamp",
         "tampered_verification_timestamp",
+        "post_cutoff_provenance",
     ],
 )
 def test_capital_flow_evidence_hostile_cases(tmp_path, case) -> None:
@@ -875,6 +877,11 @@ def test_capital_flow_evidence_hostile_cases(tmp_path, case) -> None:
     elif case == "tampered_verification_timestamp":
         row = replace(base, receipt_verified_at=NOW + timedelta(minutes=1))
         signatures = (signature,)
+    elif case == "post_cutoff_provenance":
+        late = NOW + timedelta(minutes=4)
+        row = replace(base, acquisition_timestamp=late, receipt_verified_at=late)
+        signature = sign_observation(row, surface(), key, verification_timestamp=late)
+        signatures = (signature,)
 
     repo = OnChainRepository(tmp_path / "verification")
     repo.save_raw((row,))
@@ -904,6 +911,209 @@ def test_capital_flow_evidence_preserves_high_precision_zero_decimal_amount(tmp_
     accepted = verified_capital_flow_rows("aave", (row,), config=cfg, repository=repo, trust=trust, as_of=NOW)
 
     assert [item.evidence_id for item in accepted] == [row.evidence_id]
+
+
+def test_repeated_sync_preserves_immutable_signed_pair_with_advancing_clock(tmp_path, monkeypatch) -> None:
+    key, _key_path, trust_path, trust = signing_material(tmp_path)
+    monkeypatch.setenv(TRUST_FILE_ENV, str(trust_path))
+
+    class TransferTransport(StaticTransport):
+        def rpc(self, method: str, params: tuple[object, ...]) -> object:
+            if method == "eth_getTransactionReceipt":
+                logs = self.rpc("eth_getLogs", ())
+                assert isinstance(logs, list)
+                return {**logs[0], "status": "0x1", "logs": logs}
+            if method == "eth_getLogs":
+                return [
+                    {
+                        "address": PROJECT_TOKEN,
+                        "topics": [
+                            TRANSFER_TOPIC,
+                            "0x" + COUNTERPARTY[2:].zfill(64),
+                            "0x" + SURFACE_ADDRESS[2:].zfill(64),
+                        ],
+                        "data": "0x" + format(2500000, "064x"),
+                        "transactionHash": "0x" + "ab" * 32,
+                        "logIndex": "0x7",
+                        "blockNumber": "0x384",
+                        "blockHash": "0x" + "ef" * 32,
+                    }
+                ]
+            return super().rpc(method, params)
+
+    later_acquired = ACQUIRED_AT + timedelta(minutes=10)
+    later_verified = VERIFIED_AT + timedelta(minutes=10)
+    cfg = replace(config(), tracked_assets=(AssetConfig(1, "TEST", "stablecoin", 6, PROJECT_TOKEN),))
+    repo = OnChainRepository(tmp_path / "runtime")
+    engine = CapitalFlowEngine(
+        cfg,
+        repository=repo,
+        evidence_signing_key=key,
+        clock=SequenceClock(
+            ACQUIRED_AT,
+            ACQUIRED_AT,
+            VERIFIED_AT,
+            ACQUIRED_AT,
+            later_acquired,
+            later_acquired,
+            later_verified,
+            later_acquired,
+        ),
+        adapters={
+            1: EVMJsonRpcAdapter(
+                replace(
+                    chain(),
+                    rpc_endpoints=("https://first.example", "https://second.example", "https://third.example"),
+                ),
+                transport_factory=lambda _: TransferTransport(),
+            )
+        },
+    )
+
+    first = engine.sync()
+    first_raw = next(row for row in repo.raw() if row["event_type"] == "erc20_transfer")
+    first_signature = repo.evidence_signatures()[0]
+    second = engine.sync()
+
+    second_raw = next(row for row in repo.raw() if row["event_type"] == "erc20_transfer")
+    assert len(repo.raw()) == 2
+    assert len(repo.evidence_signatures()) == 1
+    assert second_raw == first_raw
+    assert repo.evidence_signatures()[0] == first_signature
+    assert first_raw["acquisition_timestamp"].startswith(ACQUIRED_AT.isoformat())
+    assert first_raw["receipt_verified_at"].startswith(VERIFIED_AT.isoformat())
+    assert first[0].evidence_ids == second[0].evidence_ids
+    assert verified_capital_flow_rows(
+        "aave", repo.raw(), config=cfg, repository=repo, trust=trust, as_of=later_verified + timedelta(minutes=1)
+    )
+
+
+def test_corrupt_stored_amount_is_rejected_without_aborting_signed_row_preservation(tmp_path) -> None:
+    row, _signed, cfg, repo, trust, _key_path, _trust_path = signed_transfer(tmp_path)
+    stored = dict(repo.raw()[0])
+    stored["normalized_amount"] = "not-a-decimal"
+
+    assert _preserved_signed_row(row, stored) is None
+    assert verified_capital_flow_rows("aave", (stored,), config=cfg, repository=repo, trust=trust, as_of=NOW) == ()
+
+
+def test_sync_keeps_each_chain_on_its_own_finalized_height(tmp_path) -> None:
+    class HeightTransport(StaticTransport):
+        def __init__(self, finalized: int, chain_id: int = 1) -> None:
+            super().__init__()
+            self.finalized = finalized
+            self.chain_id = chain_id
+
+        def rpc(self, method: str, params: tuple[object, ...]) -> object:
+            if method == "eth_chainId":
+                return hex(self.chain_id)
+            if method == "eth_getBlockByNumber" and params and params[0] == "finalized":
+                return {
+                    "number": hex(self.finalized),
+                    "hash": "0x" + "ef" * 32,
+                    "timestamp": hex(int(NOW.timestamp())),
+                }
+            return super().rpc(method, params)
+
+    first_chain = chain(chain_id=1)
+    second_chain = replace(chain(chain_id=137), network="polygon")
+    surfaces = (surface(), surface(project="uniswap", address=OTHER_SURFACE, chain_id=137))
+    engine = CapitalFlowEngine(
+        config(*surfaces, chains=(first_chain, second_chain)),
+        repository=OnChainRepository(tmp_path),
+        adapters={
+            1: EVMJsonRpcAdapter(first_chain, transport=HeightTransport(900)),
+            137: EVMJsonRpcAdapter(second_chain, transport=HeightTransport(500, chain_id=137)),
+        },
+    )
+
+    snapshots = engine.sync()
+
+    assert [snapshot.end_block for snapshot in snapshots] == [900, 500]
+    assert [snapshot.chain_id for snapshot in snapshots] == [1, 137]
+
+
+def test_repository_conflicting_signature_never_overwrites_raw_observation(tmp_path) -> None:
+    key = Ed25519PrivateKey.generate()
+    signed_root = tmp_path / "signed"
+    signed_root.mkdir()
+    base, base_signature, _cfg, repo, _trust, _, _ = signed_transfer(signed_root, key=key)
+    altered = replace(base, raw_amount="9999999")
+    altered_signature = sign_observation(altered, surface(), key, verification_timestamp=NOW)
+
+    with pytest.raises(ValueError, match="conflicting capital-flow evidence signature"):
+        repo.save_acquired_evidence((altered,), (altered_signature,))
+
+    assert repo.raw()[0]["raw_amount"] == base.raw_amount
+    assert repo.evidence_signatures() == (base_signature,)
+
+
+def test_verified_rows_reject_malformed_context_rows_individually(tmp_path) -> None:
+    base, _signed, cfg, repo, trust, _, _ = signed_transfer(tmp_path, key=Ed25519PrivateKey.generate())
+    malformed = {**asdict(base), "chain_id": "not-a-number"}
+
+    accepted = verified_capital_flow_rows(
+        "aave", (base, malformed), config=cfg, repository=repo, trust=trust, as_of=NOW
+    )
+
+    assert [row.evidence_id for row in accepted] == [base.evidence_id]
+
+
+def test_engine_acquires_high_precision_zero_decimal_amount_without_rounding(tmp_path, monkeypatch) -> None:
+    key, _key_path, trust_path, trust = signing_material(tmp_path)
+    monkeypatch.setenv(TRUST_FILE_ENV, str(trust_path))
+    raw_amount = "1234567890123456789012345678901234567890"
+
+    class TransferTransport(StaticTransport):
+        def rpc(self, method: str, params: tuple[object, ...]) -> object:
+            if method == "eth_getTransactionReceipt":
+                logs = self.rpc("eth_getLogs", ())
+                assert isinstance(logs, list)
+                return {**logs[0], "status": "0x1", "logs": logs}
+            if method == "eth_getLogs":
+                return [
+                    {
+                        "address": PROJECT_TOKEN,
+                        "topics": [
+                            TRANSFER_TOPIC,
+                            "0x" + COUNTERPARTY[2:].zfill(64),
+                            "0x" + SURFACE_ADDRESS[2:].zfill(64),
+                        ],
+                        "data": "0x" + format(int(raw_amount), "064x"),
+                        "transactionHash": "0x" + "ab" * 32,
+                        "logIndex": "0x7",
+                        "blockNumber": "0x384",
+                        "blockHash": "0x" + "ef" * 32,
+                    }
+                ]
+            return super().rpc(method, params)
+
+    cfg = replace(config(), tracked_assets=(AssetConfig(1, "TEST", "stablecoin", 0, PROJECT_TOKEN),))
+    repo = OnChainRepository(tmp_path / "runtime")
+    engine = CapitalFlowEngine(
+        cfg,
+        repository=repo,
+        evidence_signing_key=key,
+        clock=SequenceClock(ACQUIRED_AT, ACQUIRED_AT, ACQUIRED_AT, VERIFIED_AT),
+        adapters={
+            1: EVMJsonRpcAdapter(
+                replace(
+                    chain(),
+                    rpc_endpoints=("https://first.example", "https://second.example", "https://third.example"),
+                ),
+                transport_factory=lambda _: TransferTransport(),
+            )
+        },
+    )
+
+    engine.sync()
+    transfer = next(row for row in repo.raw() if row["event_type"] == "erc20_transfer")
+
+    assert Decimal(str(transfer["normalized_amount"])) == Decimal(raw_amount)
+    accepted = verified_capital_flow_rows(
+        "aave", repo.raw(), config=cfg, repository=repo, trust=trust, as_of=VERIFIED_AT + timedelta(minutes=1)
+    )
+    assert [row.evidence_id for row in accepted] == [transfer["evidence_id"]]
 
 
 def test_evidence_trust_rejects_wrong_schema(tmp_path) -> None:

@@ -189,6 +189,8 @@ class CandidateDiscoveryEngine:
                     cursor=self.repository.discovery_page_cursor(provider),
                     budget=scan_budget,
                 )
+            elif isinstance(source, DexScreenerDiscoveryProvider):
+                raw_candidates = source.discover(limit=budget, budget=scan_budget)
             else:
                 raw_candidates = source.discover(limit=budget)
         except ProviderUnavailableError as exc:
@@ -283,20 +285,29 @@ class CandidateDiscoveryEngine:
             return run
 
         groups = self.repository.identifier_groups()
+        contract_identifiers = sorted(
+            (namespace, value)
+            for (namespace, value), _candidate_ids in groups.items()
+            if namespace.startswith("contract:")
+        )
+        cursor_key = f"dexscreener-enrichment-{selected_mode}"
+        cursor = self.repository.identifier_cursor(cursor_key)
+        if cursor is not None and cursor in contract_identifiers:
+            index = contract_identifiers.index(cursor)
+            ordered_identifiers = contract_identifiers[index + 1 :] + contract_identifiers[: index + 1]
+        else:
+            ordered_identifiers = contract_identifiers
         assets: list[tuple[str, str]] = []
-        for (namespace, value), candidate_ids in sorted(groups.items()):
-            if not namespace.startswith("contract:"):
-                continue
-            chain = namespace.split(":", 1)[1]
+        for identifier in ordered_identifiers:
+            namespace, value = identifier
+            candidate_ids = groups[identifier]
             if selected_mode == "incremental" and any(
                 self._has_current_market_measure(candidate_id) for candidate_id in candidate_ids
             ):
                 continue  # incremental: never re-fetch a contract that already has market evidence
-            assets.append((chain, value))
+            assets.append((namespace.split(":", 1)[1], value))
             if limit is not None and len(assets) >= max(1, limit):
                 break
-        if limit is not None:
-            assets = assets[: max(1, limit)]
 
         config = self.config.provider("dexscreener")
         budget = ScanBudget(
@@ -325,6 +336,11 @@ class CandidateDiscoveryEngine:
             return run
         candidates = tuple(self._provider_candidate(item, observed_at=started_at) for item in result.candidates)
         created, updated = self.repository.upsert_many(candidates)
+        if result.processed_assets:
+            namespace, value = result.processed_assets[-1]
+            if not namespace.startswith("contract:"):
+                namespace = f"contract:{namespace}"
+            self.repository.save_identifier_cursor(cursor_key, namespace, value)
         status = "succeeded" if result.assets and not result.truncated else "partial"
         message = (
             f"mode={selected_mode} contracts={result.assets} processed={result.processed} "
@@ -357,7 +373,7 @@ class CandidateDiscoveryEngine:
         matched = universe_ids & discovered_ids
         universe_coverage = round(len(matched) / len(universe_ids), 6) if universe_ids else None
         scan = self.repository.scan_state("geckoterminal") or {}
-        catalogue_ids = {str(value) for value in (scan.get("network_ids") or [])}
+        catalogue_ids = {str(row["network_id"]) for row in self.repository.network_observations()}
         pools = self.repository.pool_observations()
         scanned_networks = {str(item["network"]) for item in pools}
         network_coverage = (

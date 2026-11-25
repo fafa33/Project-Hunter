@@ -40,6 +40,17 @@ class OnChainRepository:
         self._upsert("provider_status.jsonl", lambda row: str(row["state_id"]), payloads)
 
     def save_evidence_signatures(self, rows: tuple[dict[str, Any], ...]) -> None:
+        resolved = self._resolve_signatures(rows)
+        self._upsert("evidence_signatures.jsonl", lambda item: str(item["signature_id"]), tuple(resolved.values()))
+
+    def save_acquired_evidence(
+        self, observations: tuple[RawOnChainObservation, ...], signatures: tuple[dict[str, Any], ...]
+    ) -> None:
+        resolved = self._resolve_signatures(signatures)
+        self.save_raw(observations)
+        self._upsert("evidence_signatures.jsonl", lambda item: str(item["signature_id"]), tuple(resolved.values()))
+
+    def _resolve_signatures(self, rows: tuple[dict[str, Any], ...]) -> dict[str, dict[str, Any]]:
         from hunter.automation.issue_agent_state import canonical_json
 
         existing = {str(row["signature_id"]): row for row in self.evidence_signatures()}
@@ -49,7 +60,7 @@ class OnChainRepository:
             if previous is not None and canonical_json(previous) != canonical_json(row):
                 raise ValueError("conflicting capital-flow evidence signature")
             existing[signature_id] = row
-        self._upsert("evidence_signatures.jsonl", lambda item: str(item["signature_id"]), tuple(existing.values()))
+        return existing
 
     def save_checkpoint(self, chain_id: int, project: str, block_number: int, block_hash: str) -> None:
         self._upsert(

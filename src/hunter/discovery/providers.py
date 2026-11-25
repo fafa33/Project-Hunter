@@ -76,6 +76,7 @@ class DexEnrichmentResult:
     processed: int
     batches: int
     truncated: bool
+    processed_assets: tuple[tuple[str, str], ...] = ()
 
 
 class _RequestBudgetExhausted(Exception):
@@ -585,14 +586,18 @@ class DexScreenerDiscoveryProvider:
     sleeper: Callable[[float], None] = time.sleep
     ledger: CapacityLedger | None = None
 
-    def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
+    def discover(self, *, limit: int, budget: ScanBudget | None = None) -> tuple[DiscoveredCandidate, ...]:
         rows: list[DiscoveredCandidate] = []
         seen: set[tuple[str, str]] = set()
+        meter = _RequestMeter(budget) if budget is not None else None
         for path, source_type in (
             ("/token-profiles/latest/v1", "token_profile"),
             ("/token-boosts/top/v1", "token_boost"),
         ):
-            payload = self._get(path)
+            try:
+                payload = self._get(path) if meter is None else self._get(path, meter=meter)
+            except _RequestBudgetExhausted:
+                break
             if not isinstance(payload, list):
                 raise ProviderUnavailableError("DexScreener discovery response must be a list")
             for item in payload:
@@ -607,13 +612,13 @@ class DexScreenerDiscoveryProvider:
                     continue
                 seen.add(key)
                 links = item.get("links") if isinstance(item.get("links"), list) else []
-                market = self._market_evidence(chain, address)
+                market = self._market_evidence(chain, address, meter=meter)
                 if market.get("market_evidence_status") != "observed" or market.get("market_pair_side") == "quote":
-                    fallback = self._gecko_evidence(chain, address)
+                    fallback = self._gecko_evidence(chain, address, meter=meter)
                     if fallback:
                         market = fallback
                 claimed = tuple(_dexscreener_links(links))
-                verified = self._corroborated_links(chain, address, claimed) if claimed else {}
+                verified = self._corroborated_links(chain, address, claimed, meter=meter) if claimed else {}
                 rows.append(
                     DiscoveredCandidate(
                         provider=self.name,
@@ -645,10 +650,12 @@ class DexScreenerDiscoveryProvider:
                     return tuple(rows)
         return tuple(rows)
 
-    def _market_evidence(self, chain: str, address: str) -> dict[str, Any]:
+    def _market_evidence(self, chain: str, address: str, *, meter: _RequestMeter | None = None) -> dict[str, Any]:
         path = f"/token-pairs/v1/{urllib.parse.quote(chain, safe='')}/{urllib.parse.quote(address, safe='')}"
         try:
-            payload = self._get(path)
+            payload = self._get(path) if meter is None else self._get(path, meter=meter)
+        except _RequestBudgetExhausted:
+            return {"market_evidence_status": "request_budget_exhausted"}
         except (ProviderUnavailableError, ValueError):
             return {"market_evidence_status": "unavailable"}
         if not isinstance(payload, list):
@@ -693,7 +700,9 @@ class DexScreenerDiscoveryProvider:
             "price_usd": _market_number(pair.get("priceUsd")) if side == "base" else None,
         }
 
-    def _corroborated_links(self, chain: str, address: str, claimed: tuple[str, ...]) -> dict[str, Any]:
+    def _corroborated_links(
+        self, chain: str, address: str, claimed: tuple[str, ...], *, meter: _RequestMeter | None = None
+    ) -> dict[str, Any]:
         platform = {
             "eth": "ethereum",
             "ethereum": "ethereum",
@@ -711,8 +720,8 @@ class DexScreenerDiscoveryProvider:
         )
         path = f"/coins/{platform}/contract/{urllib.parse.quote(address, safe='')}"
         try:
-            payload = provider._get(path, {})
-        except (ProviderUnavailableError, ValueError):
+            payload = provider._get(path, {}) if meter is None else provider._get(path, {}, meter=meter)
+        except (_RequestBudgetExhausted, ProviderUnavailableError, ValueError):
             return {}
         if not isinstance(payload, dict):
             return {}
@@ -736,7 +745,7 @@ class DexScreenerDiscoveryProvider:
             "official_link_observed_at": datetime.now(UTC).isoformat(),
         }
 
-    def _gecko_evidence(self, chain: str, address: str) -> dict[str, Any]:
+    def _gecko_evidence(self, chain: str, address: str, *, meter: _RequestMeter | None = None) -> dict[str, Any]:
         network = {
             "ethereum": "eth",
             "eth": "eth",
@@ -754,8 +763,8 @@ class DexScreenerDiscoveryProvider:
             timeout_seconds=self.timeout_seconds, max_attempts=1, sleeper=self.sleeper, ledger=self.ledger
         )
         try:
-            payload = provider._get(path, {})
-        except (ProviderUnavailableError, ValueError):
+            payload = provider._get(path, {}) if meter is None else provider._get(path, {}, meter=meter)
+        except (_RequestBudgetExhausted, ProviderUnavailableError, ValueError):
             return {}
         data = payload.get("data") if isinstance(payload, dict) else None
         attrs = data.get("attributes") if isinstance(data, dict) else None
@@ -790,6 +799,7 @@ class DexScreenerDiscoveryProvider:
         """Enrich already-discovered contracts with DexScreener's 30-address token endpoint."""
         meter = _RequestMeter(budget) if budget else None
         groups: dict[str, tuple[str, list[str]]] = {}
+        originals: dict[tuple[str, str], tuple[str, str]] = {}
         seen: set[tuple[str, str]] = set()
         batch_limit = max(1, min(30, max_batch_size))
         for platform, address in assets:
@@ -799,6 +809,8 @@ class DexScreenerDiscoveryProvider:
             if not chain_id or not normalized or (chain_id, normalized) in seen:
                 continue
             seen.add((chain_id, normalized))
+            original_value = normalized if registry_chain.lower() != "solana" else address.strip()
+            originals[(chain_id, normalized)] = (platform.strip().lower(), original_value)
             if chain_id not in groups:
                 groups[chain_id] = (registry_chain, [])
             groups[chain_id][1].append(normalized)
@@ -806,6 +818,7 @@ class DexScreenerDiscoveryProvider:
         asset_count = sum(len(addresses) for _chain, addresses in groups.values())
         observed_at = datetime.now(UTC).isoformat()
         rows: list[DiscoveredCandidate] = []
+        processed_assets: list[tuple[str, str]] = []
         processed = 0
         batches = 0
         truncated = False
@@ -829,6 +842,9 @@ class DexScreenerDiscoveryProvider:
                     batch_size=len(chunk),
                 )
                 processed += len(chunk)
+                processed_assets.extend(
+                    originals.get((chain_id, address), (registry_chain, address)) for address in chunk
+                )
                 batches += 1
                 rows.extend(
                     _dexscreener_batch_rows(
@@ -844,7 +860,7 @@ class DexScreenerDiscoveryProvider:
                 )
             if truncated:
                 break
-        return DexEnrichmentResult(tuple(rows), asset_count, processed, batches, truncated)
+        return DexEnrichmentResult(tuple(rows), asset_count, processed, batches, truncated, tuple(processed_assets))
 
     def _get(
         self,
@@ -908,11 +924,17 @@ _DEX_CHAIN_BY_PLATFORM = {
 
 
 def _registry_chain(platform: str) -> str | None:
-    return _REGISTRY_CHAIN_BY_PLATFORM.get(platform.strip().lower())
+    normalized = platform.strip().lower()
+    if normalized.startswith("contract:"):
+        normalized = normalized.split(":", 1)[1]
+    return _REGISTRY_CHAIN_BY_PLATFORM.get(normalized)
 
 
 def _dex_chain_id(platform: str) -> str | None:
-    return _DEX_CHAIN_BY_PLATFORM.get(platform.strip().lower())
+    normalized = platform.strip().lower()
+    if normalized.startswith("contract:"):
+        normalized = normalized.split(":", 1)[1]
+    return _DEX_CHAIN_BY_PLATFORM.get(normalized)
 
 
 def _dexscreener_batch_rows(
