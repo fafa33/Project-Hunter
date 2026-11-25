@@ -3642,7 +3642,7 @@
       "prevention": {
         "mechanism": "Fetch each accepted log's block, verify hash and number against the log, and bind the returned timestamp into the signed observation.",
         "boundary": "hosted-gate",
-        "guard_reference": "src/hunter/onchain/engine.py::CapitalFlowEngine._collect_swap_observations"
+        "guard_reference": "src/hunter/onchain/engine.py::CapitalFlowEngine::_collect_swap_observations"
       },
       "regression_evidence": [
         "tests/test_onchain_swap_wallet_evidence.py::test_swap_observations_use_each_logs_own_block_hash_and_timestamp",
@@ -3668,7 +3668,7 @@
       "prevention": {
         "mechanism": "Install a request meter around swap acquisition and charge it in the shared endpoint dispatcher before each transport call, then record the meter's actual usage in signed evidence.",
         "boundary": "hosted-gate",
-        "guard_reference": "src/hunter/onchain/adapters.py::EVMJsonRpcAdapter.request_budget"
+        "guard_reference": "src/hunter/onchain/adapters.py::EVMJsonRpcAdapter::request_budget"
       },
       "regression_evidence": [
         "tests/test_onchain_swap_wallet_evidence.py::test_swap_rpc_meter_charges_each_attempt_before_dispatch_including_failures",

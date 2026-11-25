@@ -15,13 +15,13 @@
       },
       {
         "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
-        "evidence": "Per-log block binding, exact target-asset FIFO isolation, full-receipt ambiguity, recipient ownership proof, and normalized freshness all fail closed; 137 focused regressions pass.",
+        "evidence": "Per-log block binding, exact target-asset FIFO isolation, full-receipt ambiguity, recipient ownership proof, and normalized freshness all fail closed; 137 focused regressions and the Defect Prevention Guard pass.",
         "id": "AC-587-03",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "Fresh writer judgement for staged candidate content; Ruff, Black, JSON validation, and full Mypy pass; PR #788 remains Draft, thread resolution is separate from Ready, and no merge or deployment is asserted.",
+        "evidence": "Fresh writer judgement after guard-reference correction; Ruff, Black, JSON validation, Defect Prevention Guard, and full Mypy pass; PR #788 remains Draft and no merge or deployment is asserted.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -241,7 +241,7 @@
         "outcome": "repaired"
       },
       {
-        "evidence": "The shared RPC endpoint dispatcher charges every attempt before transport dispatch, including chainId, logs, receipts, corroboration and failures; count regression passes.",
+        "evidence": "The shared RPC endpoint dispatcher charges every attempt before transport dispatch, including chainId, logs, receipts, corroboration and failures; count regression and guard-reference validation pass.",
         "family": "DFF-073",
         "outcome": "repaired"
       },
@@ -330,7 +330,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "fe245c1ee775024ac1f6b72abdae2c08232b86d7",
+        "blob_sha": "af3faa94719ee4bb1ac52371acd34c652b83306a",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -498,16 +498,16 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "33dc2781fca06a6ab0f1e47ad6ea6e3418b0d234620ad348a255ee10548dd97d"
+    "review_target_digest": "2fb2fb4fbf337e1ff2d1e86469312c9d48b267d183f23802ebe0420a76f79ada"
   },
   "review_eligibility": {
     "mode": "pre_deployment",
     "pr_number": 788,
     "repository": "fafa33/Project-Hunter"
   },
-  "review_id": "0c2a8f9e31825f895fd290b7ec8f31551bde7b1f0a675f7148e537dcd8f14577",
+  "review_id": "67afacd73ca683bfaa9e4146db630638773ae39deba511dc54d6c3d1ebc1609b",
   "review_request": {
-    "claims_id": "0c2a8f9e31825f895fd290b7ec8f31551bde7b1f0a675f7148e537dcd8f14577",
+    "claims_id": "67afacd73ca683bfaa9e4146db630638773ae39deba511dc54d6c3d1ebc1609b",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
