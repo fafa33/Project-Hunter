@@ -6,6 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -15,7 +16,7 @@ from hunter.historical_acquisition.models import RawHistoricalEvidence
 from hunter.historical_acquisition.repository import HistoricalEvidenceRepository
 from hunter.historical_acquisition.usd_valuation import HistoricalUsdValuator, UsdValuation
 from hunter.market_validation.acquisition_sources import _swap_wallet_context
-from hunter.onchain.adapters import EVMJsonRpcAdapter
+from hunter.onchain.adapters import EVMJsonRpcAdapter, EVMProviderUnavailable
 from hunter.onchain.configuration import OnChainConfig
 from hunter.onchain.dex import (
     V2_SWAP_TOPIC,
@@ -50,32 +51,49 @@ BLOCK_HASH = "0x" + "ef" * 32
 
 
 class SwapTransport:
-    def __init__(self, *, chain_id: int = 1, logs: tuple[dict[str, Any], ...] = ()) -> None:
+    def __init__(
+        self,
+        *,
+        chain_id: int = 1,
+        logs: tuple[dict[str, Any], ...] = (),
+        receipt_logs: tuple[dict[str, Any], ...] | None = None,
+        blocks: dict[int, tuple[str, int]] | None = None,
+        fail_on_call: int | None = None,
+    ) -> None:
         self.chain_id = chain_id
         self.logs = logs
+        self.receipt_logs = logs if receipt_logs is None else receipt_logs
+        self.blocks = blocks or {}
+        self.fail_on_call = fail_on_call
         self.calls: list[str] = []
 
     def rpc(self, method: str, params: tuple[object, ...]) -> object:
         self.calls.append(method)
+        if self.fail_on_call == len(self.calls):
+            raise EVMProviderUnavailable("forced RPC failure")
         if method == "eth_chainId":
             return hex(self.chain_id)
         if method == "eth_blockNumber":
             return hex(1_000)
         if method == "eth_getBlockByNumber":
             number = 936 if params and params[0] == "finalized" else int(str(params[0]), 16)
-            return {"number": hex(number), "hash": BLOCK_HASH, "timestamp": hex(int(NOW.timestamp()))}
+            block_hash, timestamp = self.blocks.get(number, (BLOCK_HASH, int(NOW.timestamp())))
+            return {"number": hex(number), "hash": block_hash, "timestamp": hex(timestamp)}
         if method == "eth_getBalance":
             return "0x0"
         if method == "eth_getLogs":
             return list(self.logs)
         if method == "eth_getTransactionReceipt":
+            tx = str(params[0]).lower() if params else TX
+            matching = tuple(item for item in self.receipt_logs if str(item.get("transactionHash", "")).lower() == tx)
+            first = matching[0] if matching else None
             return {
                 "status": "0x1",
-                "logs": list(self.logs),
+                "logs": list(matching) if matching else list(self.receipt_logs),
                 "from": WALLET,
-                "transactionHash": TX,
-                "blockNumber": "0x384",
-                "blockHash": BLOCK_HASH,
+                "transactionHash": tx,
+                "blockNumber": str(first["blockNumber"]) if first is not None else "0x384",
+                "blockHash": str(first["blockHash"]) if first is not None else BLOCK_HASH,
             }
         if method == "eth_getCode":
             return "0x"
@@ -538,6 +556,173 @@ def test_market_validation_swap_wallet_context_uses_identity_and_usd_integration
     assert source.raw_input_metrics["fifo_policy"] == "deterministic-fifo"
     assert source.raw_input_metrics["net_pnl_usd"] == "UNAVAILABLE"
     assert source.raw_input_metrics["usd_provenance"] == "coingecko-historical-market-chart"
+
+
+def test_swap_observations_use_each_logs_own_block_hash_and_timestamp(tmp_path: Path) -> None:
+    resolved_pool = pool()
+    first_tx = "0x" + "aa" * 32
+    second_tx = "0x" + "bb" * 32
+    first_hash = "0x" + "11" * 32
+    second_hash = "0x" + "22" * 32
+    first_at = int((NOW - timedelta(minutes=5)).timestamp())
+    second_at = int(NOW.timestamp())
+    first_log = {
+        **v3_log(side="buy", pool_row=resolved_pool),
+        "transactionHash": first_tx,
+        "blockNumber": "0x2bc",
+        "blockHash": first_hash,
+        "logIndex": "0x1",
+    }
+    second_log = {
+        **v3_log(side="buy", pool_row=resolved_pool),
+        "transactionHash": second_tx,
+        "blockNumber": "0x384",
+        "blockHash": second_hash,
+        "logIndex": "0x2",
+    }
+    wide_chain = chain(
+        swap_rpc_budget=30, rpc_endpoints=("https://first.test", "https://second.test", "https://third.test")
+    )
+    transport = SwapTransport(
+        logs=(first_log, second_log),
+        blocks={700: (first_hash, first_at), 900: (second_hash, second_at)},
+    )
+    adapter = EVMJsonRpcAdapter(wide_chain, transport=transport)
+    engine = CapitalFlowEngine(
+        config(resolved_pool, chains=(wide_chain,)),
+        repository=OnChainRepository(tmp_path),
+        adapters={1: adapter},
+        evidence_signing_key=Ed25519PrivateKey.generate(),
+        clock=FixedClock(NOW),
+    )
+
+    rows, _signatures, unavailable = engine._swap_observations(
+        resolved_pool, adapter, start_block=700, end_block=900, block_hash=second_hash, end_timestamp=NOW
+    )
+
+    assert unavailable == ()
+    assert len(rows) == 2
+    assert rows[0].block_number == 700
+    assert rows[0].block_hash == first_hash
+    assert rows[0].block_timestamp == datetime.fromtimestamp(first_at, tz=UTC)
+    assert rows[1].block_hash == second_hash
+    assert rows[1].block_timestamp == datetime.fromtimestamp(second_at, tz=UTC)
+
+
+def test_swap_rpc_meter_charges_each_attempt_before_dispatch_including_failures() -> None:
+    from hunter.onchain.adapters import RpcAttemptMeter
+
+    transport = SwapTransport(fail_on_call=2)
+    adapter = EVMJsonRpcAdapter(chain(swap_rpc_budget=2), transport=transport)
+
+    with adapter.request_budget(2) as meter:
+        assert isinstance(meter, RpcAttemptMeter)
+        assert adapter.chain_id() == 1
+        with pytest.raises(EVMProviderUnavailable):
+            adapter.logs(address=POOL, from_block=900, to_block=936, topics=(V3_SWAP_TOPIC,))
+
+    assert meter.used == 2
+    assert transport.calls == ["eth_chainId", "eth_getLogs"]
+
+
+def test_swap_observations_record_actual_rpc_attempt_count(tmp_path: Path) -> None:
+    resolved_pool = pool()
+    wide_chain = chain(
+        swap_rpc_budget=30,
+        rpc_endpoints=("https://first.test", "https://second.test", "https://third.test"),
+    )
+    transport = SwapTransport(logs=(v3_log(side="buy", pool_row=resolved_pool),))
+    adapter = EVMJsonRpcAdapter(wide_chain, transport=transport)
+    engine = CapitalFlowEngine(
+        config(resolved_pool, chains=(wide_chain,)),
+        repository=OnChainRepository(tmp_path),
+        adapters={1: adapter},
+        evidence_signing_key=Ed25519PrivateKey.generate(),
+        clock=FixedClock(NOW),
+    )
+
+    rows, _signatures, _unavailable = engine._swap_observations(
+        resolved_pool, adapter, start_block=900, end_block=936, block_hash=BLOCK_HASH, end_timestamp=NOW
+    )
+
+    assert len(rows) == 1
+    assert rows[0].rpc_request_count == len(transport.calls)
+    assert len(transport.calls) <= 30
+
+
+def test_wallet_performance_isolates_fifo_by_exact_target_asset() -> None:
+    usdc_buy = signed_observation(1, "buy", "100", WALLET)
+    weth_sell = replace(
+        signed_observation(2, "sell", "100", WALLET),
+        target_asset_contract=WETH,
+        asset_contract=WETH,
+        asset_symbol="WETH",
+        decimals=18,
+    )
+    valuations = {
+        usdc_buy.evidence_id: valuation(usdc_buy.evidence_id, "100"),
+        weth_sell.evidence_id: valuation(weth_sell.evidence_id, "100"),
+    }
+
+    result = wallet_performance_from_swaps((usdc_buy, weth_sell), valuations, as_of=NOW)
+
+    assert len(result) == 2
+    assert {item.target_asset_contract for item in result} == {USDC, WETH}
+    assert all(item.status == "UNAVAILABLE" for item in result)
+    assert all(item.realized_pnl_usd is None for item in result)
+
+
+def test_swap_wallet_freshness_is_decreasing_and_normalized() -> None:
+    from hunter.market_validation.acquisition_sources import normalized_freshness
+
+    assert normalized_freshness(NOW, NOW) == 1.0
+    assert normalized_freshness(NOW - timedelta(hours=12), NOW) == 0.5
+    assert normalized_freshness(NOW - timedelta(hours=24), NOW) == 0.0
+    assert normalized_freshness(NOW - timedelta(hours=25), NOW) == 0.0
+    assert normalized_freshness(NOW + timedelta(seconds=2), NOW) == 1.0
+
+
+def test_swap_wallet_context_uses_normalized_freshness(tmp_path: Path) -> None:
+    row, _signed, cfg, repo, trust = signed_swap(tmp_path, log_index=1, block_timestamp=NOW)
+
+    source = _swap_wallet_context("uniswap", (row,), as_of=NOW, config=cfg, repository=repo, trust=trust)
+
+    assert source is not None
+    assert source.freshness == 1.0
+    assert row.evidence_id in source.evidence_ids
+
+
+def test_full_receipt_multihop_leg_is_not_wallet_attributed(tmp_path: Path) -> None:
+    resolved_pool = pool()
+    other_pool = replace(pool(), pool_id="other-pool", address=OTHER_POOL)
+    first_log = v3_log(side="buy", pool_row=resolved_pool)
+    second_log = {
+        **v3_log(side="sell", pool_row=other_pool),
+        "address": OTHER_POOL,
+        "logIndex": "0x8",
+    }
+    wide_chain = chain(
+        swap_rpc_budget=30,
+        rpc_endpoints=("https://first.test", "https://second.test", "https://third.test"),
+    )
+    transport = SwapTransport(logs=(first_log,), receipt_logs=(first_log, second_log))
+    adapter = EVMJsonRpcAdapter(wide_chain, transport=transport)
+    engine = CapitalFlowEngine(
+        config(resolved_pool, chains=(wide_chain,)),
+        repository=OnChainRepository(tmp_path),
+        adapters={1: adapter},
+        evidence_signing_key=Ed25519PrivateKey.generate(),
+        clock=FixedClock(NOW),
+    )
+
+    rows, _signatures, _unavailable = engine._swap_observations(
+        resolved_pool, adapter, start_block=900, end_block=936, block_hash=BLOCK_HASH, end_timestamp=NOW
+    )
+
+    assert len(rows) == 1
+    assert rows[0].swap_status == "AMBIGUOUS"
+    assert rows[0].attributed_wallet is None
+    assert rows[0].attribution_status != "AVAILABLE"
 
 
 def test_identity_scheduler_configuration_is_enabled_and_gated() -> None:

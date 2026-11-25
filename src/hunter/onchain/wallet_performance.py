@@ -17,6 +17,7 @@ class WalletPerformance:
     status: str
     wallet: str | None
     chain_id: int
+    target_asset_contract: str | None = None
     reason: str | None = None
     realized_pnl_usd: Decimal | None = None
     cost_basis_usd: Decimal | None = None
@@ -35,22 +36,31 @@ def wallet_performance_from_swaps(
     *,
     as_of: object = None,
 ) -> tuple[WalletPerformance, ...]:
-    groups: dict[tuple[int, str | None], list[RawOnChainObservation]] = defaultdict(list)
+    groups: dict[tuple[int, str | None, str | None], list[RawOnChainObservation]] = defaultdict(list)
     for swap in swaps:
-        groups[(swap.chain_id, swap.attributed_wallet)].append(swap)
+        target_asset = (swap.target_asset_contract or swap.asset_contract or "").lower() or None
+        groups[(swap.chain_id, swap.attributed_wallet, target_asset)].append(swap)
     results: list[WalletPerformance] = []
-    for (chain_id, wallet), rows in sorted(groups.items(), key=lambda item: (item[0][0], item[0][1] or "")):
-        results.append(_performance(chain_id, wallet, rows, valuations))
+    for (chain_id, wallet, target_asset), rows in sorted(
+        groups.items(), key=lambda item: (item[0][0], item[0][1] or "", item[0][2] or "")
+    ):
+        results.append(_performance(chain_id, wallet, target_asset, rows, valuations))
     return tuple(results)
 
 
 def _performance(
     chain_id: int,
     wallet: str | None,
+    target_asset_contract: str | None,
     rows: list[RawOnChainObservation],
     valuations: Mapping[str, UsdValuation],
 ) -> WalletPerformance:
-    base = WalletPerformance(status="UNAVAILABLE", wallet=wallet, chain_id=chain_id)
+    base = WalletPerformance(
+        status="UNAVAILABLE",
+        wallet=wallet,
+        chain_id=chain_id,
+        target_asset_contract=target_asset_contract,
+    )
     if wallet is None:
         return _unavailable(base, "wallet_attribution_unavailable", ("wallet_attribution",))
     if any(row.attribution_status != "AVAILABLE" or row.swap_status != "AVAILABLE" for row in rows):
@@ -113,6 +123,7 @@ def _performance(
         status="AVAILABLE",
         wallet=wallet,
         chain_id=chain_id,
+        target_asset_contract=target_asset_contract,
         realized_pnl_usd=realized,
         cost_basis_usd=cost_basis,
         proceeds_usd=proceeds,
@@ -128,6 +139,7 @@ def _unavailable(base: WalletPerformance, reason: str, fields: tuple[str, ...]) 
         status="UNAVAILABLE",
         wallet=base.wallet,
         chain_id=base.chain_id,
+        target_asset_contract=base.target_asset_contract,
         reason=reason,
         unavailable_fields=tuple(dict.fromkeys((*_UNAVAILABLE_FIELDS, *fields))),
     )

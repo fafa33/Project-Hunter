@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 
 from hunter.discovery.models import (
     IDENTITY_POLICY_VERSION,
+    VOLATILE_IDENTITY_METADATA_KEYS,
     CandidateIdentity,
     CandidateRecord,
     DiscoveryConflict,
@@ -14,20 +15,6 @@ from hunter.discovery.repository import CandidateRegistryRepository
 from hunter.execution.identity import identity
 
 TRUSTED_PROVIDER_NAMESPACES = {"coingecko", "defillama", "hunter_project", "github_repository"}
-
-# Values refreshed by acquisition cadence are not identity evidence. Excluding
-# them keeps an unchanged registry from being re-resolved on every cycle.
-VOLATILE_IDENTITY_METADATA_KEYS = frozenset(
-    {
-        "last_updated",
-        "market_evidence_observed_at",
-        "observed_at",
-        "fetched_at",
-        "retrieved_at",
-        "scraped_at",
-        "seen_at",
-    }
-)
 
 
 def identity_evidence_fingerprint(candidate: CandidateRecord, *, related_candidate_ids: tuple[str, ...] = ()) -> str:

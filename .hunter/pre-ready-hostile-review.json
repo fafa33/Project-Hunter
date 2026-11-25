@@ -3,32 +3,34 @@
     "acceptance_criteria": [
       {
         "criterion": "Free-provider capacity is inventoried with explicit provenance and observed consumption is persisted without paid API use.",
-        "evidence": "No paid API path was added; bounded E2E used public RPC and free CoinGecko history with exact provenance, while historical USD reads persisted repository evidence.",
+        "evidence": "No paid API path was added; the staged remediation only tightens already-bounded EVM RPC accounting and preserves the public-source evidence path.",
         "id": "AC-587-01",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Global discovery uses bounded, resumable free capacity and truthful DexScreener batching without a parallel daemon.",
-        "evidence": "Swap acquisition is wired into the existing CapitalFlowEngine.sync seam with a declared 12-call chain budget; no parallel daemon or autonomous trade path exists.",
+        "evidence": "Bounded swap acquisition remains wired into the existing CapitalFlowEngine.sync seam; refreshable discovery metadata no longer creates false identity conflicts during repeated syncs.",
         "id": "AC-587-02",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
-        "evidence": "Swap and wallet evidence is pool/receipt/identity-bound; ambiguous multi-hop, unattributed or insufficient-inventory cases remain UNAVAILABLE rather than ranked.",
+        "evidence": "Per-log block binding, exact target-asset FIFO isolation, full-receipt ambiguity, recipient ownership proof, and normalized freshness all fail closed; 137 focused regressions pass.",
         "id": "AC-587-03",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "Fresh judgement for staged candidate content; 215 focused tests; Ruff, Black and full Mypy pass; bounded finalized public-source E2E tx 0xf0fcd4cb4990b4313eadb7bc86c8a88308096d34b1f56c033cbbe7cdb1c0440f; PR #788 remains Draft and no authority or merge is asserted.",
+        "evidence": "Fresh writer judgement for staged candidate content; Ruff, Black, JSON validation, and full Mypy pass; PR #788 remains Draft, thread resolution is separate from Ready, and no merge or deployment is asserted.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
+      "asset-contract-isolation",
       "atomic-write",
       "authorization",
+      "block-identity",
       "caller-controlled-time-state",
       "causal-price-selection",
       "coverage-denominator",
@@ -39,25 +41,30 @@
       "fail-closed",
       "fifo-inventory",
       "freshness-ceiling",
+      "freshness-normalization",
       "identity-handoff",
       "inclusive-range-boundary",
       "malformed-unknown-authority",
       "monotonicity",
       "multi-hop-ambiguity",
       "numeric-precision",
+      "per-log-timestamp",
       "persistence-restrictions",
       "pool-identity",
       "price-provenance",
       "receipt-corroboration",
+      "recipient-ownership",
       "replay",
       "restart-crash-retry",
       "router-attribution",
+      "rpc-attempt-accounting",
       "rpc-budget",
       "shared-execution-budget",
       "signed-swap-replay",
       "static-analysis-findings",
       "tamper-resistance",
       "transaction-snapshot-consistency",
+      "volatile-metadata-refresh",
       "wallet-inference"
     ],
     "base_ref": "main",
@@ -119,7 +126,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Request regenerated from staged tree.",
+        "evidence": "Request regenerated from staged tree judgement.",
         "family": "DFF-012",
         "outcome": "clear"
       },
@@ -134,9 +141,9 @@
         "outcome": "clear"
       },
       {
-        "evidence": "PRH-142 through PRH-151 and DFF-062 through DFF-069 compiled into SPM context.",
+        "evidence": "PRH-142 through PRH-151 and DFF-062 through DFF-069 remain compiled into SPM context.",
         "family": "DFF-015",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
         "evidence": "Reviewer pool unchanged.",
@@ -144,7 +151,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Local checks are diagnostic only.",
+        "evidence": "Local checks are diagnostic only and hosted gates remain authoritative.",
         "family": "DFF-029",
         "outcome": "clear"
       },
@@ -154,14 +161,14 @@
         "outcome": "clear"
       },
       {
-        "evidence": "New identity/USD fail-closed regressions added.",
+        "evidence": "New identity/USD fail-closed regressions retained.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "PRH-150/151 and DFF-068/069 compiled into SPM context.",
+        "evidence": "PRH-150/151 and DFF-068/069 remain compiled into SPM context.",
         "family": "DFF-045",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
         "evidence": "No new live RPC run or old E2E reuse.",
@@ -211,22 +218,52 @@
       {
         "evidence": "Partial discovery automation fails closed before scheduler loop.",
         "family": "DFF-068",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Historical USD valuation is causal, exact, fresh, provenance-bound and non-inferential.",
+        "evidence": "Historical USD valuation remains causal, exact, fresh, provenance-bound and non-inferential.",
         "family": "DFF-069",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Verified pool identity, explicit V2/V3 decode, finalized receipt plus two independent endpoints, exact tx/log binding, router exclusion, multi-hop ambiguity and bounded RPC budget regress-tested.",
+        "evidence": "Verified pool identity, explicit V2/V3 decode, finalized receipt plus independent endpoints, exact tx/log binding, router exclusion, multi-hop ambiguity and bounded RPC budget regress-tested.",
         "family": "DFF-070",
         "outcome": "clear"
       },
       {
-        "evidence": "Verified attributed swaps feed deterministic exact-Decimal FIFO per chain/wallet; partial inventory, missing fees, net P&L and unrealized values remain UNAVAILABLE and SPM context is covered.",
+        "evidence": "Verified attributed swaps feed deterministic exact-Decimal FIFO per chain/wallet; partial inventory, missing fees, net P&L and unrealized values remain UNAVAILABLE.",
         "family": "DFF-071",
         "outcome": "clear"
+      },
+      {
+        "evidence": "Each accepted swap log now fetches and validates its own block and signs that block's timestamp; multi-block regression passes.",
+        "family": "DFF-072",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "The shared RPC endpoint dispatcher charges every attempt before transport dispatch, including chainId, logs, receipts, corroboration and failures; count regression passes.",
+        "family": "DFF-073",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "Wallet FIFO is grouped by exact target asset contract and incomplete per-asset groups stay unavailable; cross-asset regression passes.",
+        "family": "DFF-074",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "Volatile timestamps and market measurements refresh in place without provider disagreements while genuine identity conflicts still fail closed.",
+        "family": "DFF-075",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "Full receipt swap-topic counting and decoded recipient ownership now gate attribution; multi-hop receipt regression passes.",
+        "family": "DFF-076",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "Swap freshness is normalized from current 1.0 to horizon 0.0 with future and stale clamping plus boundary regression coverage.",
+        "family": "DFF-077",
+        "outcome": "repaired"
       }
     ],
     "findings": [],
@@ -263,7 +300,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "7fe97290f7e9cf1e52f990fbf8e2febb3abf29b0",
+        "blob_sha": "b8176fde6ba764deef3bcab535b4d0992daf07dd",
         "path": "src/hunter/onchain/wallet_performance.py",
         "previous_path": "",
         "status": "added"
@@ -275,7 +312,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "08083edc6772ec811c98ede7b7f0c1282d55bcac",
+        "blob_sha": "63e3cbfcefc870fe38b579598c0b2c5751da9289",
         "path": "tests/test_onchain_swap_wallet_evidence.py",
         "previous_path": "",
         "status": "added"
@@ -293,7 +330,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "951b0de927ef5d6aff98e1df99db09525c02cb8b",
+        "blob_sha": "fe245c1ee775024ac1f6b72abdae2c08232b86d7",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -341,13 +378,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "42576ff87889f1751dc6c6f80da5e399530cc983",
+        "blob_sha": "361a5e64b890ec6d5cef1a33985f6e7247f3882c",
         "path": "src/hunter/discovery/identity.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "240b84ba82e7a84f059c91ba52beefb8012893d9",
+        "blob_sha": "6727a6415c028fddecca2d8db896b5b7c843671d",
         "path": "src/hunter/discovery/models.py",
         "previous_path": "",
         "status": "modified"
@@ -359,7 +396,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "bd8900fcddefe7d6ad3b66aa6dfd336f51058730",
+        "blob_sha": "990b362e9a464d3c98ed8fd4f40ed0029ea7f9f7",
         "path": "src/hunter/discovery/repository.py",
         "previous_path": "",
         "status": "modified"
@@ -377,13 +414,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "5cdfe0b28ef2b4f73f1fbe8cbb4c06af7cf170e0",
+        "blob_sha": "c785a28e9b4dce5306d2c908d39335fca191511a",
         "path": "src/hunter/market_validation/acquisition_sources.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "3135d5fb489c4c57b17b31f2fcef78e2b68a90d5",
+        "blob_sha": "d34507418c58aada808542c031adfffe784c55c1",
         "path": "src/hunter/onchain/adapters.py",
         "previous_path": "",
         "status": "modified"
@@ -395,7 +432,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "057f230f7f4422be40c3375788b7de52f95b21fa",
+        "blob_sha": "444686ea10d49f066f2e955e3c50b1e8a9380193",
         "path": "src/hunter/onchain/engine.py",
         "previous_path": "",
         "status": "modified"
@@ -419,13 +456,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "a23b1e35bd741d7c20b0c0fea33a30957eede415",
+        "blob_sha": "29540664b329da7fd4161ae36045e9a8eb37fdad",
         "path": "tests/test_engineering_context_authority.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "45d4f1c945fd7581bbcf3c44e85d8f9ed2588248",
+        "blob_sha": "413ac0bc5e6c6909bdb832ea2e0ab0651a20dc07",
         "path": "tests/test_global_discovery_candidate_registry.py",
         "previous_path": "",
         "status": "modified"
@@ -461,16 +498,16 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "5cbaaaa90fc3a25b434bf7f2f02fa1ab9b30759fe4e91f10f256ddaef3c0bb32"
+    "review_target_digest": "33dc2781fca06a6ab0f1e47ad6ea6e3418b0d234620ad348a255ee10548dd97d"
   },
   "review_eligibility": {
     "mode": "pre_deployment",
     "pr_number": 788,
     "repository": "fafa33/Project-Hunter"
   },
-  "review_id": "707741b3ea34f7db327ea142a8e2f87151741ab5db5636c1d82a54efee66596f",
+  "review_id": "0c2a8f9e31825f895fd290b7ec8f31551bde7b1f0a675f7148e537dcd8f14577",
   "review_request": {
-    "claims_id": "707741b3ea34f7db327ea142a8e2f87151741ab5db5636c1d82a54efee66596f",
+    "claims_id": "0c2a8f9e31825f895fd290b7ec8f31551bde7b1f0a675f7148e537dcd8f14577",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

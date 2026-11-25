@@ -5,7 +5,6 @@ from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation, localcontext
-from typing import Any
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
@@ -409,6 +408,22 @@ class CapitalFlowEngine:
             return (), (), ("swap_rpc_budget_exhausted",)
         if self.evidence_signing_key is None:
             return (), (), ("evidence_signing_key",)
+        with adapter.request_budget(budget):
+            return self._collect_swap_observations(
+                pool_row,
+                adapter,
+                start_block=start_block,
+                end_block=end_block,
+            )
+
+    def _collect_swap_observations(
+        self,
+        pool_row: DexPoolConfig,
+        adapter: EVMJsonRpcAdapter,
+        *,
+        start_block: int,
+        end_block: int,
+    ) -> tuple[tuple[RawOnChainObservation, ...], tuple[dict[str, object], ...], tuple[str, ...]]:
         unavailable: set[str] = set()
         try:
             identity_error = verify_pool_identity(pool_row, adapter, end_block)
@@ -416,7 +431,6 @@ class CapitalFlowEngine:
             return (), (), ("pool_identity_unavailable",)
         if identity_error is not None:
             return (), (), (identity_error,)
-        used = SWAP_IDENTITY_RPC_CALLS
         topic = V2_SWAP_TOPIC if pool_row.version == "v2" else V3_SWAP_TOPIC if pool_row.version == "v3" else None
         if topic is None:
             return (), (), ("unsupported_dex_schema",)
@@ -428,10 +442,6 @@ class CapitalFlowEngine:
             f"{row.get('project')}:{row.get('chain_id')}:{row.get('evidence_id')}": row for row in self.repository.raw()
         }
         existing_signatures = {str(row["signature_id"]): row for row in self.repository.evidence_signatures()}
-        tx_counts: dict[str, int] = {}
-        for log in logs:
-            tx = str(log.get("transactionHash", "")).lower()
-            tx_counts[tx] = tx_counts.get(tx, 0) + 1
         observations: list[RawOnChainObservation] = []
         signatures: list[dict[str, object]] = []
         seen: set[str] = set()
@@ -442,7 +452,7 @@ class CapitalFlowEngine:
                     continue
                 topics_raw = tuple(str(item).lower() for item in log["topics"])
                 decoded = decode_swap_log(pool_row, {**log, "topics": topics_raw})
-                if decoded.status != "AVAILABLE" or decoded.sender is None:
+                if decoded.status != "AVAILABLE" or decoded.sender is None or decoded.recipient is None:
                     continue
                 number = int(str(log["blockNumber"]), 16)
                 index = int(str(log["logIndex"]), 16)
@@ -452,35 +462,30 @@ class CapitalFlowEngine:
                 if (
                     not start_block <= number <= end_block
                     or index < 0
-                    or block_hash_value.lower() != block_hash.lower()
                     or re.fullmatch(r"0x[0-9a-f]{64}", tx) is None
                     or topics_raw[0] != topic
                 ):
                     continue
+                block = adapter.block(number)
+                if (
+                    str(block.get("hash", "")).lower() != block_hash_value
+                    or int(str(block.get("number", hex(number))), 16) != number
+                ):
+                    continue
+                block_timestamp = datetime.fromtimestamp(int(str(block["timestamp"]), 16), tz=UTC)
                 evidence_id = evm_log_evidence_id(pool_row.chain_id, tx, index)
                 if evidence_id in seen:
                     continue
-                if used + 1 > budget:
-                    unavailable.add("swap_rpc_budget_exhausted")
-                    break
                 receipt = adapter.transaction_receipt(tx)
-                used += 1
                 if not receipt_matches_log(receipt, {**log, "topics": topics_raw, "data": data}):
                     continue
                 receipt_from = str(receipt.get("from", "")).lower()
                 if _ADDRESS_PATTERN.fullmatch(receipt_from) is None:
                     continue
-                if used + 1 > budget:
-                    unavailable.add("swap_rpc_budget_exhausted")
-                    break
                 wallet_code = adapter.code(receipt_from, number)
-                used += 1
-                corroborations: tuple[tuple[str, dict[str, Any]], ...] = ()
-                if used + 1 <= budget:
-                    corroborations = adapter.corroborating_receipts(
-                        tx, exclude=(adapter.endpoint_identity, adapter.endpoint_identity)
-                    )
-                    used += len(corroborations)
+                corroborations = adapter.corroborating_receipts(
+                    tx, exclude=(adapter.endpoint_identity, adapter.endpoint_identity)
+                )
                 if not corroborations or not all(
                     receipt_matches_log(other, {**log, "topics": topics_raw, "data": data})
                     for _, other in corroborations
@@ -488,12 +493,14 @@ class CapitalFlowEngine:
                     unavailable.add("swap_corroboration_unavailable")
                     continue
                 excluded = {pool_row.address, *pool_row.routers}
+                ambiguous = _receipt_swap_count(receipt) > 1
                 attributable = (
                     wallet_code == "0x"
                     and receipt_from not in excluded
                     and str(receipt.get("status", "")).lower() == "0x1"
+                    and str(decoded.recipient).lower() == receipt_from
+                    and not ambiguous
                 )
-                ambiguous = tx_counts.get(tx, 0) > 1
                 target_amount = decoded.amount_out if decoded.trade_direction == "buy" else decoded.amount_in
                 target_raw = decoded.raw_amount_out if decoded.trade_direction == "buy" else decoded.raw_amount_in
                 acquired_at = self.clock.now().astimezone(UTC)
@@ -504,7 +511,7 @@ class CapitalFlowEngine:
                     endpoint_identity=adapter.endpoint_identity,
                     block_number=number,
                     block_hash=block_hash_value,
-                    block_timestamp=end_timestamp,
+                    block_timestamp=block_timestamp,
                     observed_address=pool_row.address,
                     acquisition_timestamp=acquired_at,
                     finality_status="finalized",
@@ -544,12 +551,20 @@ class CapitalFlowEngine:
                     trade_direction=decoded.trade_direction,
                     attributed_wallet=receipt_from if attributable else None,
                     attribution_status="AVAILABLE" if attributable else "UNAVAILABLE",
-                    attribution_reason=None if attributable else "router_or_contract_attribution_unavailable",
+                    attribution_reason=(
+                        None
+                        if attributable
+                        else (
+                            "multi_hop_ambiguous_swap"
+                            if ambiguous
+                            else "wallet_ownership_or_contract_attribution_unavailable"
+                        )
+                    ),
                     receipt_from=receipt_from,
                     receipt_status=str(receipt.get("status", "")).lower(),
                     wallet_code=wallet_code if attributable else None,
                     swap_status="AMBIGUOUS" if ambiguous else "AVAILABLE",
-                    rpc_request_count=used,
+                    rpc_request_count=adapter.request_meter.used if adapter.request_meter is not None else 0,
                     log_topics=topics_raw,
                     log_data=data,
                 )
@@ -563,6 +578,12 @@ class CapitalFlowEngine:
                 observations.append(row)
                 signatures.append(signed)
                 seen.add(evidence_id)
+            except EVMProviderUnavailable as exc:
+                if "budget exhausted" in str(exc):
+                    unavailable.add("swap_rpc_budget_exhausted")
+                    break
+                unavailable.add("swap_evidence_signing_failed")
+                continue
             except (
                 KeyError,
                 TypeError,
@@ -570,7 +591,6 @@ class CapitalFlowEngine:
                 AttributeError,
                 OverflowError,
                 CapitalFlowEvidenceError,
-                EVMProviderUnavailable,
             ):
                 unavailable.add("swap_evidence_signing_failed")
                 continue
@@ -737,6 +757,19 @@ def _preserved_signed_row(row: RawOnChainObservation, existing: Mapping[str, obj
         acquisition_timestamp=previous.acquisition_timestamp,
         receipt_verified_at=previous.receipt_verified_at,
     )
+
+
+def _receipt_swap_count(receipt: Mapping[str, object]) -> int:
+    entries = receipt.get("logs")
+    if not isinstance(entries, list):
+        return 0
+    topics = {V2_SWAP_TOPIC, V3_SWAP_TOPIC}
+    count = 0
+    for entry in entries:
+        entry_topics = entry.get("topics") if isinstance(entry, dict) else None
+        if isinstance(entry_topics, (list, tuple)) and entry_topics and str(entry_topics[0]).lower() in topics:
+            count += 1
+    return count
 
 
 def receipt_matches_log(receipt: dict[str, object], log: dict[str, object]) -> bool:

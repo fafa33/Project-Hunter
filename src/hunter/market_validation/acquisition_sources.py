@@ -24,7 +24,7 @@ from hunter.onchain.configuration import OnChainConfig, load_onchain_config
 from hunter.onchain.evidence import EvidenceTrust, verified_capital_flow_rows, verified_swap_rows
 from hunter.onchain.models import RawOnChainObservation
 from hunter.onchain.repository import OnChainRepository
-from hunter.onchain.wallet_performance import FIFO_POLICY, wallet_performance_from_swaps
+from hunter.onchain.wallet_performance import FIFO_POLICY, WalletPerformance, wallet_performance_from_swaps
 from hunter.scenario import SCENARIO_ENGINES, ScenarioRepository
 from hunter.scenario.models import ScenarioImpact
 from hunter.timing.models import TimingAssessment
@@ -269,6 +269,63 @@ def _capital_whale_context(
     )
 
 
+def normalized_freshness(
+    timestamp: datetime,
+    cutoff: datetime,
+    horizon: timedelta = timedelta(hours=24),
+) -> float:
+    horizon_seconds = horizon.total_seconds()
+    if horizon_seconds <= 0:
+        return 0.0
+    age_seconds = (cutoff - timestamp).total_seconds()
+    if age_seconds <= 0:
+        return 1.0
+    return max(0.0, 1.0 - age_seconds / horizon_seconds)
+
+
+def _performance_metrics(performance: tuple[WalletPerformance, ...]) -> dict[str, Scalar]:
+    fields: dict[str, Scalar] = {
+        "coverage": None,
+        "sample_size": 0,
+        "win_rate": None,
+        "cost_basis_usd": None,
+        "realized_pnl_usd": None,
+        "realized_return": None,
+    }
+    if not performance or any(item.status != "AVAILABLE" for item in performance):
+        return fields
+    with localcontext() as context:
+        context.prec = 28
+        sample_size = sum(item.sample_size for item in performance)
+        total_cost = sum((item.cost_basis_usd for item in performance if item.cost_basis_usd is not None), Decimal(0))
+        total_realized = sum(
+            (item.realized_pnl_usd for item in performance if item.realized_pnl_usd is not None), Decimal(0)
+        )
+        weighted_win_rate = sum(
+            (
+                item.win_rate * item.sample_size
+                for item in performance
+                if item.win_rate is not None and item.sample_size
+            ),
+            Decimal(0),
+        )
+        coverages = tuple(item.coverage for item in performance if item.coverage is not None)
+        fields.update(
+            {
+                "coverage": _scalar_decimal(min(coverages)) if len(coverages) == len(performance) else None,
+                "sample_size": sample_size,
+                "win_rate": _scalar_decimal(weighted_win_rate / sample_size) if sample_size else None,
+                "cost_basis_usd": _scalar_decimal(total_cost),
+                "realized_pnl_usd": _scalar_decimal(total_realized),
+                "realized_return": _scalar_decimal(total_realized / total_cost) if total_cost else None,
+                "target_asset_contracts": ",".join(
+                    sorted(item.target_asset_contract for item in performance if item.target_asset_contract)
+                ),
+            }
+        )
+    return fields
+
+
 def _swap_wallet_context(
     project_id: str,
     rows: Sequence[Mapping[str, object] | RawOnChainObservation],
@@ -296,17 +353,12 @@ def _swap_wallet_context(
     usd_metrics = capital_flow_usd_metrics(valuations)
     ids = tuple(sorted(row.evidence_id for row in verified))
     evidence_timestamps = tuple(row.block_timestamp for row in verified)
-    available = len(performance) == 1 and performance[0].status == "AVAILABLE" and bool(usd_metrics)
+    available = bool(performance) and all(item.status == "AVAILABLE" for item in performance) and bool(usd_metrics)
     metrics: dict[str, Scalar] = {
         "verified_swap_count": len(ids),
         "fifo_policy": FIFO_POLICY,
         "net_pnl_usd": "UNAVAILABLE",
-        "coverage": _scalar_decimal(performance[0].coverage) if performance else None,
-        "sample_size": performance[0].sample_size if performance else 0,
-        "win_rate": _scalar_decimal(performance[0].win_rate) if performance else None,
-        "cost_basis_usd": _scalar_decimal(performance[0].cost_basis_usd) if performance else None,
-        "realized_pnl_usd": _scalar_decimal(performance[0].realized_pnl_usd) if performance else None,
-        "realized_return": _scalar_decimal(performance[0].realized_return) if performance else None,
+        **_performance_metrics(performance),
         **usd_metrics,
     }
     missing_fields = ("fees", "unrealized_pnl", "net_pnl_usd")
@@ -318,10 +370,7 @@ def _swap_wallet_context(
         score=0.0,
         confidence=0.5 if available else 0.0,
         timestamp=max(evidence_timestamps),
-        freshness=max(
-            (max(0.0, (cutoff - item).total_seconds()) for item in evidence_timestamps),
-            default=0.0,
-        ),
+        freshness=normalized_freshness(max(evidence_timestamps), cutoff),
         source_record_ids=ids,
         evidence_ids=ids,
         repository_ids=ids,

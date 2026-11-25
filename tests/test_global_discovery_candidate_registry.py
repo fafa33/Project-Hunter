@@ -365,7 +365,7 @@ def test_identity_resolution_conflict_for_provider_disagreement(tmp_path) -> Non
         symbol="SHARED",
         primary_chain="eth",
         candidate_type="token",
-        metadata={"chain": "eth", "contract_address": "0xabc", "reserve_usd": "1000"},
+        metadata={"chain": "eth", "contract_address": "0xabc", "token_symbol": "SHARED_A"},
     )
     screener = DiscoveredCandidate(
         provider="dexscreener",
@@ -375,7 +375,7 @@ def test_identity_resolution_conflict_for_provider_disagreement(tmp_path) -> Non
         symbol="SHARED",
         primary_chain="eth",
         candidate_type="token",
-        metadata={"chain": "eth", "contract_address": "0xabc", "reserve_usd": "2000"},
+        metadata={"chain": "eth", "contract_address": "0xabc", "token_symbol": "SHARED_B"},
     )
     engine = CandidateDiscoveryEngine(
         repository,
@@ -393,6 +393,35 @@ def test_identity_resolution_conflict_for_provider_disagreement(tmp_path) -> Non
 
     assert result.outcome == "conflict"
     assert "provider_metadata_disagreement" in result.conflicts
+
+
+def test_volatile_discovery_metadata_refreshes_without_identity_conflict() -> None:
+    from hunter.discovery.repository import _merge_metadata
+
+    old = "2026-11-25T00:00:00+00:00"
+    new = "2026-11-25T01:00:00+00:00"
+    previous = {
+        "provider_disagreements": {},
+        "market_evidence_observed_at": old,
+        "official_link_observed_at": old,
+        "liquidity_usd": "100",
+    }
+    current = {
+        "market_evidence_observed_at": new,
+        "official_link_observed_at": new,
+        "liquidity_usd": "200",
+    }
+
+    refreshed = _merge_metadata(previous, current)
+
+    assert refreshed["market_evidence_observed_at"] == new
+    assert refreshed["official_link_observed_at"] == new
+    assert refreshed["liquidity_usd"] == "200"
+    assert refreshed.get("provider_disagreements", {}) == {}
+
+    genuine = _merge_metadata({"token_symbol": "AAA"}, {"token_symbol": "BBB"})
+
+    assert "token_symbol" in genuine["provider_disagreements"]
 
 
 def test_identity_resolution_rejected_and_unresolved_outcomes(tmp_path) -> None:

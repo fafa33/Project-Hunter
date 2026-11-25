@@ -26,6 +26,32 @@ QUEUE_STATUS_NOT_QUEUED = "not_queued"
 QUEUE_STATUS_QUEUED = "queued"
 QUEUE_STATUS_ELIGIBLE = "deep_analysis_eligible"
 
+VOLATILE_IDENTITY_METADATA_KEYS = frozenset(
+    {
+        "last_updated",
+        "market_evidence_observed_at",
+        "official_link_observed_at",
+        "observed_at",
+        "fetched_at",
+        "retrieved_at",
+        "scraped_at",
+        "seen_at",
+    }
+)
+REFRESHABLE_DISCOVERY_METADATA_KEYS = VOLATILE_IDENTITY_METADATA_KEYS | frozenset(
+    {
+        "liquidity_usd",
+        "volume_usd",
+        "volume_24h_usd",
+        "market_cap",
+        "fdv",
+        "price_usd",
+        "reserve_usd",
+        "tvl_usd",
+        "market_evidence_status",
+    }
+)
+
 
 @dataclass(frozen=True)
 class CandidateIdentifier:

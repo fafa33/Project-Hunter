@@ -13,6 +13,7 @@ from hunter.discovery.models import (
     QUEUE_STATUS_ELIGIBLE,
     QUEUE_STATUS_NOT_QUEUED,
     QUEUE_STATUS_QUEUED,
+    REFRESHABLE_DISCOVERY_METADATA_KEYS,
     SCREENING_STATUS_NOT_SCREENED,
     CandidateAlias,
     CandidateIdentifier,
@@ -1608,6 +1609,9 @@ def _merge_metadata(previous: dict[str, Any], current: dict[str, Any]) -> dict[s
     merged = dict(previous)
     for key, value in current.items():
         if value in (None, "", (), []):
+            continue
+        if key in REFRESHABLE_DISCOVERY_METADATA_KEYS:
+            merged[key] = value
             continue
         if key not in merged or merged[key] in (None, "", (), []):
             merged[key] = value

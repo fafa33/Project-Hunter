@@ -5,7 +5,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
@@ -23,6 +24,17 @@ class EVMProviderUnavailable(Exception):
     def __init__(self, message: str, *, failure_type: str = "unavailable") -> None:
         super().__init__(message)
         self.failure_type = failure_type
+
+
+@dataclass(slots=True)
+class RpcAttemptMeter:
+    limit: int
+    used: int = 0
+
+    def charge(self) -> None:
+        if self.used >= self.limit:
+            raise EVMProviderUnavailable("rpc attempt budget exhausted", failure_type="rate_limited")
+        self.used += 1
 
 
 @dataclass
@@ -74,6 +86,7 @@ class EVMJsonRpcAdapter:
         self._cooldown_failure_type: dict[str, str] = {}
         self._last_successful_provider: str | None = None
         self._last_successful_request: datetime | None = None
+        self._request_meter: RpcAttemptMeter | None = None
 
     @property
     def provider(self) -> str:
@@ -82,6 +95,20 @@ class EVMJsonRpcAdapter:
     @property
     def endpoint_identity(self) -> str:
         return endpoint_identity(self._active_endpoint)
+
+    @property
+    def request_meter(self) -> RpcAttemptMeter | None:
+        return self._request_meter
+
+    @contextmanager
+    def request_budget(self, limit: int) -> Iterator[RpcAttemptMeter]:
+        meter = RpcAttemptMeter(limit)
+        previous = self._request_meter
+        self._request_meter = meter
+        try:
+            yield meter
+        finally:
+            self._request_meter = previous
 
     def state(self) -> ProviderState:
         states = self.check_providers()
@@ -297,6 +324,8 @@ class EVMJsonRpcAdapter:
         raise EVMProviderUnavailable(str(errors[-1]) if errors else "provider unavailable")
 
     def _rpc_endpoint(self, endpoint: str, method: str, params: tuple[object, ...]) -> object:
+        if self._request_meter is not None:
+            self._request_meter.charge()
         errors: list[EVMProviderUnavailable] = []
         for attempt in range(self.config.retry_limit + 1):
             try:

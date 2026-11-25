@@ -1392,6 +1392,66 @@
       "guard": "Aggregate only verified per-chain attributed swaps, reject ambiguous attribution and partial inventory, compute exact Decimal FIFO realized P&L from causally valued buys and sells, leave net P&L unavailable without fees, and expose gross realized context without ranking insufficient evidence.",
       "test": "tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_partial_inventory_fees_and_cross_chain_are_unavailable; tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_fifo_profitable_and_losing_cases; tests/test_onchain_swap_wallet_evidence.py::test_market_validation_swap_wallet_context_uses_identity_and_usd_integration; tests/test_market_validation_input_authority.py::test_capital_flow_usd_metrics_preserve_evidence_and_never_infer_wallet_performance",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-154",
+      "class": "per-log-canonical-block-evidence",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQb comment PRRC_kwDOTRDHr8678AAAABF-oRt: each observed swap log must bind its own canonical block hash and timestamp, not the final block in the scanned range.",
+      "classification": "systemic",
+      "guard_boundary": "onchain swap log acquisition and canonical evidence binding",
+      "guard": "Fetch and validate the exact block for every accepted log, bind the log's block hash and block number to that block, and use that block's timestamp for receipt validation, evidence signing, freshness, and replay.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_swap_observations_use_each_logs_own_block_hash_and_timestamp",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-155",
+      "class": "rpc-attempt-budget-accounting",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQe comment PRRC_kwDOTRDHr8678AAAABF-oRu: every RPC attempt must be charged to the swap budget before dispatch, including failures and chainId/log calls.",
+      "classification": "systemic",
+      "guard_boundary": "bounded EVM RPC acquisition and adapter retry endpoints",
+      "guard": "Charge one attempt to the active request meter before each RPC endpoint dispatch, count failed attempts and internal chainId/log calls, and charge corroboration attempts so recorded counts match real network work.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_swap_rpc_meter_charges_each_attempt_before_dispatch_including_failures; tests/test_onchain_swap_wallet_evidence.py::test_swap_observations_record_actual_rpc_attempt_count",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-156",
+      "class": "wallet-fifo-cross-asset-contamination",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQf comment PRRC_kwDOTRDHr8678AAAABF-oRv: FIFO inventory must be isolated by exact target asset contract because a USDC buy cannot offset a WETH sell.",
+      "classification": "systemic",
+      "guard_boundary": "wallet performance FIFO aggregation and market-validation context",
+      "guard": "Group wallet performance by chain, exact attributed wallet, and exact target asset contract; keep each asset group independently unavailable when its own inventory is incomplete; aggregate only fully available groups.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_isolates_fifo_by_exact_target_asset",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-157",
+      "class": "volatile-discovery-metadata-identity-conflict",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQi comment PRRC_kwDOTRDHr8678AAAABF-oR4: refreshing volatile market observations must not create provider disagreements that block identity handoff.",
+      "classification": "systemic",
+      "guard_boundary": "discovery metadata merge and candidate identity resolution",
+      "guard": "Refresh volatile timestamps and market measurements by overwriting prior values without recording provider disagreements, while preserving conflicts for genuine identity evidence.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_volatile_discovery_metadata_refreshes_without_identity_conflict",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-158",
+      "class": "multi-hop-and-unproven-wallet-attribution",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQq comment PRRC_kwDOTRDHr8678AAAABF-oR8: full receipt swap-topic counts and recipient ownership must gate wallet attribution; final block hash and sender are not wallet proof.",
+      "classification": "systemic",
+      "guard_boundary": "swap receipt validation and attributed wallet evidence",
+      "guard": "Inspect the complete receipt for all V2/V3 swap-topic logs, mark any receipt with more than one swap log ambiguous, and attribute a wallet only when the decoded recipient equals the receipt sender and is not a router, pool, or contract.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_full_receipt_multihop_leg_is_not_wallet_attributed",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-159",
+      "class": "unnormalized-swap-freshness-scores",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQv comment PRRC_kwDOTRDHr8678AAAABF-oSD: freshness must decrease monotonically from 1.0 for current evidence to 0.0 at the horizon and must be boundary tested.",
+      "classification": "systemic",
+      "guard_boundary": "market-validation evidence freshness scoring and SPM context",
+      "guard": "Normalize swap freshness from elapsed time against an explicit horizon, clamp future evidence to 1.0 and horizon-or-older evidence to 0.0, and test current, midpoint, horizon, stale, and future boundaries.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_freshness_is_decreasing_and_normalized; tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_context_uses_normalized_freshness",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -3565,6 +3625,167 @@
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #587 owner criterion comment 7172851514: bounded Wallet Performance must consume only verified attributed swaps, separate gross/net and realized/unrealized, require sufficient inventory for FIFO, and avoid ranking insufficient evidence."
+      ]
+    },
+    {
+      "id": "DFF-072",
+      "title": "per-log-canonical-block-evidence-must-be-binding",
+      "invariant": "Canonical onchain swap evidence must use each log's own block hash, block number, and block timestamp after verifying that block from the trusted RPC adapter, never a range endpoint's hash or timestamp.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/adapters.py",
+          "src/hunter/onchain/engine.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "These paths turn raw EVM logs into signed evidence. Reusing the final block's identity for earlier logs breaks replay, freshness, and causal timestamp verification."
+      },
+      "prevention": {
+        "mechanism": "Fetch each accepted log's block, verify hash and number against the log, and bind the returned timestamp into the signed observation.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/engine.py::CapitalFlowEngine._collect_swap_observations"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_observations_use_each_logs_own_block_hash_and_timestamp",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQb comment PRRC_kwDOTRDHr8678AAAABF-oRt: per-log canonical block hash and timestamp are required across multiple blocks."
+      ]
+    },
+    {
+      "id": "DFF-073",
+      "title": "rpc-attempt-budget-must-count-every-dispatch",
+      "invariant": "Every RPC attempt must be charged to the active bounded budget before endpoint dispatch, including chainId, log, receipt, corroboration, and failed attempts.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/adapters.py",
+          "src/hunter/onchain/engine.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "These paths perform network acquisition. Counting only successful evidence RPCs lets costs exceed the configured budget and hides retries and failures."
+      },
+      "prevention": {
+        "mechanism": "Install a request meter around swap acquisition and charge it in the shared endpoint dispatcher before each transport call, then record the meter's actual usage in signed evidence.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/adapters.py::EVMJsonRpcAdapter.request_budget"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_rpc_meter_charges_each_attempt_before_dispatch_including_failures",
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_observations_record_actual_rpc_attempt_count",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQe comment PRRC_kwDOTRDHr8678AAAABF-oRu: every RPC attempt must consume budget, including failures."
+      ]
+    },
+    {
+      "id": "DFF-074",
+      "title": "wallet-fifo-must-be-exact-per-target-asset",
+      "invariant": "FIFO inventory must be isolated by exact chain, attributed wallet, and target asset contract; a buy in one asset cannot close a sell in a different asset.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/market_validation/acquisition_sources.py",
+          "src/hunter/onchain/wallet_performance.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "These paths aggregate swap fills into wallet performance. Mixing target assets manufactures realized P&L from unrelated inventory."
+      },
+      "prevention": {
+        "mechanism": "Group by exact target asset contract, normalize each group independently, keep incomplete groups unavailable, and aggregate metrics only from fully available groups.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/wallet_performance.py::wallet_performance_from_swaps"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_isolates_fifo_by_exact_target_asset",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQf comment PRRC_kwDOTRDHr8678AAAABF-oRv: USDC buys must not offset WETH sells."
+      ]
+    },
+    {
+      "id": "DFF-075",
+      "title": "volatile-discovery-metadata-refresh-must-not-conflict",
+      "invariant": "Volatile observation timestamps and market measurements must refresh in place without creating identity conflicts, while genuine identity disagreements still fail closed.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/discovery/identity.py",
+          "src/hunter/discovery/models.py",
+          "src/hunter/discovery/providers.py",
+          "src/hunter/discovery/repository.py",
+          "tests/test_global_discovery_candidate_registry.py",
+          "tests/test_engineering_context_authority.py"
+        ],
+        "rationale": "These paths merge repeated provider syncs into candidate registry identity evidence. Treating refreshable market observations as disagreements blocks handoff after normal acquisition updates."
+      },
+      "prevention": {
+        "mechanism": "Define shared volatile and refreshable metadata keys, overwrite those keys during merge, exclude only volatile keys from fingerprints, and preserve provider disagreement recording for all other metadata.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/repository.py::_merge_metadata"
+      },
+      "regression_evidence": [
+        "tests/test_global_discovery_candidate_registry.py::test_volatile_discovery_metadata_refreshes_without_identity_conflict",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQi comment PRRC_kwDOTRDHr8678AAAABF-oR4: volatile market evidence refresh must not create identity conflicts."
+      ]
+    },
+    {
+      "id": "DFF-076",
+      "title": "complete-receipt-and-recipient-ownership-gate-attribution",
+      "invariant": "Attribution decisions must inspect the complete receipt for all swap-topic logs, mark multi-hop swaps ambiguous, and prove wallet ownership through decoded recipient equality with the receipt sender.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/adapters.py",
+          "src/hunter/onchain/engine.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "These paths convert a matched log into wallet evidence. A single matched log, the final block hash, or a router sender does not prove that the wallet executed the exact swap."
+      },
+      "prevention": {
+        "mechanism": "Count all V2/V3 swap-topic logs in the full receipt, fail closed when more than one exists, require decoded recipient to equal receipt sender, and reject routers, pools, and contracts as attributed wallets.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/engine.py::_receipt_swap_count"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_full_receipt_multihop_leg_is_not_wallet_attributed",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQq comment PRRC_kwDOTRDHr8678AAAABF-oR8: full receipt and proven recipient ownership are required for wallet attribution."
+      ]
+    },
+    {
+      "id": "DFF-077",
+      "title": "normalized-freshness-must-be-monotonic-and-bounded",
+      "invariant": "Freshness scores consumed by evidence engines must be normalized from 1.0 for current evidence down to 0.0 at the evidence horizon, with future and stale evidence clamped and boundary tested.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/market_validation/acquisition_sources.py",
+          "tests/test_onchain_swap_wallet_evidence.py",
+          "tests/test_engineering_context_authority.py"
+        ],
+        "rationale": "These paths expose swap freshness to market-validation context. Raw elapsed seconds invert ranking and make newer evidence appear less fresh than older evidence."
+      },
+      "prevention": {
+        "mechanism": "Compute normalized freshness from elapsed time against an explicit horizon, clamp future evidence to 1.0 and horizon-or-older evidence to 0.0, and cover current, midpoint, horizon, stale, and future boundaries.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/market_validation/acquisition_sources.py::normalized_freshness"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_freshness_is_decreasing_and_normalized",
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_context_uses_normalized_freshness",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQv comment PRRC_kwDOTRDHr8678AAAABF-oSD: freshness must be decreasing and normalized with boundary tests."
       ]
     }
   ]

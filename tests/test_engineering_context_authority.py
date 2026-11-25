@@ -603,3 +603,35 @@ def test_issue_587_swap_wallet_evidence_families_reach_spm_context() -> None:
     assert "rpc budget" in str(by_id["DFF-070"].get("invariant", "")).lower()
     assert "fifo" in str(by_id["DFF-071"].get("invariant", "")).lower()
     assert "fees" in str(by_id["DFF-071"].get("invariant", "")).lower()
+
+
+def test_issue_587_current_head_codex_review_families_reach_spm_context() -> None:
+    context = EngineeringContextAuthority().compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        scope=_scope(
+            "src/hunter/discovery/identity.py",
+            "src/hunter/discovery/models.py",
+            "src/hunter/discovery/providers.py",
+            "src/hunter/discovery/repository.py",
+            "src/hunter/market_validation/acquisition_sources.py",
+            "src/hunter/onchain/adapters.py",
+            "src/hunter/onchain/engine.py",
+            "src/hunter/onchain/wallet_performance.py",
+            "tests/test_engineering_context_authority.py",
+            "tests/test_global_discovery_candidate_registry.py",
+            "tests/test_onchain_swap_wallet_evidence.py",
+        ),
+        budget_bytes=1_000_000,
+    )
+    families = cast(list[dict[str, object]], context["applicable_defect_families"])
+    by_id = {str(item.get("id")): item for item in families}
+    expected = ("DFF-072", "DFF-073", "DFF-074", "DFF-075", "DFF-076", "DFF-077")
+
+    for family_id in expected:
+        assert family_id in by_id
+    assert "own block" in str(by_id["DFF-072"].get("invariant", "")).lower()
+    assert "rpc attempt" in str(by_id["DFF-073"].get("invariant", "")).lower()
+    assert "target asset" in str(by_id["DFF-074"].get("invariant", "")).lower()
+    assert "refresh" in str(by_id["DFF-075"].get("invariant", "")).lower()
+    assert "complete receipt" in str(by_id["DFF-076"].get("invariant", "")).lower()
+    assert "normalized" in str(by_id["DFF-077"].get("invariant", "")).lower()
