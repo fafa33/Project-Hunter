@@ -7,6 +7,7 @@ ungated deep-analysis eligibility, and repeated screening during queue refresh.
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,7 @@ from hunter.discovery.models import (
     CandidateQueueEntry,
     CandidateRecord,
 )
+from hunter.discovery.repository import _identity_from_row
 
 
 def _now() -> datetime:
@@ -537,3 +539,20 @@ def test_T_collision_fanout_respects_batch_limit(tmp_path):
     for _ in range(4):
         assert engine.resolve_batch(limit=3).evaluated <= 3
     assert len(repository.latest_identity_by_candidate()) == 12
+
+
+def test_U_identity_row_legacy_and_current_columns(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    identifiers, sources = _contract_candidate("candidate:row", "row", "source-row")
+    _add(repository, candidate_id="candidate:row", slug="row", identifiers=identifiers, sources=sources)
+    CandidateIdentityResolutionEngine(repository).resolve_batch(limit=10)
+    with repository._connect() as conn:
+        current = conn.execute("SELECT * FROM identity_results").fetchone()
+        assert isinstance(current, sqlite3.Row)
+        names = [name for name in current.keys() if name not in {"policy_version", "evidence_fingerprint"}]
+        legacy = conn.execute("SELECT " + ", ".join(names) + " FROM identity_results").fetchone()
+        assert isinstance(legacy, sqlite3.Row)
+    assert _identity_from_row(current).policy_version == IDENTITY_POLICY_VERSION
+    assert _identity_from_row(current).evidence_fingerprint
+    assert _identity_from_row(legacy).policy_version == "identity-policy-v1"
+    assert _identity_from_row(legacy).evidence_fingerprint == ""

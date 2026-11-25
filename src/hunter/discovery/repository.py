@@ -1652,6 +1652,7 @@ def _queue_entry_from_row(row: sqlite3.Row) -> CandidateQueueEntry:
 
 
 def _identity_from_row(row: sqlite3.Row) -> CandidateIdentity:
+    columns = dict(zip(row.keys(), tuple(row), strict=True))
     return CandidateIdentity(
         candidate_id=str(row["candidate_id"]),
         outcome=str(row["outcome"]),  # type: ignore[arg-type]
@@ -1664,8 +1665,8 @@ def _identity_from_row(row: sqlite3.Row) -> CandidateIdentity:
         conflicts=tuple(_loads(row["conflicts"])),
         related_candidate_ids=tuple(_loads(row["related_candidate_ids"])),
         evaluated_at=_parse_dt(str(row["evaluated_at"])),
-        policy_version=str(row["policy_version"] if "policy_version" in row.keys() else "identity-policy-v1"),
-        evidence_fingerprint=str(row["evidence_fingerprint"] if "evidence_fingerprint" in row.keys() else ""),
+        policy_version=str(columns.get("policy_version", "identity-policy-v1")),
+        evidence_fingerprint=str(columns.get("evidence_fingerprint", "")),
     )
 
 

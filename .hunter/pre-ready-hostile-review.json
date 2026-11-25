@@ -159,7 +159,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "9d511d566dd2eaf0176d41604ca5b2173f0750d3",
+        "blob_sha": "b9cad3eda93562cc8490289e4898a5367e0ff1bf",
         "path": "tests/test_discovery_identity_handoff.py",
         "previous_path": "",
         "status": "added"
@@ -231,7 +231,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "ca02fa0f0a995f75c1d3b4b2887a88ead3062cd9",
+        "blob_sha": "9fc1f0bebf75dcbc3ea1b709c7b7b48bcbb41208",
         "path": "src/hunter/discovery/repository.py",
         "previous_path": "",
         "status": "modified"
@@ -249,16 +249,16 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "a2af59828aa7f3e1781c555c9701eafce662828a970fa2fe4cb99a1def005cc7"
+    "review_target_digest": "2477a4c1e7e21cbd505ec946f176cfa8d4e7520cc25f11086030f4a3d795e5f5"
   },
   "review_eligibility": {
     "mode": "pre_deployment",
     "pr_number": 788,
     "repository": "fafa33/Project-Hunter"
   },
-  "review_id": "edaaef6c1feed777c6d99ea57f2918c0a76e33b9764ab1bd518b1456a1588e47",
+  "review_id": "e154cdf96c0bf1e4dc8bc3b7250bc7c441fa41e3df1bbf8692e9e5a0a347cc61",
   "review_request": {
-    "claims_id": "edaaef6c1feed777c6d99ea57f2918c0a76e33b9764ab1bd518b1456a1588e47",
+    "claims_id": "e154cdf96c0bf1e4dc8bc3b7250bc7c441fa41e3df1bbf8692e9e5a0a347cc61",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
