@@ -21,7 +21,7 @@
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound, fully evidenced and non-merging until explicit owner approval.",
-        "evidence": "Issue #587 non-negotiable rules 1 and 4 and owner checkpoint require exact-head proof and no merge. PR #788 remains Draft at base a4a9b9e173bb15afaed2c162bda9708e93eb2411; this request is regenerated from the exact staged tree with digest 0a13718414521535b72820b9900bd88df379b9c92c41a909a75ae3d51fe242dd, signed by the approved writer channel, and publication is only through scripts/hunter_push.py. No merge, deploy, scheduler or production mutation was performed.",
+        "evidence": "Issue #587 non-negotiable rules 1 and 4 and owner checkpoint require exact-head proof and no merge. PR #788 remains Draft at base a4a9b9e173bb15afaed2c162bda9708e93eb2411; this request is regenerated from the exact staged tree with digest 0a13718414521535b72820b9900bd88df379b9c92c41a909a75ae3d51fe242dd, signed by the approved writer channel, and publication is only through scripts/hunter_push.py. No merge, deploy, scheduler or production mutation was performed. The two Codex findings PRRT_kwDOTRDHr868ZcTb and PRRT_kwDOTRDHr868ZcTy are resolved in correction commit e6ee1e76ab881aaa48909bb5759c92f2650579f1 with committed regression paths and exact node IDs recorded in findings resolution_evidence.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -269,7 +269,28 @@
         "outcome": "clear"
       }
     ],
-    "findings": [],
+    "findings": [
+      {
+        "evidence": "P1 cross-provider discovery_mode provenance created persistent identity conflicts. Correction commit e6ee1e76ab881aaa48909bb5759c92f2650579f1 adds normalize_identity_disagreements() across merge, identity conflict evaluation and fingerprint boundaries, treats discovery_mode as volatile observation provenance, and normalizes historical false disagreements while preserving genuine conflicts. RED evidence: Gateway job job_01M8CCZH5P008KPYJ2D7VRHK4H; GREEN evidence: focused pytest run passed tests/test_global_discovery_candidate_registry.py::test_dexscreener_batch_provenance_is_not_identity_evidence and tests/test_global_discovery_candidate_registry.py::test_volatile_discovery_metadata_refreshes_without_identity_conflict; registry learning PRH-166 and DFF-075.",
+        "id": "PRRT_kwDOTRDHr868ZcTb",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "e6ee1e76ab881aaa48909bb5759c92f2650579f1",
+          "regression_test": "tests/test_global_discovery_candidate_registry.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "P2 data-ops installer omitted required discovery jobs and violated the scheduler startup guard. Correction commit e6ee1e76ab881aaa48909bb5759c92f2650579f1 exports shared discovery_job_definitions()/DISCOVERY_JOB_IDS, consumes them in data_ops, adds discovery_source_health read-only routing, aligns configs/automation.yaml scalar discovery_mode, and makes require_discovery_automation() agree with installer output. GREEN evidence: focused pytest run passed tests/test_data_ops.py::test_data_ops_installer_satisfies_discovery_startup_guard, tests/test_discovery_identity_handoff.py::test_V_partial_discovery_automation_fails_closed and tests/test_global_discovery_candidate_registry.py::test_read_only_discovery_executor_isolated_from_privileged_operations; registry learning PRH-167 and DFF-068.",
+        "id": "PRRT_kwDOTRDHr868ZcTy",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "e6ee1e76ab881aaa48909bb5759c92f2650579f1",
+          "regression_test": "tests/test_data_ops.py"
+        },
+        "severity": "blocking"
+      }
+    ],
     "issue": "587",
     "review_target": [
       {
@@ -509,9 +530,9 @@
     ],
     "review_target_digest": "0a13718414521535b72820b9900bd88df379b9c92c41a909a75ae3d51fe242dd"
   },
-  "review_id": "061decaa903a7d7979ac9959cb9a23b08fc38f2d4829382626165ded13a236c2",
+  "review_id": "a86be1f83faa7486fab1abb19cf3261b7ff1459cc4b605740f7f059d5d49762e",
   "review_request": {
-    "claims_id": "061decaa903a7d7979ac9959cb9a23b08fc38f2d4829382626165ded13a236c2",
+    "claims_id": "a86be1f83faa7486fab1abb19cf3261b7ff1459cc4b605740f7f059d5d49762e",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
