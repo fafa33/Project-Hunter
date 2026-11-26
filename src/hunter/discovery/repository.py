@@ -935,6 +935,7 @@ class CandidateRegistryRepository:
         *,
         provider: str,
         endpoint: str,
+        quota_key: str,
         fingerprint: str,
         dedup_key: str | None,
         attempted_at: str,
@@ -946,6 +947,7 @@ class CandidateRegistryRepository:
         reservation_id: str,
     ) -> tuple[str | None, float, bool]:
         """Atomically reserve one request slot; returns (id, wait_seconds, duplicate)."""
+        effective_quota = quota_key.strip().lower() or f"{provider}:{endpoint}"
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             if dedup_key is not None and not retry:
@@ -963,11 +965,11 @@ class CandidateRegistryRepository:
                 rows = conn.execute(
                     """
                     SELECT attempted_at FROM capacity_requests
-                    WHERE provider = ? AND endpoint = ? AND attempted_at > ?
+                    WHERE quota_key = ? AND attempted_at > ?
                     ORDER BY attempted_at
                     LIMIT ?
                     """,
-                    (provider, endpoint, window_start, rate_limit_per_minute),
+                    (effective_quota, window_start, rate_limit_per_minute),
                 ).fetchall()
                 if len(rows) >= rate_limit_per_minute:
                     oldest = _parse_dt(str(rows[0]["attempted_at"]))
@@ -976,15 +978,16 @@ class CandidateRegistryRepository:
             conn.execute(
                 """
                 INSERT INTO capacity_requests (
-                    reservation_id, provider, endpoint, fingerprint, dedup_key, attempted_at,
+                    reservation_id, provider, endpoint, quota_key, fingerprint, dedup_key, attempted_at,
                     window_start, dedupe_until, state, retry, batch_size
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'in_flight', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_flight', ?, ?)
                 """,
                 (
                     reservation_id,
                     provider,
                     endpoint,
+                    effective_quota,
                     fingerprint,
                     dedup_key,
                     attempted_at,
@@ -1046,6 +1049,19 @@ class CandidateRegistryRepository:
                 """,
                 (provider, endpoint, until, reason, _dt(datetime.now(tz=UTC))),
             )
+
+    def capacity_quota_recent(self, *, window_start: str) -> dict[str, int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT quota_key, COUNT(*) AS recent
+                FROM capacity_requests
+                WHERE attempted_at > ?
+                GROUP BY quota_key
+                """,
+                (window_start,),
+            ).fetchall()
+        return {str(row["quota_key"]): int(row["recent"]) for row in rows}
 
     def capacity_summary(self, *, window_start: str) -> tuple[dict[str, Any], ...]:
         with self._connect() as conn:
@@ -1233,6 +1249,7 @@ class CandidateRegistryRepository:
                     reservation_id TEXT PRIMARY KEY,
                     provider TEXT NOT NULL,
                     endpoint TEXT NOT NULL,
+                    quota_key TEXT NOT NULL DEFAULT '',
                     fingerprint TEXT NOT NULL,
                     dedup_key TEXT,
                     attempted_at TEXT NOT NULL,
@@ -1310,6 +1327,17 @@ class CandidateRegistryRepository:
                 )
             if "evidence_fingerprint" not in columns:
                 conn.execute("ALTER TABLE identity_results ADD COLUMN evidence_fingerprint TEXT NOT NULL DEFAULT ''")
+            capacity_columns = {
+                str(row["name"]) for row in conn.execute("PRAGMA table_info(capacity_requests)").fetchall()
+            }
+            if "quota_key" not in capacity_columns:
+                conn.execute("ALTER TABLE capacity_requests ADD COLUMN quota_key TEXT NOT NULL DEFAULT ''")
+                conn.execute(
+                    "UPDATE capacity_requests SET quota_key = provider || ':' || endpoint WHERE quota_key = ''"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS capacity_requests_quota_idx ON capacity_requests (quota_key, attempted_at)"
+            )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)

@@ -609,6 +609,7 @@ def test_issue_587_current_head_codex_review_families_reach_spm_context() -> Non
     context = EngineeringContextAuthority().compile(
         ENGINEERING_IMPLEMENT_TASK_KEY,
         scope=_scope(
+            "src/hunter/discovery/capacity.py",
             "src/hunter/discovery/engine.py",
             "src/hunter/discovery/identity.py",
             "src/hunter/discovery/models.py",
@@ -638,6 +639,7 @@ def test_issue_587_current_head_codex_review_families_reach_spm_context() -> Non
         "DFF-080",
         "DFF-081",
         "DFF-082",
+        "DFF-083",
     )
 
     for family_id in expected:
@@ -653,3 +655,4 @@ def test_issue_587_current_head_codex_review_families_reach_spm_context() -> Non
     assert "retry attempt" in str(by_id["DFF-080"].get("invariant", "")).lower()
     assert "canonical chain" in str(by_id["DFF-081"].get("invariant", "")).lower()
     assert "consideration" in str(by_id["DFF-082"].get("invariant", "")).lower()
+    assert "provider-wide quota" in str(by_id["DFF-083"].get("invariant", "")).lower()

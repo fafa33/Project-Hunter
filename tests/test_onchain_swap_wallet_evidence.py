@@ -406,7 +406,9 @@ def test_router_and_pool_addresses_are_not_attributed_wallets(tmp_path: Path) ->
     )
 
     assert verified_swap_rows("uniswap", (router_claim,), config=cfg, repository=repo, trust=trust, as_of=NOW) == ()
-    accepted = verified_swap_rows("uniswap", (unattributed,), config=cfg, repository=repo, trust=trust, as_of=NOW)
+    accepted = verified_swap_rows(
+        "uniswap", (unattributed,), config=cfg, repository=repo, trust=trust, as_of=NOW + timedelta(minutes=2)
+    )
     assert [row.evidence_id for row in accepted] == [unattributed.evidence_id]
     performance = wallet_performance_from_swaps(
         accepted, {unattributed.evidence_id: valuation(unattributed.evidence_id, "17000")}, as_of=NOW
@@ -425,7 +427,9 @@ def test_multi_hop_same_asset_direction_is_ambiguous_not_double_counted(tmp_path
     combined = OnChainRepository(tmp_path / "runtime-combined")
     combined.save_raw((first, second))
     combined.save_evidence_signatures((first_signed, second_signed))
-    accepted = verified_swap_rows("uniswap", (first, second), config=cfg, repository=combined, trust=trust, as_of=NOW)
+    accepted = verified_swap_rows(
+        "uniswap", (first, second), config=cfg, repository=combined, trust=trust, as_of=NOW + timedelta(minutes=2)
+    )
 
     assert len(accepted) == 2
     result = wallet_performance_from_swaps(
@@ -446,7 +450,9 @@ def test_swap_amount_decimal_precision_is_exact(tmp_path: Path) -> None:
     raw = "12345678901234567890123456"
     row, _signed, cfg, repo, trust = signed_swap(tmp_path, usdc_raw=int(raw), log_index=1)
 
-    accepted = verified_swap_rows("uniswap", (row,), config=cfg, repository=repo, trust=trust, as_of=NOW)
+    accepted = verified_swap_rows(
+        "uniswap", (row,), config=cfg, repository=repo, trust=trust, as_of=NOW + timedelta(minutes=2)
+    )
 
     assert [item.evidence_id for item in accepted] == [row.evidence_id]
     assert accepted[0].normalized_amount == Decimal("12345678901234567890.123456")
@@ -552,11 +558,36 @@ def test_wallet_performance_fifo_keeps_exact_remaining_lot_at_large_scale() -> N
     assert insufficient.realized_pnl_usd is None
 
 
+def test_swap_evidence_rejects_post_cutoff_provenance(tmp_path: Path) -> None:
+    cutoff = NOW
+    row, _signed, cfg, repo, trust = signed_swap(
+        tmp_path,
+        log_index=1,
+        block_timestamp=cutoff - timedelta(minutes=1),
+    )
+
+    assert row.block_timestamp == cutoff - timedelta(minutes=1)
+    assert row.acquisition_timestamp == cutoff + timedelta(minutes=1)
+    assert row.receipt_verified_at == cutoff + timedelta(minutes=2)
+
+    assert verified_swap_rows("uniswap", (row,), config=cfg, repository=repo, trust=trust, as_of=cutoff) == ()
+    assert _swap_wallet_context("uniswap", (row,), as_of=cutoff, config=cfg, repository=repo, trust=trust) is None
+
+    causal = verified_swap_rows(
+        "uniswap", (row,), config=cfg, repository=repo, trust=trust, as_of=cutoff + timedelta(minutes=2)
+    )
+    assert [item.evidence_id for item in causal] == [row.evidence_id]
+
+
 def test_swap_evidence_replay_and_tamper_rejection(tmp_path: Path) -> None:
     row, _signed, cfg, repo, trust = signed_swap(tmp_path, log_index=1)
 
-    first = verified_swap_rows("uniswap", (row,), config=cfg, repository=repo, trust=trust, as_of=NOW)
-    second = verified_swap_rows("uniswap", (row,), config=cfg, repository=repo, trust=trust, as_of=NOW)
+    first = verified_swap_rows(
+        "uniswap", (row,), config=cfg, repository=repo, trust=trust, as_of=NOW + timedelta(minutes=2)
+    )
+    second = verified_swap_rows(
+        "uniswap", (row,), config=cfg, repository=repo, trust=trust, as_of=NOW + timedelta(minutes=2)
+    )
     tampered = replace(row, raw_amount="99999999999999")
 
     assert first == second
@@ -583,7 +614,7 @@ def test_market_validation_swap_wallet_context_uses_identity_and_usd_integration
     source = _swap_wallet_context(
         "uniswap",
         (buy, sell),
-        as_of=NOW,
+        as_of=NOW + timedelta(minutes=2),
         config=cfg,
         repository=combined,
         trust=trust,
@@ -617,7 +648,7 @@ def test_swap_wallet_context_does_not_substitute_target_notional_for_considerati
     source = _swap_wallet_context(
         "uniswap",
         (buy, sell),
-        as_of=NOW,
+        as_of=NOW + timedelta(minutes=2),
         config=cfg,
         repository=combined,
         trust=trust,
@@ -808,9 +839,10 @@ def test_swap_wallet_freshness_is_decreasing_and_normalized() -> None:
 
 
 def test_swap_wallet_context_uses_normalized_freshness(tmp_path: Path) -> None:
-    row, _signed, cfg, repo, trust = signed_swap(tmp_path, log_index=1, block_timestamp=NOW)
+    cutoff = NOW + timedelta(minutes=2)
+    row, _signed, cfg, repo, trust = signed_swap(tmp_path, log_index=1, block_timestamp=cutoff)
 
-    source = _swap_wallet_context("uniswap", (row,), as_of=NOW, config=cfg, repository=repo, trust=trust)
+    source = _swap_wallet_context("uniswap", (row,), as_of=cutoff, config=cfg, repository=repo, trust=trust)
 
     assert source is not None
     assert source.freshness == 1.0

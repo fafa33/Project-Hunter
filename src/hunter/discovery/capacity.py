@@ -31,6 +31,7 @@ class CapacityBudgetExhausted(ProviderUnavailableError):
 class EndpointCapacity:
     provider: str
     endpoint: str
+    rate_limit_group: str = ""
     rate_limit_per_minute: int | None = None
     rate_limit_provenance: str = "not_documented"
     batch_limit: int | None = None
@@ -109,6 +110,7 @@ class CapacityLedger:
         fingerprint_source = dedup_key or url
         fingerprint = hashlib.sha256(fingerprint_source.encode("utf-8")).hexdigest()
         limit = capacity.rate_limit_per_minute
+        quota_key = capacity.rate_limit_group.strip().lower() or f"{provider_name}:{endpoint_name}"
         cooldown_waited = False
 
         for _ in range(self.max_wait_cycles):
@@ -129,6 +131,7 @@ class CapacityLedger:
             reservation, wait, duplicate = self.repository.try_reserve_capacity(
                 provider=provider_name,
                 endpoint=endpoint_name,
+                quota_key=quota_key,
                 fingerprint=fingerprint,
                 dedup_key=dedup_key,
                 attempted_at=_dt(attempted_at),
@@ -182,7 +185,9 @@ class CapacityLedger:
         )
 
     def summary(self) -> dict[str, Any]:
-        rows = self.repository.capacity_summary(window_start=_dt(self._clock() - timedelta(seconds=60)))
+        window_start = _dt(self._clock() - timedelta(seconds=60))
+        rows = self.repository.capacity_summary(window_start=window_start)
+        group_recent = self.repository.capacity_quota_recent(window_start=window_start)
         endpoints: list[dict[str, Any]] = []
         totals = {
             "requests": 0,
@@ -198,8 +203,12 @@ class CapacityLedger:
             capacity = self.inventory.get(provider, endpoint)
             attempts = int(row["attempts"])
             recent = int(row["recent_attempts"])
+            quota_key = capacity.rate_limit_group.strip().lower() or f"{provider}:{endpoint}"
+            recent_for_quota = int(group_recent.get(quota_key, recent))
             remaining = (
-                max(0, capacity.rate_limit_per_minute - recent) if capacity.rate_limit_per_minute is not None else None
+                max(0, capacity.rate_limit_per_minute - recent_for_quota)
+                if capacity.rate_limit_per_minute is not None
+                else None
             )
             item = {
                 "provider": provider,
@@ -213,6 +222,7 @@ class CapacityLedger:
                 "recent_attempts": recent,
                 "remaining_quota": remaining,
                 "rate_limit_per_minute": capacity.rate_limit_per_minute,
+                "rate_limit_group": capacity.rate_limit_group,
                 "rate_limit_provenance": capacity.rate_limit_provenance,
                 "monthly_credits": capacity.monthly_credits,
                 "monthly_credits_provenance": capacity.monthly_credits_provenance,
@@ -254,6 +264,7 @@ def load_capacity_inventory(path: str | Path = DEFAULT_CAPACITY_INVENTORY) -> Ca
         item = EndpointCapacity(
             provider=str(raw.get("provider") or "").strip().lower(),
             endpoint=str(raw.get("endpoint") or "").strip().lower(),
+            rate_limit_group=str(raw.get("rate_limit_group") or "").strip().lower(),
             rate_limit_per_minute=_optional_int(raw.get("rate_limit_per_minute")),
             rate_limit_provenance=str(raw.get("rate_limit_provenance") or "not_documented"),
             batch_limit=_optional_int(raw.get("batch_limit")),
@@ -314,6 +325,7 @@ def _capacity_dict(item: EndpointCapacity) -> dict[str, Any]:
     return {
         "provider": item.provider,
         "endpoint": item.endpoint,
+        "rate_limit_group": item.rate_limit_group,
         "rate_limit_per_minute": item.rate_limit_per_minute,
         "rate_limit_provenance": item.rate_limit_provenance,
         "batch_limit": item.batch_limit,

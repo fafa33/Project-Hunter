@@ -674,8 +674,8 @@ def _validate_swap_observation(
     latest = max(row.acquisition_timestamp, row.receipt_verified_at, as_of)
     if (
         row.block_timestamp > as_of + FUTURE_TOLERANCE
-        or row.acquisition_timestamp > as_of + FUTURE_TOLERANCE
-        or row.receipt_verified_at > as_of + FUTURE_TOLERANCE
+        or row.acquisition_timestamp > as_of
+        or row.receipt_verified_at > as_of
         or row.receipt_verified_at < row.block_timestamp - FUTURE_TOLERANCE
         or row.acquisition_timestamp < row.block_timestamp - FUTURE_TOLERANCE
         or latest - row.block_timestamp > MAX_EVIDENCE_AGE

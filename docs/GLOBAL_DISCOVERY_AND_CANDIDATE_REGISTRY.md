@@ -149,8 +149,9 @@ ceiling is documented. Monthly credits remain null where no numeric allowance is
 `CapacityLedger` persists every HTTP attempt in additive registry tables
 (`capacity_requests`, `capacity_cooldowns`, and `capacity_cooldown_events`), including
 contract-corroboration calls made through the CoinGecko and GeckoTerminal adapters. It
-reserves one slot per documented/owner-specified endpoint family, enforces a rolling
-per-minute budget, deduplicates repeat batch requests inside a bounded window, and
+reserves one slot per declared quota group (endpoint families with genuinely independent
+ceilings remain separate), enforces a rolling per-minute budget, deduplicates repeat
+batch requests inside a bounded window, and
 persists bounded 429 cooldowns. Retries reuse the original batch deduplication key rather
 than being rejected as duplicates. Observed capacity is therefore evidence from the live
 run, not a claim derived from documentation.

@@ -895,6 +895,47 @@ def test_request_json_honors_bounded_retry_after_on_http_429(monkeypatch) -> Non
     assert sleeps == [5.0]  # provider window honored, capped at the configured ceiling
 
 
+def test_geckoterminal_public_api_rate_limit_is_shared_across_network_pool_and_token_requests(
+    tmp_path,
+) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    fixed_now = datetime(2026, 1, 1, tzinfo=UTC)
+    ledger = CapacityLedger(
+        repository,
+        load_capacity_inventory("configs/discovery_capacity.yaml"),
+        clock=lambda: fixed_now,
+        sleeper=lambda _seconds: None,
+        max_wait_cycles=1,
+    )
+    endpoints = ("networks", "network_pools", "token")
+
+    reservation_ids: list[str] = []
+    for index in range(10):
+        endpoint = endpoints[index % len(endpoints)]
+        reservation = ledger.reserve(
+            "geckoterminal",
+            endpoint,
+            f"https://api.geckoterminal.com/api/v2/{endpoint}/{index}",
+        )
+        reservation_ids.append(reservation.reservation_id)
+
+    assert len(set(reservation_ids)) == 10
+    summary = {str(row["endpoint"]): row for row in ledger.summary()["endpoints"]}
+    assert set(summary) == set(endpoints)
+    assert [int(summary[name]["attempts"]) for name in endpoints] == [4, 3, 3]
+    assert sum(int(summary[name]["recent_attempts"]) for name in endpoints) == 10
+
+    with pytest.raises(CapacityBudgetExhausted):
+        ledger.reserve(
+            "geckoterminal",
+            "token",
+            "https://api.geckoterminal.com/api/v2/networks/eth/tokens/overflow",
+        )
+
+    final = {str(row["endpoint"]): row for row in ledger.summary()["endpoints"]}
+    assert sum(int(row["attempts"]) for row in final.values()) == 10
+
+
 def test_solana_case_sensitive_addresses_survive_discovery_and_registry(tmp_path, monkeypatch) -> None:
     addresses = ("AbC123", "aBc123")
     payload = {
@@ -2216,6 +2257,73 @@ def test_dex_enrichment_cursor_rotates_past_empty_results_and_survives_restarts(
         (("eth", addresses[4]), ("eth", addresses[0])),
     ]
     assert repository.identifier_cursor("dexscreener-enrichment-backfill") == ("contract:eth", addresses[0])
+
+
+def test_dex_enrichment_preserves_rotated_chain_order_under_one_request_budget(tmp_path, monkeypatch) -> None:
+    path = str(tmp_path / "candidates.sqlite")
+    repository = CandidateRegistryRepository(path)
+    base_address = "0x" + "1" * 40
+    eth_address = "0x" + "2" * 40
+    candidates = (
+        DiscoveredCandidate(
+            provider="geckoterminal",
+            provider_id=f"base_{base_address}",
+            slug="base-contract",
+            name="Base contract",
+            symbol="BASE",
+            primary_chain="base",
+            candidate_type="token",
+            metadata={"chain": "base", "contract_address": base_address},
+        ),
+        DiscoveredCandidate(
+            provider="geckoterminal",
+            provider_id=f"eth_{eth_address}",
+            slug="eth-contract",
+            name="Ethereum contract",
+            symbol="ETH",
+            primary_chain="eth",
+            candidate_type="token",
+            metadata={"chain": "eth", "contract_address": eth_address},
+        ),
+    )
+    config = DiscoveryConfig(
+        registry_path=path,
+        seed_market_validation_universe=False,
+        providers={
+            "dexscreener": DiscoveryProviderConfig(enabled=True, max_requests_per_cycle=1, min_interval_seconds=0.0)
+        },
+    )
+    engine = CandidateDiscoveryEngine(
+        repository,
+        config,
+        providers={
+            "geckoterminal": StaticDiscoveryProvider("geckoterminal", candidates),
+            "dexscreener": DexScreenerDiscoveryProvider(backoff_seconds=0),
+        },
+    )
+    engine.sync(provider="geckoterminal", limit=10)
+
+    requested_paths: list[str] = []
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        requested_paths.append(urllib.parse.urlparse(request.full_url).path)
+        return _JsonResponse([])
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+
+    cursors: list[tuple[str, str] | None] = []
+    for _ in range(4):
+        run = engine.enrich_dex_contracts(mode="backfill")
+        assert run.status == "partial"
+        cursors.append(repository.identifier_cursor("dexscreener-enrichment-backfill"))
+
+    assert [path.split("/")[3] for path in requested_paths] == ["base", "ethereum", "base", "ethereum"]
+    assert cursors == [
+        ("contract:base", base_address),
+        ("contract:eth", eth_address),
+        ("contract:base", base_address),
+        ("contract:eth", eth_address),
+    ]
 
 
 def test_dex_enrichment_legacy_alias_cursor_resumes_at_canonical_identifier(tmp_path, monkeypatch) -> None:

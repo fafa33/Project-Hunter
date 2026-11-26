@@ -826,7 +826,7 @@ class DexScreenerDiscoveryProvider:
         processed = 0
         batches = 0
         truncated = False
-        for chain_id in sorted(groups):
+        for chain_id in groups:
             registry_chain, addresses = groups[chain_id]
             for start in range(0, len(addresses), batch_limit):
                 chunk = addresses[start : start + batch_limit]
