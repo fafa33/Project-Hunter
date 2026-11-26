@@ -11,7 +11,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from hunter.execution.clock import Clock, SystemClock
 from hunter.execution.identity import identity
 from hunter.market_validation.configuration import load_market_validation_config
-from hunter.onchain.adapters import EVMJsonRpcAdapter, EVMProviderUnavailable
+from hunter.onchain.adapters import EVMJsonRpcAdapter, EVMProviderUnavailable, RpcAttemptBudgetExhausted
 from hunter.onchain.configuration import OnChainConfig, load_onchain_config
 from hunter.onchain.dex import (
     V2_SWAP_TOPIC,
@@ -112,6 +112,11 @@ class CapitalFlowEngine:
                 evidence = observations + swap_observations
                 signatures = signatures + swap_signatures
                 acquisition_unavailable = tuple(sorted({*acquisition_unavailable, *swap_unavailable}))
+            except RpcAttemptBudgetExhausted:
+                snapshot = _unavailable_snapshot(surface, "rpc_budget_exhausted", ("live_provider",))
+                self.repository.save_snapshots((snapshot,))
+                snapshots.append(snapshot)
+                continue
             except EVMProviderUnavailable:
                 snapshot = _unavailable_snapshot(surface, "provider_unavailable", ("live_provider",))
                 self.repository.save_snapshots((snapshot,))
@@ -356,6 +361,8 @@ class CapitalFlowEngine:
                         ):
                             unavailable.add("transfer_evidence_signing_failed")
                             continue
+                except RpcAttemptBudgetExhausted:
+                    raise
                 except EVMProviderUnavailable:
                     unavailable.add("transfer_corroboration_unavailable")
                     continue
@@ -427,6 +434,8 @@ class CapitalFlowEngine:
         unavailable: set[str] = set()
         try:
             identity_error = verify_pool_identity(pool_row, adapter, end_block)
+        except RpcAttemptBudgetExhausted:
+            raise
         except (EVMProviderUnavailable, ValueError, TypeError):
             return (), (), ("pool_identity_unavailable",)
         if identity_error is not None:
@@ -436,6 +445,8 @@ class CapitalFlowEngine:
             return (), (), ("unsupported_dex_schema",)
         try:
             logs = adapter.logs(address=pool_row.address, from_block=start_block, to_block=end_block, topics=(topic,))
+        except RpcAttemptBudgetExhausted:
+            raise
         except EVMProviderUnavailable:
             return (), (), ("swap_log_provider_unavailable",)
         existing_rows = {
@@ -578,10 +589,10 @@ class CapitalFlowEngine:
                 observations.append(row)
                 signatures.append(signed)
                 seen.add(evidence_id)
-            except EVMProviderUnavailable as exc:
-                if "budget exhausted" in str(exc):
-                    unavailable.add("swap_rpc_budget_exhausted")
-                    break
+            except RpcAttemptBudgetExhausted:
+                unavailable.add("swap_rpc_budget_exhausted")
+                break
+            except EVMProviderUnavailable:
                 unavailable.add("swap_evidence_signing_failed")
                 continue
             except (

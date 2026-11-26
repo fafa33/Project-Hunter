@@ -126,65 +126,67 @@ def _performance(
     missing = [row.evidence_id for row in rows if _valuation_usd(valuations.get(row.evidence_id)) is None]
     if missing:
         return _unavailable(base, "usd_valuation_unavailable", ("usd_valuation",))
-    lots: deque[list[Decimal]] = deque()
-    cost_basis = Decimal(0)
-    proceeds = Decimal(0)
-    closed = 0
-    wins = 0
-    covered = Decimal(0)
-    total_sold = Decimal(0)
-    for row in sorted(rows, key=lambda item: (item.block_number, item.log_index or 0, item.evidence_id)):
-        amount = row.normalized_amount or Decimal(0)
-        value = _valuation_usd(valuations[row.evidence_id])
-        if value is None or amount <= 0:
-            return _unavailable(base, "usd_valuation_unavailable", ("usd_valuation",))
-        if row.trade_direction == "buy":
-            lots.append([amount, value])
-            continue
-        if row.trade_direction != "sell":
-            return _unavailable(base, "unsupported_trade_direction", ("trade_direction",))
-        total_sold += amount
-        remaining = amount
-        sale_cost = Decimal(0)
-        while remaining > 0:
-            if not lots:
-                return _unavailable(base, "partial_inventory_history", ("partial_inventory",))
-            lot = lots[0]
-            taken = min(lot[0], remaining)
-            cost = (lot[1] * taken) / lot[0] if lot[0] else Decimal(0)
-            sale_cost += cost
-            lot[0] -= taken
-            lot[1] -= cost
-            remaining -= taken
-            covered += taken
-            if lot[0] == 0:
-                lots.popleft()
-        cost_basis += sale_cost
-        proceeds += value
-        closed += 1
-        if value - sale_cost > 0:
-            wins += 1
-    if closed == 0 or total_sold <= 0:
-        return _unavailable(base, "insufficient_closed_inventory", ("sample_size",))
+    precision_inputs = [row.normalized_amount or Decimal(0) for row in rows]
+    precision_inputs.extend(_valuation_usd(valuations.get(row.evidence_id)) or Decimal(0) for row in rows)
     with localcontext() as context:
-        context.prec = 28
+        context.prec = _precision_for_decimals(precision_inputs)
+        lots: deque[list[Decimal]] = deque()
+        cost_basis = Decimal(0)
+        proceeds = Decimal(0)
+        closed = 0
+        wins = 0
+        covered = Decimal(0)
+        total_sold = Decimal(0)
+        for row in sorted(rows, key=lambda item: (item.block_number, item.log_index or 0, item.evidence_id)):
+            amount = row.normalized_amount or Decimal(0)
+            value = _valuation_usd(valuations[row.evidence_id])
+            if value is None or amount <= 0:
+                return _unavailable(base, "usd_valuation_unavailable", ("usd_valuation",))
+            if row.trade_direction == "buy":
+                lots.append([amount, value])
+                continue
+            if row.trade_direction != "sell":
+                return _unavailable(base, "unsupported_trade_direction", ("trade_direction",))
+            total_sold += amount
+            remaining = amount
+            sale_cost = Decimal(0)
+            while remaining > 0:
+                if not lots:
+                    return _unavailable(base, "partial_inventory_history", ("partial_inventory",))
+                lot = lots[0]
+                taken = min(lot[0], remaining)
+                cost = (lot[1] * taken) / lot[0] if lot[0] else Decimal(0)
+                sale_cost += cost
+                lot[0] -= taken
+                lot[1] -= cost
+                remaining -= taken
+                covered += taken
+                if lot[0] == 0:
+                    lots.popleft()
+            cost_basis += sale_cost
+            proceeds += value
+            closed += 1
+            if value - sale_cost > 0:
+                wins += 1
+        if closed == 0 or total_sold <= 0:
+            return _unavailable(base, "insufficient_closed_inventory", ("sample_size",))
         realized = proceeds - cost_basis
         realized_return = realized / cost_basis if cost_basis else None
         win_rate = Decimal(wins) / Decimal(closed)
         coverage = covered / total_sold
-    return WalletPerformance(
-        status="AVAILABLE",
-        wallet=wallet,
-        chain_id=chain_id,
-        target_asset_contract=target_asset_contract,
-        realized_pnl_usd=realized,
-        cost_basis_usd=cost_basis,
-        proceeds_usd=proceeds,
-        realized_return=realized_return,
-        coverage=coverage,
-        sample_size=closed,
-        win_rate=win_rate,
-    )
+        return WalletPerformance(
+            status="AVAILABLE",
+            wallet=wallet,
+            chain_id=chain_id,
+            target_asset_contract=target_asset_contract,
+            realized_pnl_usd=realized,
+            cost_basis_usd=cost_basis,
+            proceeds_usd=proceeds,
+            realized_return=realized_return,
+            coverage=coverage,
+            sample_size=closed,
+            win_rate=win_rate,
+        )
 
 
 def _unavailable(base: WalletPerformance, reason: str, fields: tuple[str, ...]) -> WalletPerformance:
@@ -209,3 +211,13 @@ def _valuation_usd(value: object) -> Decimal | None:
         raw = value.get("value_usd")
         return None if raw is None else Decimal(str(raw))
     return None
+
+
+def _precision_for_decimals(values: list[Decimal]) -> int:
+    finite = [item for item in values if item.is_finite()]
+    non_zero = [item for item in finite if item]
+    if not non_zero:
+        return 28
+    highest = max(item.adjusted() for item in non_zero)
+    lowest = min(item.as_tuple().exponent for item in finite)
+    return max(28, highest - lowest + 1)

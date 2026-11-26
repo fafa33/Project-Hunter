@@ -26,6 +26,11 @@ class EVMProviderUnavailable(Exception):
         self.failure_type = failure_type
 
 
+class RpcAttemptBudgetExhausted(EVMProviderUnavailable):
+    def __init__(self) -> None:
+        super().__init__("rpc attempt budget exhausted", failure_type="local_budget_exhausted")
+
+
 @dataclass(slots=True)
 class RpcAttemptMeter:
     limit: int
@@ -33,7 +38,7 @@ class RpcAttemptMeter:
 
     def charge(self) -> None:
         if self.used >= self.limit:
-            raise EVMProviderUnavailable("rpc attempt budget exhausted", failure_type="rate_limited")
+            raise RpcAttemptBudgetExhausted()
         self.used += 1
 
 
@@ -175,6 +180,8 @@ class EVMJsonRpcAdapter:
                 receipt = self._rpc_endpoint(endpoint, "eth_getTransactionReceipt", (tx,))
                 if isinstance(receipt, dict):
                     results.append((name, receipt))
+            except RpcAttemptBudgetExhausted:
+                raise
             except EVMProviderUnavailable:
                 continue
         return tuple(results)
@@ -245,6 +252,8 @@ class EVMJsonRpcAdapter:
         try:
             chain_id = self._rpc_endpoint(endpoint, "eth_chainId", ())
             latest = self._rpc_endpoint(endpoint, "eth_blockNumber", ())
+        except RpcAttemptBudgetExhausted:
+            raise
         except EVMProviderUnavailable as exc:
             cooldown_until = _cooldown(now, exc.failure_type)
             if cooldown_until is not None:
@@ -315,6 +324,8 @@ class EVMJsonRpcAdapter:
                 self._last_successful_provider = endpoint
                 self._last_successful_request = datetime.now(tz=UTC)
                 return result
+            except RpcAttemptBudgetExhausted:
+                raise
             except EVMProviderUnavailable as exc:
                 errors.append(exc)
                 cooldown_until = _cooldown(datetime.now(tz=UTC), exc.failure_type)
@@ -331,6 +342,8 @@ class EVMJsonRpcAdapter:
             try:
                 transport = self._single_transport or self._transport_factory(endpoint)
                 return transport.rpc(method, params)
+            except RpcAttemptBudgetExhausted:
+                raise
             except EVMProviderUnavailable as exc:
                 errors.append(exc)
                 if attempt < self.config.retry_limit:

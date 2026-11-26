@@ -1224,6 +1224,49 @@ def test_geckoterminal_checkpoint_recovers_and_detects_new_pools(tmp_path, monke
     assert third.candidates_created == 1  # only the new pool's base token is new
 
 
+def test_geckoterminal_candidates_are_persisted_before_checkpoint_advances(tmp_path, monkeypatch) -> None:
+    api = _FakeGeckoApi(
+        {1: [{"id": "eth"}]},
+        {("eth", 1): _gecko_pool_payload("eth", "0xpool1", "0xtoken1")},
+    )
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(
+        providers={
+            "geckoterminal": DiscoveryProviderConfig(enabled=True, max_requests_per_cycle=3),
+        }
+    )
+    original_upsert = repository.upsert_many
+    calls = 0
+
+    def failing_upsert(candidates: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("injected persistence failure")
+        return original_upsert(candidates)
+
+    monkeypatch.setattr(repository, "upsert_many", failing_upsert)
+    engine = CandidateDiscoveryEngine(repository, config, providers={"geckoterminal": GeckoTerminalDiscoveryProvider()})
+
+    with pytest.raises(RuntimeError, match="injected persistence failure"):
+        engine.sync(provider="geckoterminal")
+
+    assert calls == 1
+    assert repository.scan_state("geckoterminal") is None
+
+    recovered = engine.sync(provider="geckoterminal")
+
+    assert calls == 2
+    assert recovered.candidates_created == 2
+    assert repository.scan_state("geckoterminal") is not None
+    assert len(repository.pool_observations()) == 1
+
+
 def test_geckoterminal_rate_budget_and_failure_recovery_keep_partial_state(monkeypatch) -> None:
     from hunter.discovery.providers import ScanBudget
 

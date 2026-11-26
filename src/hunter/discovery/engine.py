@@ -146,6 +146,8 @@ class CandidateDiscoveryEngine:
         source = self.providers[provider]
         scan_status = "succeeded"
         scan_message = ""
+        gecko_state: dict[str, object] | None = None
+        gecko_status = ""
         try:
             provider_config = self.config.provider(provider)
             budget = limit or provider_config.limit or 250
@@ -177,7 +179,8 @@ class CandidateDiscoveryEngine:
                 )
                 new_pools = self.repository.save_pool_observations(result.pool_observations)
                 result.state["new_pools"] = new_pools
-                self.repository.save_scan_state(provider, result.state, result.status)
+                gecko_state = result.state
+                gecko_status = result.status
                 scan_status = result.status
                 scan_message = (
                     f"requests={result.requests} networks={len(result.network_ids)} "
@@ -211,6 +214,8 @@ class CandidateDiscoveryEngine:
             return run
         candidates = tuple(self._provider_candidate(item, observed_at=started_at) for item in raw_candidates)
         created, updated = self.repository.upsert_many(candidates)
+        if gecko_state is not None:
+            self.repository.save_scan_state(provider, gecko_state, gecko_status)
         message = (scan_message or f"synced {len(candidates)} candidates") + self._capacity_suffix(ledger_before)
         run = DiscoveryRun(
             run_id=identity("candidate-discovery-run", {"provider": provider, "started_at": started_at}),

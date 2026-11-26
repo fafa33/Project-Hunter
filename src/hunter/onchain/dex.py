@@ -5,7 +5,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal, localcontext
 from typing import Any, Literal
 
-from hunter.onchain.adapters import EVMProviderUnavailable
+from hunter.onchain.adapters import EVMProviderUnavailable, RpcAttemptBudgetExhausted
 from hunter.onchain.models import DexPoolConfig
 
 V2_SWAP_TOPIC = "0xd78ad95fa46c994b6551d0da85fc275fe613ce37657fb8d5e3d130840159d822"
@@ -133,6 +133,8 @@ def verify_pool_identity(pool_row: DexPoolConfig, adapter: Any, block_number: in
         token1 = _address_from_word(adapter.contract_call(pool_row.address, TOKEN1_SELECTOR, block_number))
         decimals0 = int(str(adapter.contract_call(pool_row.token0, DECIMALS_SELECTOR, block_number)), 16)
         decimals1 = int(str(adapter.contract_call(pool_row.token1, DECIMALS_SELECTOR, block_number)), 16)
+    except RpcAttemptBudgetExhausted:
+        raise
     except (EVMProviderUnavailable, ValueError, TypeError):
         return "pool_identity_rpc_unavailable"
     if token0 != pool_row.token0 or token1 != pool_row.token1:

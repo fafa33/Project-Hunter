@@ -523,6 +523,35 @@ def test_wallet_performance_fifo_profitable_and_losing_cases() -> None:
     assert losing.win_rate == Decimal("0.5")
 
 
+def test_wallet_performance_fifo_keeps_exact_remaining_lot_at_large_scale() -> None:
+    huge = Decimal("1000000000000000000000000000000")
+    remaining = Decimal("999999999999999999999999999999")
+
+    def exact_valuation(row: RawOnChainObservation, usd: str) -> UsdValuation:
+        return replace(valuation(row.evidence_id, "1", "1"), amount=row.normalized_amount, value_usd=Decimal(usd))
+
+    buy = signed_observation(1, "buy", str(huge), WALLET)
+    small_sell = signed_observation(2, "sell", "1", WALLET)
+    remaining_sell = signed_observation(3, "sell", str(remaining), WALLET)
+    excess_sell = signed_observation(4, "sell", str(huge), WALLET)
+    valuations = {
+        buy.evidence_id: exact_valuation(buy, str(huge)),
+        small_sell.evidence_id: exact_valuation(small_sell, "2"),
+        remaining_sell.evidence_id: exact_valuation(remaining_sell, "2999999999999999999999999999997"),
+        excess_sell.evidence_id: exact_valuation(excess_sell, "3000000000000000000000000000000"),
+    }
+
+    sufficient = wallet_performance_from_swaps((buy, small_sell, remaining_sell), valuations, as_of=NOW)[0]
+    insufficient = wallet_performance_from_swaps((buy, small_sell, excess_sell), valuations, as_of=NOW)[0]
+
+    assert sufficient.status == "AVAILABLE"
+    assert sufficient.coverage == Decimal("1")
+    assert sufficient.cost_basis_usd == huge
+    assert insufficient.status == "UNAVAILABLE"
+    assert "partial_inventory" in (insufficient.reason or "")
+    assert insufficient.realized_pnl_usd is None
+
+
 def test_swap_evidence_replay_and_tamper_rejection(tmp_path: Path) -> None:
     row, _signed, cfg, repo, trust = signed_swap(tmp_path, log_index=1)
 
@@ -667,6 +696,25 @@ def test_swap_rpc_meter_charges_each_attempt_before_dispatch_including_failures(
 
     assert meter.used == 2
     assert transport.calls == ["eth_chainId", "eth_getLogs"]
+
+
+def test_local_rpc_budget_exhaustion_propagates_without_provider_cooldown() -> None:
+    from hunter.onchain import adapters
+
+    budget_error = adapters.RpcAttemptBudgetExhausted
+    transport = SwapTransport()
+    adapter = EVMJsonRpcAdapter(chain(swap_rpc_budget=2), transport=transport)
+
+    with adapter.request_budget(1) as meter:
+        assert adapter.latest_finalized_block() == 936
+        with pytest.raises(budget_error) as exc:
+            adapter.logs(address=POOL, from_block=900, to_block=936, topics=(V3_SWAP_TOPIC,))
+
+    assert exc.value.failure_type == "local_budget_exhausted"
+    assert meter.used == 1
+    assert transport.calls == ["eth_blockNumber"]
+    assert adapter._cooldown_until == {}
+    assert adapter._cooldown_failure_type == {}
 
 
 def test_swap_observations_record_actual_rpc_attempt_count(tmp_path: Path) -> None:
