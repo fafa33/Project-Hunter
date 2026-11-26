@@ -15,13 +15,13 @@
       },
       {
         "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
-        "evidence": "Per-log block binding, exact target-asset FIFO isolation, full-receipt ambiguity, recipient ownership proof, and normalized freshness all fail closed; 137 focused regressions and the Defect Prevention Guard pass.",
+        "evidence": "Per-log block binding, exact target-asset FIFO isolation, full-receipt ambiguity, recipient ownership proof, and normalized freshness all fail closed; the prior 137 remediation regressions and the current 44 lifecycle/receipt/context regressions pass, and no missing receipt bypass is claimed.",
         "id": "AC-587-03",
         "verdict": "pending-deployment"
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "Fresh writer judgement after guard-reference correction; Ruff, Black, JSON validation, Defect Prevention Guard, and full Mypy pass; PR #788 remains Draft and no merge or deployment is asserted.",
+        "evidence": "Fresh writer judgement for the lifecycle-only record: the recurrence was separated into timing, collector evidence-contract, reviewer-independent signing, signed persistence and mutable transport causes; DFF-057 and PRH-160 were extended from existing tests without new code; JSON validation and 44 focused regressions pass; PR #788 remains Draft at bf6799b0 and no merge or deployment is asserted.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -330,7 +330,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "af3faa94719ee4bb1ac52371acd34c652b83306a",
+        "blob_sha": "20c06b696338fa1aebf3387bed847693fed47a40",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -498,16 +498,16 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "2fb2fb4fbf337e1ff2d1e86469312c9d48b267d183f23802ebe0420a76f79ada"
+    "review_target_digest": "bb47278dce36f81952b32459533ef130d67d1ac009848e003f526247fae4b300"
   },
   "review_eligibility": {
     "mode": "pre_deployment",
     "pr_number": 788,
     "repository": "fafa33/Project-Hunter"
   },
-  "review_id": "67afacd73ca683bfaa9e4146db630638773ae39deba511dc54d6c3d1ebc1609b",
+  "review_id": "f448aa022bcb57bc358ef3c99f4e305e7f59fd03fa7c05b9e61d32e16ea687cc",
   "review_request": {
-    "claims_id": "67afacd73ca683bfaa9e4146db630638773ae39deba511dc54d6c3d1ebc1609b",
+    "claims_id": "f448aa022bcb57bc358ef3c99f4e305e7f59fd03fa7c05b9e61d32e16ea687cc",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
