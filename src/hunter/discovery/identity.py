@@ -1,14 +1,79 @@
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
-from hunter.discovery.models import CandidateIdentity, CandidateRecord, DiscoveryConflict
+from hunter.discovery.models import (
+    IDENTITY_POLICY_VERSION,
+    VOLATILE_IDENTITY_METADATA_KEYS,
+    CandidateIdentity,
+    CandidateRecord,
+    DiscoveryConflict,
+    normalize_identity_disagreements,
+)
 from hunter.discovery.repository import CandidateRegistryRepository
 from hunter.execution.identity import identity
 
 TRUSTED_PROVIDER_NAMESPACES = {"coingecko", "defillama", "hunter_project", "github_repository"}
+
+
+def identity_evidence_fingerprint(candidate: CandidateRecord, *, related_candidate_ids: tuple[str, ...] = ()) -> str:
+    """Stable digest of the persisted evidence that may change an identity outcome."""
+    metadata = {
+        str(key): value
+        for key, value in sorted(normalize_identity_disagreements(candidate.metadata).items())
+        if str(key) not in VOLATILE_IDENTITY_METADATA_KEYS
+    }
+    payload = {
+        "candidate": candidate.candidate_id,
+        "slug": candidate.slug,
+        "symbol": (candidate.symbol or "").upper(),
+        "candidate_type": candidate.candidate_type,
+        "identifiers": tuple(
+            sorted(
+                (
+                    item.namespace,
+                    item.value,
+                    item.source,
+                    round(item.confidence, 4),
+                )
+                for item in candidate.identifiers
+            )
+        ),
+        "aliases": tuple(
+            sorted((item.alias_type, item.alias, round(item.confidence, 4)) for item in candidate.aliases)
+        ),
+        "source_ids": tuple(sorted({*(candidate.source_ids), *(item.source_id for item in candidate.sources)})),
+        "evidence_ids": tuple(sorted(candidate.evidence_ids)),
+        "metadata": metadata,
+        # Ticker collisions are part of identity evidence: adding a colliding
+        # candidate must invalidate prior outcomes on both sides.
+        "related_candidate_ids": tuple(sorted(related_candidate_ids)),
+    }
+    return identity("candidate-identity-evidence", payload)
+
+
+def identity_is_accepted(
+    result: CandidateIdentity | None,
+    *,
+    candidate: CandidateRecord | None = None,
+    related_candidate_ids: tuple[str, ...] | None = None,
+) -> bool:
+    """True only for a current, policy-valid identity that gates deep analysis."""
+    if result is None or result.policy_version != IDENTITY_POLICY_VERSION:
+        return False
+    if result.outcome not in {"exact", "probable"} or result.confidence < 0.7:
+        return False
+    if "provider_metadata_disagreement" in result.conflicts:
+        return False
+    if candidate is not None:
+        related = related_candidate_ids
+        if related is None:
+            related = result.related_candidate_ids
+        if result.evidence_fingerprint != identity_evidence_fingerprint(candidate, related_candidate_ids=related):
+            return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -16,6 +81,7 @@ class IdentityResolutionSummary:
     evaluated: int
     by_outcome: dict[str, int]
     conflicts_persisted: int
+    unchanged: int = 0
 
     @property
     def coverage(self) -> float:
@@ -32,23 +98,79 @@ class CandidateIdentityResolutionEngine:
     def resolve_all(self, *, batch_size: int = 1000) -> IdentityResolutionSummary:
         now = datetime.now(tz=UTC)
         ticker_groups = self.repository.alias_groups(alias_type="ticker_symbol")
-        conflicts_persisted = 0
         counts: Counter[str] = Counter()
         evaluated = 0
+        conflicts_persisted = 0
         for batch in self.repository.iter_candidates(batch_size=batch_size):
-            results = tuple(
-                self.resolve_candidate(candidate, ticker_groups=ticker_groups, evaluated_at=now) for candidate in batch
-            )
-            self.repository.save_identity_results(results)
-            for result in results:
-                evaluated += 1
-                counts[result.outcome] += 1
-                if result.outcome in {"conflict", "ambiguous"}:
-                    self.repository.save_conflict(_conflict_for_identity(result))
-                    conflicts_persisted += 1
+            results = self._evaluate_batch(batch, ticker_groups=ticker_groups, evaluated_at=now)
+            conflicts_persisted += self._persist_results(results)
+            evaluated += len(results)
+            counts.update(result.outcome for result in results)
         return IdentityResolutionSummary(
             evaluated=evaluated, by_outcome=dict(counts), conflicts_persisted=conflicts_persisted
         )
+
+    def resolve_batch(self, *, limit: int = 500) -> IdentityResolutionSummary:
+        """Resolve one fair, resumable batch; skip evidence-identical candidates."""
+        now = datetime.now(tz=UTC)
+        ticker_groups = self.repository.alias_groups(alias_type="ticker_symbol")
+        batch = self.repository.fair_candidates("identity", limit)
+        pending: list[CandidateRecord] = []
+        unchanged_results: list[CandidateIdentity] = []
+        unchanged_count = 0
+        for candidate in batch:
+            related = related_ticker_candidates(candidate, ticker_groups)
+            fingerprint = identity_evidence_fingerprint(candidate, related_candidate_ids=related)
+            prior = self.repository.identity_result_for(candidate.candidate_id)
+            if (
+                prior is not None
+                and prior.policy_version == IDENTITY_POLICY_VERSION
+                and prior.evidence_fingerprint == fingerprint
+            ):
+                unchanged_count += 1
+                if identity_is_accepted(prior, candidate=candidate, related_candidate_ids=related):
+                    unchanged_results.append(prior)
+                continue
+            pending.append(candidate)
+        results = self._evaluate_batch(tuple(pending), ticker_groups=ticker_groups, evaluated_at=now)
+        conflicts_persisted = self._persist_results(tuple(unchanged_results) + results)
+        return IdentityResolutionSummary(
+            evaluated=len(results),
+            by_outcome=dict(Counter(result.outcome for result in results)),
+            conflicts_persisted=conflicts_persisted,
+            unchanged=unchanged_count,
+        )
+
+    def _evaluate_batch(
+        self,
+        candidates: tuple[CandidateRecord, ...],
+        *,
+        ticker_groups: dict[str, tuple[str, ...]],
+        evaluated_at: datetime,
+    ) -> tuple[CandidateIdentity, ...]:
+        results: list[CandidateIdentity] = []
+        for candidate in candidates:
+            related = related_ticker_candidates(candidate, ticker_groups)
+            result = self.resolve_candidate(candidate, ticker_groups=ticker_groups, evaluated_at=evaluated_at)
+            results.append(
+                replace(
+                    result,
+                    policy_version=IDENTITY_POLICY_VERSION,
+                    evidence_fingerprint=identity_evidence_fingerprint(candidate, related_candidate_ids=related),
+                )
+            )
+        return tuple(results)
+
+    def _persist_results(self, results: tuple[CandidateIdentity, ...]) -> int:
+        if not results:
+            return 0
+        self.repository.save_identity_results(results)
+        conflicts = 0
+        for result in results:
+            if result.outcome in {"conflict", "ambiguous"}:
+                self.repository.save_conflict(_conflict_for_identity(result))
+                conflicts += 1
+        return conflicts
 
     def resolve_candidate(
         self,
@@ -62,7 +184,7 @@ class CandidateIdentityResolutionEngine:
         evidence_ids = tuple(candidate.evidence_ids or source_ids)
         missing = _missing_identity_evidence(candidate)
         source_candidate_ids = _source_candidate_ids(candidate)
-        related = _related_ticker_candidates(candidate, ticker_groups or {})
+        related = related_ticker_candidates(candidate, ticker_groups or {})
         conflicts = _identity_conflicts(candidate, related)
         if _has_rejection_marker(candidate):
             return CandidateIdentity(
@@ -251,16 +373,14 @@ def _missing_identity_evidence(candidate: CandidateRecord) -> tuple[str, ...]:
 
 def _identity_conflicts(candidate: CandidateRecord, related_ticker_candidates: tuple[str, ...]) -> tuple[str, ...]:
     conflicts: set[str] = set()
-    if candidate.metadata.get("provider_disagreements"):
+    if normalize_identity_disagreements(candidate.metadata).get("provider_disagreements"):
         conflicts.add("provider_metadata_disagreement")
     if related_ticker_candidates:
         conflicts.add("ticker_collision")
     return tuple(sorted(conflicts))
 
 
-def _related_ticker_candidates(
-    candidate: CandidateRecord, ticker_groups: dict[str, tuple[str, ...]]
-) -> tuple[str, ...]:
+def related_ticker_candidates(candidate: CandidateRecord, ticker_groups: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
     related: set[str] = set()
     for alias in candidate.aliases:
         if alias.alias_type != "ticker_symbol":
@@ -272,7 +392,7 @@ def _related_ticker_candidates(
 
 
 def _has_official_domain(candidate: CandidateRecord) -> bool:
-    links = candidate.metadata.get("official_links")
+    links = candidate.metadata.get("verified_official_links")
     return isinstance(links, (list, tuple)) and any(str(link).strip() for link in links)
 
 

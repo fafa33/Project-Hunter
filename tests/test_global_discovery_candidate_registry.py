@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import json
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any, cast
 
 import pytest
+import yaml
 
 from hunter.acquisition.exceptions import ProviderUnavailableError
 from hunter.discovery import (
@@ -16,12 +21,27 @@ from hunter.discovery import (
     CandidateRegistryRepository,
 )
 from hunter.discovery.automation import discovery_automation_status, install_discovery_jobs
-from hunter.discovery.configuration import DiscoveryConfig
+from hunter.discovery.capacity import (
+    CapacityBudgetExhausted,
+    CapacityLedger,
+    DuplicateCapacityRequest,
+    endpoint_for_url,
+    load_capacity_inventory,
+)
+from hunter.discovery.configuration import DiscoveryConfig, DiscoveryProviderConfig
+from hunter.discovery.identity import identity_evidence_fingerprint
+from hunter.discovery.models import CandidateRecord
 from hunter.discovery.providers import (
+    GECKOTERMINAL_FREE_MAX_PAGE,
+    CoinGeckoDiscoveryProvider,
+    DexEnrichmentResult,
     DexScreenerDiscoveryProvider,
     DiscoveredCandidate,
     DiscoveryProvider,
     GeckoTerminalDiscoveryProvider,
+    ScanBudget,
+    _request_json,
+    _RequestBudgetExhausted,
 )
 
 
@@ -348,7 +368,7 @@ def test_identity_resolution_conflict_for_provider_disagreement(tmp_path) -> Non
         symbol="SHARED",
         primary_chain="eth",
         candidate_type="token",
-        metadata={"chain": "eth", "contract_address": "0xabc", "reserve_usd": "1000"},
+        metadata={"chain": "eth", "contract_address": "0xabc", "token_symbol": "SHARED_A"},
     )
     screener = DiscoveredCandidate(
         provider="dexscreener",
@@ -358,7 +378,7 @@ def test_identity_resolution_conflict_for_provider_disagreement(tmp_path) -> Non
         symbol="SHARED",
         primary_chain="eth",
         candidate_type="token",
-        metadata={"chain": "eth", "contract_address": "0xabc", "reserve_usd": "2000"},
+        metadata={"chain": "eth", "contract_address": "0xabc", "token_symbol": "SHARED_B"},
     )
     engine = CandidateDiscoveryEngine(
         repository,
@@ -376,6 +396,272 @@ def test_identity_resolution_conflict_for_provider_disagreement(tmp_path) -> Non
 
     assert result.outcome == "conflict"
     assert "provider_metadata_disagreement" in result.conflicts
+
+
+def test_volatile_discovery_metadata_refreshes_without_identity_conflict() -> None:
+    from hunter.discovery.repository import _merge_metadata
+
+    old = "2026-11-25T00:00:00+00:00"
+    new = "2026-11-25T01:00:00+00:00"
+    previous = {
+        "provider_disagreements": {},
+        "market_evidence_observed_at": old,
+        "official_link_observed_at": old,
+        "liquidity_usd": "100",
+    }
+    current = {
+        "market_evidence_observed_at": new,
+        "official_link_observed_at": new,
+        "liquidity_usd": "200",
+    }
+
+    refreshed = _merge_metadata(previous, current)
+
+    assert refreshed["market_evidence_observed_at"] == new
+    assert refreshed["official_link_observed_at"] == new
+    assert refreshed["liquidity_usd"] == "200"
+    assert refreshed.get("provider_disagreements", {}) == {}
+
+    genuine = _merge_metadata({"token_symbol": "AAA"}, {"token_symbol": "BBB"})
+
+    assert "token_symbol" in genuine["provider_disagreements"]
+
+
+def test_dexscreener_batch_provenance_is_not_identity_evidence() -> None:
+    from hunter.discovery.repository import _merge_metadata
+
+    previous = {
+        "provider_disagreements": {},
+        "market_evidence_url": "https://api.dexscreener.test/tokens/v1/1/aaa",
+        "batch_size": 1,
+        "discovery_mode": "network_pool_enumeration",
+        "batch_index": 0,
+        "market_evidence_observed_at": "2026-11-26T00:00:00+00:00",
+    }
+    current = {
+        "market_evidence_url": "https://api.dexscreener.test/tokens/v1/1/aaa,bbb",
+        "batch_size": 2,
+        "discovery_mode": "global_market_enumeration",
+        "batch_index": 1,
+        "market_evidence_observed_at": "2026-11-26T01:00:00+00:00",
+    }
+
+    refreshed = _merge_metadata(previous, current)
+    observed_at = datetime(2026, 11, 26, tzinfo=UTC)
+    previous_candidate = CandidateRecord(
+        candidate_id="candidate:batch-provenance",
+        slug="eth-0xabc",
+        name="Shared Token",
+        symbol="SHARED",
+        sector="dex_market",
+        primary_chain="eth",
+        candidate_type="token",
+        lifecycle_status="analyzable",
+        discovery_source="dexscreener",
+        first_seen_at=observed_at,
+        last_seen_at=observed_at,
+        confidence=1.0,
+        metadata=previous,
+    )
+    refreshed_candidate = replace(previous_candidate, metadata=refreshed)
+
+    assert refreshed["market_evidence_url"] == current["market_evidence_url"]
+    assert refreshed["discovery_mode"] == "global_market_enumeration"
+    assert refreshed["batch_size"] == 2
+    assert refreshed["batch_index"] == 1
+    assert refreshed.get("provider_disagreements", {}) == {}
+    assert identity_evidence_fingerprint(previous_candidate) == identity_evidence_fingerprint(refreshed_candidate)
+
+    from hunter.discovery.identity import _identity_conflicts
+
+    legacy = replace(
+        previous_candidate,
+        metadata={**previous, "provider_disagreements": {"discovery_mode": ("network", "global")}},
+    )
+    assert _identity_conflicts(legacy, ()) == ()
+    assert identity_evidence_fingerprint(legacy) == identity_evidence_fingerprint(previous_candidate)
+    assert _merge_metadata(legacy.metadata, current).get("provider_disagreements", {}) == {}
+    mixed = replace(
+        legacy,
+        metadata={
+            **legacy.metadata,
+            "provider_disagreements": {"discovery_mode": ("network", "global"), "symbol": ("A", "B")},
+        },
+    )
+    assert _identity_conflicts(mixed, ()) == ("provider_metadata_disagreement",)
+    assert _merge_metadata(mixed.metadata, current)["provider_disagreements"] == {"symbol": ("A", "B")}
+
+
+def test_market_pair_selection_refreshes_without_identity_conflict() -> None:
+    from hunter.discovery.identity import _identity_conflicts, identity_evidence_fingerprint
+    from hunter.discovery.models import REFRESHABLE_DISCOVERY_METADATA_KEYS
+    from hunter.discovery.repository import _merge_metadata
+
+    old_pair = "0x" + "1" * 40
+    new_pair = "0x" + "2" * 40
+    previous = {
+        "provider_disagreements": {},
+        "market_pair_address": old_pair,
+        "market_pair_side": "base",
+    }
+    current = {
+        "market_pair_address": new_pair,
+        "market_pair_side": "quote",
+    }
+
+    refreshed = _merge_metadata(previous, current)
+
+    assert "market_pair_address" in REFRESHABLE_DISCOVERY_METADATA_KEYS
+    assert "market_pair_side" in REFRESHABLE_DISCOVERY_METADATA_KEYS
+    assert refreshed["market_pair_address"] == new_pair
+    assert refreshed["market_pair_side"] == "quote"
+    assert refreshed.get("provider_disagreements", {}) == {}
+
+    observed_at = datetime(2026, 11, 26, tzinfo=UTC)
+    previous_candidate = CandidateRecord(
+        candidate_id="candidate:pair-provenance",
+        slug="eth-0xabc",
+        name="Shared Token",
+        symbol="SHARED",
+        sector="dex_market",
+        primary_chain="eth",
+        candidate_type="token",
+        lifecycle_status="analyzable",
+        discovery_source="dexscreener",
+        first_seen_at=observed_at,
+        last_seen_at=observed_at,
+        confidence=1.0,
+        metadata=previous,
+    )
+    refreshed_candidate = replace(previous_candidate, metadata=refreshed)
+
+    assert identity_evidence_fingerprint(previous_candidate) == identity_evidence_fingerprint(refreshed_candidate)
+    legacy = replace(
+        previous_candidate,
+        metadata={
+            **previous,
+            "provider_disagreements": {
+                "market_pair_address": (old_pair, new_pair),
+                "market_pair_side": ("base", "quote"),
+            },
+        },
+    )
+    assert _identity_conflicts(legacy, ()) == ()
+    assert identity_evidence_fingerprint(legacy) == identity_evidence_fingerprint(previous_candidate)
+    assert _merge_metadata(legacy.metadata, current).get("provider_disagreements", {}) == {}
+    mixed = replace(
+        legacy,
+        metadata={
+            **legacy.metadata,
+            "provider_disagreements": {
+                **legacy.metadata["provider_disagreements"],
+                "contract_address": ("0xaaa", "0xbbb"),
+            },
+        },
+    )
+    assert _identity_conflicts(mixed, ()) == ("provider_metadata_disagreement",)
+    assert "contract_address" in _merge_metadata(mixed.metadata, current)["provider_disagreements"]
+
+
+def test_market_evidence_provider_refreshes_without_identity_conflict() -> None:
+    from hunter.discovery.identity import _identity_conflicts, identity_evidence_fingerprint
+    from hunter.discovery.models import REFRESHABLE_DISCOVERY_METADATA_KEYS, VOLATILE_IDENTITY_METADATA_KEYS
+    from hunter.discovery.repository import _merge_metadata
+
+    old_pair = "0x" + "a" * 40
+    previous = {
+        "provider_disagreements": {},
+        "market_evidence_provider": "dexscreener",
+        "market_evidence_status": "observed",
+        "market_pair_address": old_pair,
+        "market_pair_side": "base",
+    }
+    current = {
+        "market_evidence_provider": "geckoterminal",
+        "market_evidence_status": "observed",
+        "market_evidence_url": "https://api.geckoterminal.invalid/token",
+    }
+
+    refreshed = _merge_metadata(previous, current)
+
+    assert "market_evidence_provider" in VOLATILE_IDENTITY_METADATA_KEYS
+    assert "market_evidence_provider" in REFRESHABLE_DISCOVERY_METADATA_KEYS
+    assert refreshed["market_evidence_provider"] == "geckoterminal"
+    assert refreshed["market_evidence_url"] == current["market_evidence_url"]
+    assert "market_pair_address" not in refreshed
+    assert "market_pair_side" not in refreshed
+    assert refreshed.get("provider_disagreements", {}) == {}
+
+    observed_at = datetime(2026, 11, 26, tzinfo=UTC)
+    previous_candidate = CandidateRecord(
+        candidate_id="candidate:provider-provenance",
+        slug="eth-0xabc",
+        name="Shared Token",
+        symbol="SHARED",
+        sector="dex_market",
+        primary_chain="eth",
+        candidate_type="token",
+        lifecycle_status="analyzable",
+        discovery_source="dexscreener",
+        first_seen_at=observed_at,
+        last_seen_at=observed_at,
+        confidence=1.0,
+        metadata=previous,
+    )
+    refreshed_candidate = replace(previous_candidate, metadata=refreshed)
+
+    assert _identity_conflicts(refreshed_candidate, ()) == ()
+    assert identity_evidence_fingerprint(previous_candidate) == identity_evidence_fingerprint(refreshed_candidate)
+
+    legacy = replace(
+        previous_candidate,
+        metadata={
+            **previous,
+            "provider_disagreements": {"market_evidence_provider": ("dexscreener", "geckoterminal")},
+        },
+    )
+    assert _identity_conflicts(legacy, ()) == ()
+    assert identity_evidence_fingerprint(legacy) == identity_evidence_fingerprint(previous_candidate)
+    assert _merge_metadata(legacy.metadata, current).get("provider_disagreements", {}) == {}
+
+    genuine = replace(
+        previous_candidate,
+        metadata={
+            **previous,
+            "provider_disagreements": {
+                "market_evidence_provider": ("dexscreener", "geckoterminal"),
+                "contract_address": ("0xaaa", "0xbbb"),
+            },
+        },
+    )
+    assert _identity_conflicts(genuine, ()) == ("provider_metadata_disagreement",)
+    assert _merge_metadata(genuine.metadata, current)["provider_disagreements"] == {
+        "contract_address": ("0xaaa", "0xbbb")
+    }
+
+
+def test_market_provenance_survives_unavailable_and_unrelated_observations() -> None:
+    from hunter.discovery.repository import _merge_metadata
+
+    old_pair = "0x" + "a" * 40
+    previous = {
+        "market_evidence_provider": "dexscreener",
+        "market_evidence_status": "observed",
+        "market_pair_address": old_pair,
+        "market_pair_side": "base",
+    }
+
+    unavailable = _merge_metadata(previous, {"market_evidence_status": "unavailable"})
+    assert unavailable["market_evidence_provider"] == "dexscreener"
+    assert unavailable["market_pair_address"] == old_pair
+    assert unavailable["market_pair_side"] == "base"
+    assert unavailable["market_evidence_status"] == "unavailable"
+
+    unrelated = _merge_metadata(previous, {"liquidity_usd": 1234, "official_link": "https://example.test"})
+    assert unrelated["market_evidence_provider"] == "dexscreener"
+    assert unrelated["market_pair_address"] == old_pair
+    assert unrelated["market_pair_side"] == "base"
+    assert unrelated["market_evidence_status"] == "observed"
 
 
 def test_identity_resolution_rejected_and_unresolved_outcomes(tmp_path) -> None:
@@ -492,6 +778,82 @@ def test_dexscreener_provider_normalizes_profiles_and_boosts(monkeypatch) -> Non
     assert rows[1].provider_id == "solana:So111"
 
 
+def test_dexscreener_profile_canonicalizes_chain_aliases(monkeypatch) -> None:
+    address = "0x" + "1" * 40
+    payloads = {
+        "/token-profiles/latest/v1": [
+            {
+                "chainId": "ethereum",
+                "tokenAddress": address,
+                "url": f"https://dexscreener.com/ethereum/{address}",
+            }
+        ],
+        "/token-boosts/top/v1": [],
+        f"/token-pairs/v1/ethereum/{address}": [
+            {
+                "chainId": "ethereum",
+                "pairAddress": "0xpairs",
+                "baseToken": {"address": address, "name": "Alias Token", "symbol": "ALT"},
+                "liquidity": {"usd": 1000},
+            }
+        ],
+        f"/api/v3/coins/ethereum/contract/{address}": {
+            "platforms": {"ethereum": address},
+            "links": {"homepage": []},
+        },
+    }
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen_by_path(payloads))
+
+    rows = DexScreenerDiscoveryProvider(backoff_seconds=0).discover(limit=10)
+
+    assert len(rows) == 1
+    row = rows[0]
+    metadata = row.metadata or {}
+    assert row.provider_id == f"eth:{address}"
+    assert row.primary_chain == "eth"
+    assert metadata["chain"] == "eth"
+    assert metadata["dex_chain_id"] == "ethereum"
+    assert metadata["contract_address"] == address
+
+
+def test_dex_batch_enrichment_matches_legacy_chain_alias_candidate(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(registry_path=str(tmp_path / "candidates.sqlite"), providers={})
+    address = "0x" + "2" * 40
+    legacy = DiscoveredCandidate(
+        provider="dexscreener",
+        provider_id=f"ethereum:{address}",
+        slug=f"ethereum-{address}",
+        name="Legacy Token",
+        primary_chain="ethereum",
+        candidate_type="token",
+        metadata={"chain": "ethereum", "contract_address": address},
+    )
+    engine = CandidateDiscoveryEngine(
+        repository, config, providers={"legacy": StaticDiscoveryProvider("legacy", (legacy,))}
+    )
+    first = engine.sync(provider="legacy", limit=10)
+
+    batch = DiscoveredCandidate(
+        provider="dexscreener",
+        provider_id=f"eth:{address}",
+        slug=f"eth-{address}",
+        name="Batch Token",
+        primary_chain="eth",
+        candidate_type="token",
+        metadata={"chain": "eth", "contract_address": address},
+    )
+    engine.providers["dexscreener"] = StaticDiscoveryProvider("dexscreener", (batch,))
+    second = engine.sync(provider="dexscreener", limit=10)
+
+    assert first.candidates_created == 1
+    assert second.candidates_created == 0
+    assert second.candidates_updated == 1
+    assert repository.stats().total_candidates == 1
+    assert repository.find_by_identifier("contract:ethereum", address) is not None
+    assert repository.find_by_identifier("contract:eth", address) is not None
+
+
 def test_registry_has_indexed_lookup_surfaces(tmp_path) -> None:
     repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
     indexes = set(repository.index_names())
@@ -511,6 +873,7 @@ def test_screening_and_queue_are_deterministic_and_idempotent(tmp_path) -> None:
     engine = CandidateDiscoveryEngine(repository, config, providers={})
 
     engine.sync(provider="seed")
+    CandidateIdentityResolutionEngine(repository).resolve_all()
     first_screening = engine.screen_candidates()
     first_queue = engine.refresh_queue()
     second_queue = engine.refresh_queue()
@@ -631,8 +994,8 @@ def test_discovery_automation_install_is_idempotent(tmp_path) -> None:
     status = discovery_automation_status(config_path)
 
     assert first == second
-    assert status["installed_jobs"] == 4
-    assert status["expected_jobs"] == 4
+    assert status["installed_jobs"] == 6
+    assert status["expected_jobs"] == 6
 
 
 def _provider(provider: StaticDiscoveryProvider) -> DiscoveryProvider:
@@ -663,9 +1026,86 @@ def _urlopen(payload: object):
 def _urlopen_by_path(payloads: dict[str, object]):
     def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
         path = urllib.parse.urlparse(request.full_url).path
-        return _JsonResponse(payloads[path])
+        return _JsonResponse(
+            payloads.get(path, [])
+            if path.startswith(("/token-pairs/v1/", "/api/v2/networks/", "/api/v3/coins/"))
+            else payloads[path]
+        )
 
     return opener
+
+
+def test_request_json_honors_bounded_retry_after_on_http_429(monkeypatch) -> None:
+    sleeps: list[float] = []
+    calls: list[str] = []
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                429,
+                "Too Many Requests",
+                {"Retry-After": "90"},
+                None,
+            )
+        return _JsonResponse({"ok": True})
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    payload = _request_json(
+        "https://example.invalid/api/v3/coins/markets",
+        provider="CoinGecko",
+        timeout_seconds=1,
+        max_attempts=2,
+        backoff_seconds=0.001,
+        sleeper=sleeps.append,
+        max_retry_after_seconds=5.0,
+    )
+
+    assert payload == {"ok": True}
+    assert len(calls) == 2
+    assert sleeps == [5.0]  # provider window honored, capped at the configured ceiling
+
+
+def test_geckoterminal_public_api_rate_limit_is_shared_across_network_pool_and_token_requests(
+    tmp_path,
+) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    fixed_now = datetime(2026, 1, 1, tzinfo=UTC)
+    ledger = CapacityLedger(
+        repository,
+        load_capacity_inventory("configs/discovery_capacity.yaml"),
+        clock=lambda: fixed_now,
+        sleeper=lambda _seconds: None,
+        max_wait_cycles=1,
+    )
+    endpoints = ("networks", "network_pools", "token")
+
+    reservation_ids: list[str] = []
+    for index in range(10):
+        endpoint = endpoints[index % len(endpoints)]
+        reservation = ledger.reserve(
+            "geckoterminal",
+            endpoint,
+            f"https://api.geckoterminal.com/api/v2/{endpoint}/{index}",
+        )
+        reservation_ids.append(reservation.reservation_id)
+
+    assert len(set(reservation_ids)) == 10
+    summary = {str(row["endpoint"]): row for row in ledger.summary()["endpoints"]}
+    assert set(summary) == set(endpoints)
+    assert [int(summary[name]["attempts"]) for name in endpoints] == [4, 3, 3]
+    assert sum(int(summary[name]["recent_attempts"]) for name in endpoints) == 10
+
+    with pytest.raises(CapacityBudgetExhausted):
+        ledger.reserve(
+            "geckoterminal",
+            "token",
+            "https://api.geckoterminal.com/api/v2/networks/eth/tokens/overflow",
+        )
+
+    final = {str(row["endpoint"]): row for row in ledger.summary()["endpoints"]}
+    assert sum(int(row["attempts"]) for row in final.values()) == 10
 
 
 def test_solana_case_sensitive_addresses_survive_discovery_and_registry(tmp_path, monkeypatch) -> None:
@@ -706,3 +1146,1723 @@ def test_solana_case_sensitive_addresses_survive_discovery_and_registry(tmp_path
         assert candidate is not None
         assert {source.provider for source in candidate.sources} == {"geckoterminal", "dexscreener"}
     assert repository.find_by_identifier("contract:solana", "abc123") is None
+
+
+def test_dex_market_evidence_matches_exact_base_contract(monkeypatch) -> None:
+    profiles = {
+        "/token-profiles/latest/v1": [
+            {"chainId": "solana", "tokenAddress": "AbC", "links": [{"url": "https://example.invalid"}]}
+        ],
+        "/token-boosts/top/v1": [],
+    }
+
+    def pair(address, liquidity, chain="solana"):
+        return {
+            "chainId": chain,
+            "pairAddress": address,
+            "baseToken": {"address": address, "name": "Real", "symbol": "REAL"},
+            "liquidity": {"usd": liquidity},
+            "volume": {"h24": 42},
+            "marketCap": 1000,
+            "fdv": 2000,
+        }
+
+    profiles["/token-pairs/v1/solana/AbC"] = [
+        pair("abc", 9999),
+        pair("AbC", 9999, "base"),
+        pair("AbC", 100),
+        pair("AbC", 200),
+    ]
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen_by_path(profiles))
+    row = DexScreenerDiscoveryProvider().discover(limit=1)[0]
+    assert row.name == "Real" and row.symbol == "REAL"
+    assert row.metadata is not None
+    assert row.metadata["liquidity_usd"] == 200
+    assert row.metadata["volume_usd"] == 42
+    assert row.metadata["market_cap"] == 1000
+    assert row.metadata["fdv"] == 2000
+    assert row.metadata["claimed_links"] == ("https://example.invalid",)
+    assert "official_links" not in row.metadata
+
+
+def test_paid_boost_is_not_market_evidence(tmp_path) -> None:
+    from hunter.discovery.engine import _has_market_or_protocol_measure
+    from hunter.discovery.identity import _has_official_domain
+
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    engine = CandidateDiscoveryEngine(repository, DiscoveryConfig(providers={}))
+    row = DiscoveredCandidate(
+        provider="dexscreener",
+        provider_id="solana:AbC",
+        slug="token",
+        name="Token",
+        metadata={
+            "chain": "solana",
+            "contract_address": "AbC",
+            "boost_amount": 100,
+            "official_links": ["https://example.invalid"],
+        },
+    )
+    from datetime import UTC, datetime
+
+    candidate = engine._provider_candidate(row, observed_at=datetime.now(UTC))
+    assert not _has_market_or_protocol_measure(candidate)
+    assert not _has_official_domain(candidate)
+
+
+def test_quote_pair_does_not_inherit_base_valuation(monkeypatch) -> None:
+    payload = [
+        {
+            "chainId": "solana",
+            "pairAddress": "pair",
+            "baseToken": {"address": "Other"},
+            "quoteToken": {"address": "AbC", "name": "Quote"},
+            "liquidity": {"usd": 100},
+            "marketCap": 900,
+            "priceUsd": "2",
+            "fdv": 1000,
+        }
+    ]
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen(payload))
+    evidence = DexScreenerDiscoveryProvider()._market_evidence("solana", "AbC")
+    assert evidence["market_pair_side"] == "quote"
+    assert evidence["market_cap"] is None and evidence["price_usd"] is None and evidence["fdv"] is None
+    assert evidence["liquidity_usd"] == 100
+
+
+def test_gecko_fallback_and_contract_bound_link_corroboration(monkeypatch) -> None:
+    payloads = {
+        "/api/v2/networks/solana/tokens/AbC": {
+            "data": {"attributes": {"address": "AbC", "total_reserve_in_usd": "100", "market_cap_usd": "200"}}
+        },
+        "/api/v3/coins/solana/contract/AbC": {
+            "platforms": {"solana": "AbC"},
+            "links": {"homepage": ["https://www.example.org", "https://x.com/other"]},
+        },
+    }
+    monkeypatch.setattr(urllib.request, "urlopen", _urlopen_by_path(payloads))
+    provider = DexScreenerDiscoveryProvider()
+    assert provider._gecko_evidence("solana", "AbC")["market_cap"] == 200
+    assert provider._corroborated_links(
+        "solana", "AbC", ("https://example.org", "https://x.com/fake", "https://example.org.evil.net")
+    )["verified_official_links"] == ("https://example.org",)
+    payloads["/api/v3/coins/solana/contract/AbC"] = {"platforms": {"solana": "abc"}}
+    assert not provider._corroborated_links("solana", "AbC", ("https://example.org",))
+
+
+def test_market_scan_resumes_persisted_page_and_wraps(tmp_path, monkeypatch) -> None:
+    from hunter.discovery.providers import CoinGeckoDiscoveryProvider  # noqa: PLC0415
+
+    pages = []
+
+    def fetch(self, path, params, meter=None):
+        page = params["page"]
+        pages.append(page)
+        return [{"id": f"asset-{page}-{i}", "name": f"Asset {page}-{i}"} for i in range(2)] if page < 3 else []
+
+    monkeypatch.setattr(CoinGeckoDiscoveryProvider, "_get", fetch)
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(providers={})
+    provider = CoinGeckoDiscoveryProvider(per_page=2)
+    # One bounded page per normal cycle.
+    from unittest.mock import patch
+
+    with patch.object(DiscoveryConfig, "provider") as configured:
+        configured.return_value.limit = 2
+        for _ in range(4):
+            engine = CandidateDiscoveryEngine(repository, config, providers={"coingecko": provider})
+            engine.sync(provider="coingecko")
+    assert pages == [1, 2, 3, 1]
+    assert repository.stats().total_candidates == 4
+    assert repository.discovery_page_cursor("coingecko") == 1
+
+
+def test_coingecko_batch_resume_advances_only_through_completed_pages(monkeypatch) -> None:
+    pages: list[int] = []
+
+    def fetch(self, path, params, meter=None):
+        if meter is not None:
+            meter.consume(lambda _: None)
+        page = int(params["page"])
+        pages.append(page)
+        return [{"id": f"asset-{page}-{index}", "name": f"Asset {page}-{index}"} for index in range(2)]
+
+    monkeypatch.setattr(CoinGeckoDiscoveryProvider, "_get", fetch)
+    provider = CoinGeckoDiscoveryProvider(per_page=2)
+
+    rows, cursor = provider.discover_batch(limit=4, cursor=0, budget=ScanBudget(max_requests=1))
+
+    assert pages == [1]
+    assert len(rows) == 2
+    assert cursor == 1
+
+    resumed, next_cursor = provider.discover_batch(limit=4, cursor=cursor, budget=ScanBudget(max_requests=2))
+
+    assert pages == [1, 2, 3]
+    assert len(resumed) == 4
+    assert next_cursor == 3
+
+
+def test_coingecko_batch_budget_exhaustion_before_first_page_keeps_cursor(monkeypatch) -> None:
+    def exhausted(*args: Any, **kwargs: Any) -> None:
+        raise _RequestBudgetExhausted
+
+    monkeypatch.setattr(CoinGeckoDiscoveryProvider, "_get", exhausted)
+    provider = CoinGeckoDiscoveryProvider(per_page=2)
+
+    rows, cursor = provider.discover_batch(limit=4, cursor=5, budget=ScanBudget(max_requests=1))
+
+    assert rows == ()
+    assert cursor == 5
+
+
+class _FakeGeckoApi:
+    def __init__(self, catalogues: dict[int, list[dict[str, object]]], pools: dict[tuple[str, int], object]):
+        self.catalogues = catalogues
+        self.pools = pools
+        self.calls: list[tuple[str, int]] = []
+
+    def __call__(self, provider: object, path: str, params: dict[str, object], meter: object = None) -> object:
+        if meter is not None:
+            meter.consume(time.sleep)
+        page = int(str(params.get("page", 1)))
+        self.calls.append((path, page))
+        if path == "/networks":
+            return {
+                "data": self.catalogues.get(page, []),
+                "links": {"next": page + 1} if page < max(self.catalogues, default=0) else None,
+            }
+        if path == "/networks/trending_pools":
+            return self.pools.get(("trending", page), _gecko_pool_payload("eth", "0xtrending", "0xtoken1"))
+        if path.startswith("/networks/") and path.endswith("/pools"):
+            network = path.split("/")[2]
+            return self.pools.get((network, page), {"data": [], "included": []})
+        raise AssertionError(f"unexpected path: {path}")
+
+
+def _gecko_pool_payload(network: str, pool_address: str, token_address: str) -> dict[str, object]:
+    quote = "So111" if network == "solana" else "0xweth"
+    return {
+        "data": [
+            {
+                "attributes": {"address": pool_address, "name": "Pool", "reserve_in_usd": "100"},
+                "relationships": {
+                    "base_token": {"data": {"id": f"{network}_{token_address}"}},
+                    "quote_token": {"data": {"id": f"{network}_{quote}"}},
+                    "dex": {"data": {"id": "dex"}},
+                },
+            }
+        ],
+        "included": [
+            {
+                "id": f"{network}_{token_address}",
+                "type": "token",
+                "attributes": {"name": "Base Token", "symbol": "BASE", "address": token_address},
+            },
+            {
+                "id": f"{network}_{quote}",
+                "type": "token",
+                "attributes": {"name": "Quote Token", "symbol": "QUOTE", "address": quote},
+            },
+        ],
+    }
+
+
+def _candidate_metadata(row: DiscoveredCandidate) -> dict[str, Any]:
+    return row.metadata or {}
+
+
+def _dex_enrichment_addresses() -> tuple[str, ...]:
+    return tuple(f"0x{index:040x}" for index in range(1, 32))
+
+
+def _dex_batch_payload(batch: tuple[str, ...] | list[str]) -> list[dict[str, Any]]:
+    return [
+        {
+            "chainId": "ethereum",
+            "pairAddress": f"pair-{address}",
+            "baseToken": {"address": address, "name": f"Token {address}", "symbol": "TKN"},
+            "liquidity": {"usd": 1000},
+            "volume": {"h24": 25},
+        }
+        for address in batch
+    ]
+
+
+def _dex_enrichment_fixture(
+    tmp_path: Path, *, with_ledger: bool = False
+) -> tuple[CandidateRegistryRepository, CandidateDiscoveryEngine, tuple[str, ...]]:
+    path = str(tmp_path / "candidates.sqlite")
+    repository = CandidateRegistryRepository(path)
+    ledger = (
+        CapacityLedger(repository, load_capacity_inventory("configs/discovery_capacity.yaml")) if with_ledger else None
+    )
+    addresses = _dex_enrichment_addresses()
+    candidates = tuple(
+        DiscoveredCandidate(
+            provider="geckoterminal",
+            provider_id=f"eth_{address}",
+            slug=f"eth-{address}",
+            name=f"Token {index}",
+            symbol=f"T{index}",
+            primary_chain="eth",
+            candidate_type="token",
+            metadata={"chain": "eth", "contract_address": address},
+        )
+        for index, address in enumerate(addresses, 1)
+    )
+    config = DiscoveryConfig(
+        registry_path=path,
+        seed_market_validation_universe=False,
+        providers={
+            "dexscreener": DiscoveryProviderConfig(enabled=True, max_requests_per_cycle=5, min_interval_seconds=0.0)
+        },
+    )
+    engine = CandidateDiscoveryEngine(
+        repository,
+        config,
+        providers={
+            "geckoterminal": StaticDiscoveryProvider("geckoterminal", candidates),
+            "dexscreener": DexScreenerDiscoveryProvider(
+                ledger=ledger, backoff_seconds=0, max_attempts=1 if ledger is not None else 3
+            ),
+        },
+        ledger=ledger,
+    )
+    engine.sync(provider="geckoterminal", limit=40)
+    return repository, engine, addresses
+
+
+def _dex_later_batch_opener(
+    calls: list[str], addresses: tuple[str, ...], *, failure_response: object | None = None
+) -> Any:
+    first_path = f"/tokens/v1/ethereum/{','.join(addresses[:30])}"
+    second_path = f"/tokens/v1/ethereum/{addresses[30]}"
+
+    def opener(request: urllib.request.Request, timeout: int) -> object:
+        visited = urllib.parse.urlparse(request.full_url).path
+        calls.append(visited)
+        if visited == first_path:
+            return _JsonResponse(_dex_batch_payload(addresses[:30]))
+        if visited == second_path and calls.count(second_path) == 1:
+            if failure_response is None:
+                raise urllib.error.URLError("forced later batch failure")
+            return _JsonResponse(failure_response)
+        return _JsonResponse(_dex_batch_payload([addresses[30]]))
+
+    return opener
+
+
+def test_geckoterminal_enumerates_network_catalogue_and_resumes_pages(tmp_path, monkeypatch) -> None:
+    from hunter.discovery.providers import ScanBudget
+
+    api = _FakeGeckoApi(
+        {1: [{"id": "eth"}], 2: [{"id": "solana"}]},
+        {
+            ("eth", 1): _gecko_pool_payload("eth", "0xpool1", "0xtoken1"),
+            ("solana", 1): _gecko_pool_payload("solana", "pool1", "TokenA"),
+        },
+    )
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    provider = GeckoTerminalDiscoveryProvider()
+    budget = ScanBudget(max_requests=3)
+
+    first = provider.discover_scan(state=None, budget=budget)
+    second = provider.discover_scan(state=first.state, budget=budget)
+
+    assert first.status == "partial"  # bounded by the request budget
+    assert [_candidate_metadata(row)["chain"] for row in first.candidates] == ["eth", "eth"]
+    assert ("/networks", 2) in api.calls  # second catalogue page enumerated after resume
+    assert ("/networks/solana/pools", 1) in api.calls
+    assert second.state["passes"] >= 1  # catalogue exhausted and a new pass started
+    assert api.calls[0] == ("/networks", 1)
+    assert ("/networks/eth/pools", 1) in api.calls
+    assert (
+        len(
+            {
+                (_candidate_metadata(row)["chain"], _candidate_metadata(row)["contract_address"])
+                for row in first.candidates + second.candidates
+            }
+        )
+        >= 2
+    )
+
+
+def test_geckoterminal_checkpoint_recovers_and_detects_new_pools(tmp_path, monkeypatch) -> None:
+    api = _FakeGeckoApi(
+        {1: [{"id": "eth"}]},
+        {("eth", 1): _gecko_pool_payload("eth", "0xpool1", "0xtoken1")},
+    )
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(
+        providers={
+            "geckoterminal": DiscoveryProviderConfig(enabled=True, max_requests_per_cycle=3),
+        }
+    )
+    first_engine = CandidateDiscoveryEngine(
+        repository, config, providers={"geckoterminal": GeckoTerminalDiscoveryProvider()}
+    )
+    first = first_engine.sync(provider="geckoterminal")
+    first_state = repository.scan_state("geckoterminal")
+
+    # A fresh engine and a fresh provider must resume from the persisted state.
+    second_engine = CandidateDiscoveryEngine(
+        repository, config, providers={"geckoterminal": GeckoTerminalDiscoveryProvider()}
+    )
+    second = second_engine.sync(provider="geckoterminal")
+    second_state = repository.scan_state("geckoterminal")
+
+    assert first_state is not None and second_state is not None
+    assert second_state["passes"] == first_state["passes"] + 1
+    assert second_state["catalogue_page"] == first_state["catalogue_page"]
+    assert second_state["observed_pools"] >= first_state["observed_pools"]
+    assert first.candidates_created == 2
+    assert second.candidates_created == 0
+    assert len(repository.pool_observations()) == 1
+    assert second_state["new_pools"] == 0
+    assert first.status in {"succeeded", "partial"} and second.status in {"succeeded", "partial"}
+
+    api.pools[("eth", 2)] = _gecko_pool_payload("eth", "0xpool2", "0xtoken2")
+    third = second_engine.sync(provider="geckoterminal")
+    assert len(repository.pool_observations()) == 2
+    third_state = repository.scan_state("geckoterminal")
+    assert third_state is not None
+    assert third_state["new_pools"] == 1
+    assert third.candidates_created == 1  # only the new pool's base token is new
+
+
+def test_geckoterminal_candidates_are_persisted_before_checkpoint_advances(tmp_path, monkeypatch) -> None:
+    api = _FakeGeckoApi(
+        {1: [{"id": "eth"}]},
+        {("eth", 1): _gecko_pool_payload("eth", "0xpool1", "0xtoken1")},
+    )
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(
+        providers={
+            "geckoterminal": DiscoveryProviderConfig(enabled=True, max_requests_per_cycle=3),
+        }
+    )
+    original_upsert = repository.upsert_many
+    calls = 0
+
+    def failing_upsert(candidates: object) -> object:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("injected persistence failure")
+        return original_upsert(candidates)
+
+    monkeypatch.setattr(repository, "upsert_many", failing_upsert)
+    engine = CandidateDiscoveryEngine(repository, config, providers={"geckoterminal": GeckoTerminalDiscoveryProvider()})
+
+    with pytest.raises(RuntimeError, match="injected persistence failure"):
+        engine.sync(provider="geckoterminal")
+
+    assert calls == 1
+    assert repository.scan_state("geckoterminal") is None
+
+    recovered = engine.sync(provider="geckoterminal")
+
+    assert calls == 2
+    assert recovered.candidates_created == 2
+    assert repository.scan_state("geckoterminal") is not None
+    assert len(repository.pool_observations()) == 1
+
+
+def test_geckoterminal_rate_budget_and_failure_recovery_keep_partial_state(monkeypatch) -> None:
+    from hunter.discovery.providers import ScanBudget
+
+    api = _FakeGeckoApi(
+        {1: [{"id": "eth"}]},
+        {("eth", 1): _gecko_pool_payload("eth", "0xpool1", "0xtoken1")},
+    )
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    provider = GeckoTerminalDiscoveryProvider()
+
+    bounded = provider.discover_scan(state=None, budget=ScanBudget(max_requests=2))
+    assert bounded.requests == 2
+    assert bounded.status == "partial"
+    assert len(bounded.candidates) == 2
+    assert bounded.state["pool_page"] == 2
+
+    def failing(provider: object, path: str, params: dict[str, object], meter: object = None) -> object:
+        if path == "/networks":
+            return api(provider, path, params, meter)
+        raise ProviderUnavailableError("rate limited")
+
+    monkeypatch.setattr(GeckoTerminalDiscoveryProvider, "_get", failing)
+    recovered = provider.discover_scan(state=None, budget=ScanBudget(max_requests=4))
+    assert recovered.status == "partial"
+    assert recovered.candidates == ()
+    assert recovered.error is not None
+    assert recovered.state["last_error"] == recovered.error
+    assert recovered.state["pool_page"] == 1
+
+
+def test_geckoterminal_contract_dedup_across_pool_pages(monkeypatch) -> None:
+    from hunter.discovery.providers import ScanBudget
+
+    api = _FakeGeckoApi(
+        {1: [{"id": "eth"}]},
+        {
+            ("eth", 1): _gecko_pool_payload("eth", "0xpool1", "0xtoken1"),
+            ("eth", 2): _gecko_pool_payload("eth", "0xpool2", "0xtoken1"),
+        },
+    )
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    result = GeckoTerminalDiscoveryProvider().discover_scan(state=None, budget=ScanBudget(max_requests=5))
+    contracts = [
+        (_candidate_metadata(row)["chain"], _candidate_metadata(row)["contract_address"]) for row in result.candidates
+    ]
+    assert len(contracts) == len(set(contracts))
+    assert ("eth", "0xweth") in contracts
+
+
+def test_universe_enumeration_measures_real_coverage_without_fabrication(tmp_path, monkeypatch) -> None:
+    from hunter.discovery.providers import CoinGeckoDiscoveryProvider
+
+    def fake_get(self: object, path: str, params: dict[str, object], meter: object = None) -> object:
+        if path == "/coins/list":
+            return [{"id": "bitcoin"}, {"id": "aave"}, {"id": "unseen"}]
+        page = int(str(params.get("page", 1)))
+        return [{"id": "bitcoin", "name": "Bitcoin"}, {"id": "aave", "name": "Aave"}] if page == 1 else []
+
+    monkeypatch.setattr(CoinGeckoDiscoveryProvider, "_get", fake_get)
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(providers={"coingecko": DiscoveryProviderConfig(enabled=True, limit=2)})
+    engine = CandidateDiscoveryEngine(repository, config, providers={"coingecko": CoinGeckoDiscoveryProvider()})
+
+    unmeasured = cast(dict[str, Any], engine.global_coverage())
+    assert unmeasured["universe"]["coverage"] is None
+    assert unmeasured["networks"]["coverage"] is None
+    assert unmeasured["pools"]["coverage"] is None
+    assert {item["provider"] for item in unmeasured["unsupported_scope"]} == {
+        "dexscreener",
+        "defillama",
+        "geckoterminal",
+    }
+
+    universe = engine.enumerate_universe()
+    engine.sync(provider="coingecko", limit=2)
+    measured = cast(dict[str, Any], engine.global_coverage())
+    assert universe["status"] == "succeeded" and universe["asset_count"] == 3
+    assert repository.universe_assets("coingecko") == ("aave", "bitcoin", "unseen")
+    assert measured["universe"]["accessible_assets"] == 3
+    assert measured["universe"]["matched_assets"] == 2
+    assert measured["universe"]["coverage"] == round(2 / 3, 6)
+    assert measured["universe"]["observed_at"] is not None
+    assert measured["freshness"]["newest_observation"] is not None
+
+
+def test_trending_feed_is_distinct_from_global_enumeration(monkeypatch) -> None:
+    from hunter.discovery.providers import ScanBudget
+
+    api = _FakeGeckoApi({1: [{"id": "eth"}]}, {("eth", 1): _gecko_pool_payload("eth", "0xpool1", "0xtoken1")})
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    provider = GeckoTerminalDiscoveryProvider()
+
+    trending = provider.discover(limit=10)
+    enumerated = provider.discover_scan(state=None, budget=ScanBudget(max_requests=3))
+
+    assert trending and all(_candidate_metadata(row)["discovery_mode"] == "trending_feed" for row in trending)
+    assert enumerated.candidates and all(
+        _candidate_metadata(row)["discovery_mode"] == "network_pool_enumeration" for row in enumerated.candidates
+    )
+
+
+def test_capacity_inventory_separates_documented_limits_from_observations() -> None:
+    inventory = load_capacity_inventory("configs/discovery_capacity.yaml")
+
+    coingecko = inventory.get("coingecko", "coins_markets")
+    gecko = inventory.get("geckoterminal", "network_pools")
+    dex_market = inventory.get("dexscreener", "tokens_v1")
+    dex_profile = inventory.get("dexscreener", "profiles_boosts")
+    defillama = inventory.get("defillama", "protocols")
+
+    assert coingecko.rate_limit_per_minute == 100
+    assert coingecko.rate_limit_provenance == "official_documentation"
+    assert coingecko.monthly_credits is None
+    assert gecko.rate_limit_per_minute == 10
+    assert gecko.rate_limit_provenance == "official_documentation"
+    assert dex_market.rate_limit_per_minute == 300
+    assert dex_market.rate_limit_provenance == "owner_specified"
+    assert dex_market.batch_limit == 30
+    assert dex_market.batch_limit_provenance == "owner_specified"
+    assert dex_profile.rate_limit_per_minute == 60
+    assert dex_profile.rate_limit_provenance == "official_documentation"
+    assert defillama.rate_limit_per_minute is None
+    assert defillama.monthly_credits is None
+    assert any("no global pool denominator" in note for note in gecko.notes)
+
+    assert endpoint_for_url("dexscreener", "https://api.dexscreener.com/tokens/v1/eth/0x1,0x2") == "tokens_v1"
+    assert endpoint_for_url("coingecko", "https://api.coingecko.com/api/v3/coins/list") == "coins_list"
+    assert endpoint_for_url("geckoterminal", "https://api.geckoterminal.com/api/v2/networks/eth/pools") == (
+        "network_pools"
+    )
+
+
+def test_request_ledger_counts_retries_and_persists_rate_limit_recovery(tmp_path, monkeypatch) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    inventory = load_capacity_inventory("configs/discovery_capacity.yaml")
+    ledger = CapacityLedger(repository, inventory)
+    sleeps: list[float] = []
+    calls: list[str] = []
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                429,
+                "Too Many Requests",
+                {"Retry-After": "90"},
+                None,
+            )
+        return _JsonResponse({"ok": True})
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    payload = _request_json(
+        "https://api.coingecko.com/api/v3/coins/markets?per_page=250",
+        provider="CoinGecko",
+        timeout_seconds=1,
+        max_attempts=2,
+        backoff_seconds=0,
+        sleeper=sleeps.append,
+        ledger=ledger,
+        endpoint="coins_markets",
+        max_retry_after_seconds=1.0,
+    )
+
+    assert payload == {"ok": True}
+    assert len(calls) == 2
+    assert len(sleeps) == 1
+    assert sleeps[0] == pytest.approx(1.0, abs=0.01)
+    summary = {row["endpoint"]: row for row in ledger.summary()["endpoints"]}["coins_markets"]
+    assert summary["provider"] == "coingecko"
+    assert summary["attempts"] == 2
+    assert summary["retries"] == 1
+    assert summary["throttles"] == 1
+    assert summary["cooldowns"] == 1
+    assert summary["remaining_quota"] == 98
+    assert summary["rate_limit_provenance"] == "official_documentation"
+
+
+def test_request_ledger_rejects_duplicate_batch_reservations(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    ledger = CapacityLedger(repository, load_capacity_inventory("configs/discovery_capacity.yaml"))
+
+    first = ledger.reserve("dexscreener", "tokens_v1", "https://api.dexscreener.com/tokens/v1/eth/0x1", dedup_key="eth")
+    ledger.complete(first.reservation_id, outcome="success")
+    with pytest.raises(DuplicateCapacityRequest):
+        ledger.reserve(
+            "dexscreener",
+            "tokens_v1",
+            "https://api.dexscreener.com/tokens/v1/eth/0x1",
+            dedup_key="eth",
+        )
+    assert ledger.summary()["totals"]["requests"] == 1
+
+
+def test_failed_dedup_reservation_does_not_block_immediate_retry(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    ledger = CapacityLedger(repository, load_capacity_inventory("configs/discovery_capacity.yaml"))
+    url = "https://api.dexscreener.com/tokens/v1/eth/0x1"
+
+    first = ledger.reserve("dexscreener", "tokens_v1", url, dedup_key="eth|batch")
+    ledger.complete(first.reservation_id, outcome="failure", error="transient provider failure")
+    retry = ledger.reserve("dexscreener", "tokens_v1", url, dedup_key="eth|batch")
+
+    assert retry.reservation_id != first.reservation_id
+    ledger.complete(retry.reservation_id, outcome="success")
+
+
+def test_request_ledger_retry_reuses_deduplicated_batch_key(tmp_path, monkeypatch) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    ledger = CapacityLedger(repository, load_capacity_inventory("configs/discovery_capacity.yaml"))
+    sleeps: list[float] = []
+    calls: list[str] = []
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError(
+                request.full_url,
+                429,
+                "Too Many Requests",
+                {"Retry-After": "90"},
+                None,
+            )
+        return _JsonResponse({"ok": True})
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    payload = _request_json(
+        "https://api.dexscreener.com/tokens/v1/eth/0x1",
+        provider="DexScreener",
+        timeout_seconds=1,
+        max_attempts=2,
+        backoff_seconds=0,
+        sleeper=sleeps.append,
+        ledger=ledger,
+        endpoint="tokens_v1",
+        dedup_key="eth-0x1",
+        batch_size=1,
+        max_retry_after_seconds=1.0,
+    )
+
+    assert payload == {"ok": True}
+    assert len(calls) == 2
+    summary = {row["endpoint"]: row for row in ledger.summary()["endpoints"]}["tokens_v1"]
+    assert summary["attempts"] == 2
+    assert summary["retries"] == 1
+    assert summary["throttles"] == 1
+
+
+def test_dexscreener_tokens_v1_batches_thirty_contract_addresses(monkeypatch) -> None:
+    paths: list[str] = []
+    payloads: dict[str, object] = {}
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        path = urllib.parse.urlparse(request.full_url).path
+        paths.append(path)
+        return _JsonResponse(payloads.get(path, []))
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    evm = [f"0x{index:040x}" for index in range(31)]
+    solana = [f"Token{index}" for index in range(2)]
+    assets = tuple(("ethereum", address) for address in evm) + tuple(("solana", address) for address in solana)
+    for chain, addresses in (("ethereum", evm), ("solana", solana)):
+        for start in range(0, len(addresses), 30):
+            chunk = addresses[start : start + 30]
+            path = f"/tokens/v1/{chain}/{','.join(chunk)}"
+            payloads[path] = [
+                {
+                    "chainId": chain,
+                    "pairAddress": f"pair-{chain}-{address}",
+                    "baseToken": {"address": address, "name": f"Token {address}", "symbol": "TKN"},
+                    "liquidity": {"usd": 1000},
+                    "volume": {"h24": 25},
+                }
+                for address in chunk
+            ]
+
+    provider = DexScreenerDiscoveryProvider(backoff_seconds=0)
+    result = provider.enrich_contracts(assets, budget=ScanBudget(max_requests=10))
+
+    assert len(paths) == 3  # 31 EVM addresses need two batches; two Solana addresses need one
+    assert all(len(path.split("/")[-1].split(",")) <= 30 for path in paths)
+    assert all(path.startswith("/tokens/v1/ethereum/") or path.startswith("/tokens/v1/solana/") for path in paths)
+    assert result.assets == 33
+    assert result.processed == 33
+    assert result.processed_assets == assets
+    assert result.batches == 3
+    assert result.truncated is False
+    assert len(result.candidates) == 33
+    assert {row.primary_chain for row in result.candidates} == {"eth", "solana"}
+    solana_addresses = {
+        str((row.metadata or {})["contract_address"]) for row in result.candidates if row.primary_chain == "solana"
+    }
+    assert solana_addresses == set(solana)
+    assert all((row.metadata or {})["batch_endpoint"] == "tokens/v1" for row in result.candidates)
+    assert all(
+        (row.metadata or {})["dex_chain_id"] == "ethereum" for row in result.candidates if row.primary_chain == "eth"
+    )
+    assert all(
+        (row.metadata or {})["chain_mapping_provenance"] == "verified_dexscreener_chain_id_map"
+        for row in result.candidates
+    )
+    assert all((row.metadata or {})["discovery_mode"] == "global_market_enumeration" for row in result.candidates)
+    assert all((row.metadata or {})["asset_scope"] == "dex_token" for row in result.candidates)
+
+
+def test_dexscreener_batch_truncation_is_reported_instead_of_silently_dropping_assets(monkeypatch) -> None:
+    paths: list[str] = []
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        paths.append(urllib.parse.urlparse(request.full_url).path)
+        return _JsonResponse([])
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    addresses = [f"0x{index:040x}" for index in range(31)]
+    result = DexScreenerDiscoveryProvider(backoff_seconds=0).enrich_contracts(
+        tuple(("eth", address) for address in addresses), budget=ScanBudget(max_requests=1)
+    )
+
+    assert len(paths) == 1
+    assert result.assets == 31
+    assert result.processed == 30
+    assert result.batches == 1
+    assert result.truncated is True
+    assert result.candidates == ()
+
+
+def test_dexscreener_batch_truncation_preserves_completed_rows(monkeypatch) -> None:
+    addresses = [f"0x{index:040x}" for index in range(1, 32)]
+    payloads = {f"/tokens/v1/ethereum/{','.join(addresses[:30])}": _dex_batch_payload(addresses[:30])}
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        return _JsonResponse(payloads.get(urllib.parse.urlparse(request.full_url).path, []))
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    result = DexScreenerDiscoveryProvider(backoff_seconds=0).enrich_contracts(
+        tuple(("eth", address) for address in addresses), budget=ScanBudget(max_requests=1)
+    )
+
+    assert result.processed == 30
+    assert result.truncated is True
+    assert len(result.candidates) == 30
+    assert result.processed_assets == tuple(("eth", address) for address in addresses[:30])
+    assert result.failure is not None
+    assert "budget" in result.failure.lower()
+
+
+def test_dexscreener_malformed_json_preserves_completed_rows(monkeypatch) -> None:
+    class _RawResponse:
+        def __enter__(self) -> _RawResponse:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return b"not-json"
+
+    addresses = [f"0x{index:040x}" for index in range(1, 32)]
+    first_path = f"/tokens/v1/ethereum/{','.join(addresses[:30])}"
+    payload = _dex_batch_payload(addresses[:30])
+
+    def opener(request: urllib.request.Request, timeout: int) -> object:
+        if urllib.parse.urlparse(request.full_url).path == first_path:
+            return _JsonResponse(payload)
+        return _RawResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    result = DexScreenerDiscoveryProvider(backoff_seconds=0, max_attempts=1).enrich_contracts(
+        tuple(("eth", address) for address in addresses), budget=ScanBudget(max_requests=5)
+    )
+
+    assert result.processed == 30
+    assert result.truncated is True
+    assert len(result.candidates) == 30
+    assert result.processed_assets == tuple(("eth", address) for address in addresses[:30])
+    assert result.failure is not None
+    assert "json" in result.failure.lower()
+
+
+def test_dexscreener_retry_attempts_consume_batch_budget(monkeypatch) -> None:
+    paths: list[str] = []
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        paths.append(urllib.parse.urlparse(request.full_url).path)
+        if len(paths) < 3:
+            raise urllib.error.URLError("transient")
+        return _JsonResponse([])
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    result = DexScreenerDiscoveryProvider(max_attempts=3, backoff_seconds=0).enrich_contracts(
+        (("eth", "0x" + "1" * 40),), budget=ScanBudget(max_requests=2)
+    )
+
+    assert len(paths) == 2
+    assert result.assets == 1
+    assert result.processed == 0
+    assert result.batches == 0
+    assert result.truncated is True
+
+
+def test_dexscreener_processed_assets_preserve_case_sensitive_identifiers(monkeypatch) -> None:
+    def fake_get(
+        source: DexScreenerDiscoveryProvider,
+        path: str,
+        *,
+        meter: Any = None,
+        dedup_key: str | None = None,
+        batch_size: int | None = None,
+    ) -> object:
+        return []
+
+    monkeypatch.setattr(DexScreenerDiscoveryProvider, "_get", fake_get)
+    assets = (("solana", "TokenOne"), ("solana", "TokenTwo"))
+    result = DexScreenerDiscoveryProvider(backoff_seconds=0).enrich_contracts(assets)
+
+    assert result.processed_assets == assets
+
+
+def test_dexscreener_backfill_disables_batch_deduplication(monkeypatch) -> None:
+    dedup_keys: list[str | None] = []
+
+    def fake_get(
+        source: DexScreenerDiscoveryProvider,
+        path: str,
+        *,
+        meter: Any = None,
+        dedup_key: str | None = None,
+        batch_size: int | None = None,
+    ) -> object:
+        dedup_keys.append(dedup_key)
+        return []
+
+    monkeypatch.setattr(DexScreenerDiscoveryProvider, "_get", fake_get)
+    provider = DexScreenerDiscoveryProvider()
+    assets = (("eth", "0x" + "1" * 40),)
+    provider.enrich_contracts(assets, dedup=True)
+    provider.enrich_contracts(assets, dedup=False)
+
+    assert dedup_keys[0] is not None
+    assert dedup_keys[1] is None
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ProviderUnavailableError("provider unavailable"),
+        CapacityBudgetExhausted("capacity unavailable"),
+        DuplicateCapacityRequest("duplicate batch"),
+    ],
+)
+def test_dex_enrichment_records_provider_failures_and_duplicates(tmp_path, monkeypatch, exc) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(registry_path=str(tmp_path / "candidates.sqlite"), providers={})
+    measured = DiscoveredCandidate(
+        provider="geckoterminal",
+        provider_id="eth_0xaaa",
+        slug="eth-0xaaa",
+        name="Token",
+        symbol="TKN",
+        primary_chain="eth",
+        candidate_type="token",
+        metadata={"chain": "eth", "contract_address": "0x" + "a" * 40},
+    )
+    engine = CandidateDiscoveryEngine(
+        repository,
+        config,
+        providers={
+            "geckoterminal": StaticDiscoveryProvider("geckoterminal", (measured,)),
+            "dexscreener": DexScreenerDiscoveryProvider(),
+        },
+    )
+    engine.sync(provider="geckoterminal", limit=10)
+
+    def fail(*args: Any, **kwargs: Any) -> None:
+        raise exc
+
+    monkeypatch.setattr(DexScreenerDiscoveryProvider, "enrich_contracts", fail)
+    run = engine.enrich_dex_contracts(mode="backfill")
+
+    assert run.status in {"unavailable", "partial"}
+    assert "mode=backfill" in run.message
+    assert repository.runs(limit=1)[0].run_id == run.run_id
+
+
+@pytest.mark.parametrize("failure", ["ProviderUnavailableError", "DuplicateCapacityRequest"])
+def test_dex_enrichment_persists_completed_batches_before_sibling_failure(tmp_path, monkeypatch, failure: str) -> None:
+    repository, engine, addresses = _dex_enrichment_fixture(tmp_path)
+    calls: list[str] = []
+
+    def failing_get(
+        self: DexScreenerDiscoveryProvider,
+        path: str,
+        *,
+        meter: Any = None,
+        dedup_key: str | None = None,
+        batch_size: int | None = None,
+    ) -> object:
+        calls.append(path)
+        if len(calls) == 1:
+            return _dex_batch_payload(addresses[:30])
+        error = ProviderUnavailableError if failure == "ProviderUnavailableError" else DuplicateCapacityRequest
+        raise error("forced later batch failure")
+
+    monkeypatch.setattr(DexScreenerDiscoveryProvider, "_get", failing_get)
+    run = engine.enrich_dex_contracts(mode="backfill")
+
+    assert len(calls) == 2
+    assert run.status == "partial"
+    assert "forced later batch failure" in run.message
+    assert run.candidates_seen == 30
+    assert run.candidates_created + run.candidates_updated == 30
+    assert repository.identifier_cursor("dexscreener-enrichment-backfill") == ("contract:eth", addresses[29])
+
+    def retry_get(
+        self: DexScreenerDiscoveryProvider,
+        path: str,
+        *,
+        meter: Any = None,
+        dedup_key: str | None = None,
+        batch_size: int | None = None,
+    ) -> object:
+        return _dex_batch_payload([addresses[30]])
+
+    monkeypatch.setattr(DexScreenerDiscoveryProvider, "_get", retry_get)
+    retry = engine.enrich_dex_contracts(mode="backfill", limit=1)
+
+    assert retry.status == "succeeded"
+    assert retry.candidates_seen == 1
+    assert repository.identifier_cursor("dexscreener-enrichment-backfill") == ("contract:eth", addresses[30])
+
+
+def test_dex_enrichment_retries_failed_dedup_batch_in_incremental_mode(tmp_path, monkeypatch) -> None:
+    repository, engine, addresses = _dex_enrichment_fixture(tmp_path, with_ledger=True)
+    calls: list[str] = []
+
+    monkeypatch.setattr(urllib.request, "urlopen", _dex_later_batch_opener(calls, addresses))
+    run = engine.enrich_dex_contracts(mode="incremental")
+
+    assert run.status == "partial"
+    assert len(calls) == 2
+    assert repository.identifier_cursor("dexscreener-enrichment-incremental") == ("contract:eth", addresses[29])
+
+    retry = engine.enrich_dex_contracts(mode="incremental")
+
+    assert retry.status == "succeeded"
+    assert retry.candidates_seen == 1
+    assert len(calls) == 3
+    assert repository.identifier_cursor("dexscreener-enrichment-incremental") == ("contract:eth", addresses[30])
+
+
+def test_dex_enrichment_error_payload_preserves_completed_rows_and_is_retryable(tmp_path, monkeypatch) -> None:
+    repository, engine, addresses = _dex_enrichment_fixture(tmp_path, with_ledger=True)
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        urllib.request, "urlopen", _dex_later_batch_opener(calls, addresses, failure_response={"error": "busy"})
+    )
+    run = engine.enrich_dex_contracts(mode="incremental")
+
+    assert run.status == "partial"
+    assert "unexpected batch payload" in run.message.lower()
+    assert len(calls) == 2
+    assert repository.identifier_cursor("dexscreener-enrichment-incremental") == ("contract:eth", addresses[29])
+
+    retry = engine.enrich_dex_contracts(mode="incremental")
+
+    assert retry.status == "succeeded"
+    assert retry.candidates_seen == 1
+    assert len(calls) == 3
+    assert repository.identifier_cursor("dexscreener-enrichment-incremental") == ("contract:eth", addresses[30])
+
+
+def test_fresh_market_evidence_uses_market_observation_time_not_generic_sync_time(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(registry_path=str(tmp_path / "candidates.sqlite"), providers={})
+    now = datetime.now(tz=UTC)
+    stale = DiscoveredCandidate(
+        provider="geckoterminal",
+        provider_id="eth_stale",
+        slug="eth-stale",
+        name="Stale Market Token",
+        symbol="STALE",
+        primary_chain="eth",
+        candidate_type="token",
+        metadata={
+            "reserve_usd": 1000,
+            "market_evidence_observed_at": (now - timedelta(days=30)).isoformat(),
+        },
+    )
+    fresh = DiscoveredCandidate(
+        provider="geckoterminal",
+        provider_id="eth_fresh",
+        slug="eth-fresh",
+        name="Fresh Market Token",
+        symbol="FRESH",
+        primary_chain="eth",
+        candidate_type="token",
+        metadata={"market_cap": 2000, "market_evidence_observed_at": now.isoformat()},
+    )
+    engine = CandidateDiscoveryEngine(
+        repository,
+        config,
+        providers={"geckoterminal": StaticDiscoveryProvider("geckoterminal", (stale, fresh))},
+    )
+    engine.sync(provider="geckoterminal", limit=10)
+
+    evidence = cast("dict[str, object]", engine.global_coverage()["evidence"])
+
+    assert evidence["fresh_market_evidence_assets_24h"] == 1
+    assert "provider-observed" in str(evidence["criteria"])
+
+
+def test_corroboration_requests_share_the_capacity_ledger(tmp_path, monkeypatch) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    ledger = CapacityLedger(repository, load_capacity_inventory("configs/discovery_capacity.yaml"))
+    captured: list[CapacityLedger | None] = []
+    address = "0x" + "b" * 40
+
+    def fake_coingecko_get(source: CoinGeckoDiscoveryProvider, path: str, params: dict[str, Any]) -> object:
+        captured.append(source.ledger)
+        return {
+            "platforms": {"ethereum": address},
+            "links": {"homepage": ["https://example.org"]},
+        }
+
+    def fake_gecko_get(
+        source: GeckoTerminalDiscoveryProvider, path: str, params: dict[str, Any], meter: Any = None
+    ) -> object:
+        captured.append(source.ledger)
+        return {"data": {"attributes": {"address": address, "total_reserve_in_usd": 1000}}}
+
+    monkeypatch.setattr(CoinGeckoDiscoveryProvider, "_get", fake_coingecko_get)
+    monkeypatch.setattr(GeckoTerminalDiscoveryProvider, "_get", fake_gecko_get)
+    source = DexScreenerDiscoveryProvider(ledger=ledger)
+
+    assert source._corroborated_links("eth", address, ("https://example.org",))
+    assert source._gecko_evidence("eth", address)
+    assert captured == [ledger, ledger]
+
+
+def test_canonical_automation_config_carries_free_capacity_observation_metadata() -> None:
+    payload = yaml.safe_load(Path("configs/automation.yaml").read_text(encoding="utf-8"))
+    jobs = payload["jobs"] if isinstance(payload, dict) and isinstance(payload.get("jobs"), list) else []
+    by_id = {
+        str(item.get("job_id")): item for item in jobs if isinstance(item, dict) and isinstance(item.get("job_id"), str)
+    }
+    job = by_id.get("discovery-market-run")
+    backfill = by_id.get("discovery-market-run-backfill")
+
+    assert job is not None and backfill is not None
+    metadata = job.get("metadata") or {}
+    assert metadata.get("free_capacity_observation_window_hours") == 24
+    assert metadata.get("discovery_mode") == "incremental"
+    assert metadata.get("no_parallel_daemon") is True
+    assert metadata.get("indefinite_operation") is True
+    assert (job.get("schedule") or {}).get("expression") == "*/15 * * * *"
+    assert (backfill.get("schedule") or {}).get("expression") == "0 * * * *"
+    assert (backfill.get("metadata") or {}).get("bounded_contracts_per_cycle") == 5
+    identity = by_id.get("discovery-identity-resolution")
+    screening = by_id.get("discovery-candidate-screening")
+    queue = by_id.get("discovery-queue-refresh")
+    assert identity is not None and screening is not None and queue is not None
+    assert (identity.get("schedule") or {}).get("expression") == "5 */6 * * *"
+    assert (screening.get("schedule") or {}).get("expression") == "10 */6 * * *"
+    assert (queue.get("schedule") or {}).get("expression") == "15 */6 * * *"
+
+
+def test_geckoterminal_fair_rotation_changes_network_order_between_passes(monkeypatch) -> None:
+    api = _FakeGeckoApi(
+        {1: [{"id": "eth"}, {"id": "solana"}, {"id": "base"}]},
+        {
+            (network, 1): _gecko_pool_payload(network, f"{network}-pool", f"{network}-token")
+            for network in ("eth", "solana", "base")
+        },
+    )
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    result = GeckoTerminalDiscoveryProvider().discover_scan(state=None, budget=ScanBudget(max_requests=12))
+
+    pool_paths = [path for path, _ in api.calls if path.endswith("/pools")]
+    first_pass = pool_paths[:3]
+    second_pass = pool_paths[3:6]
+    assert len(second_pass) == 3
+    assert first_pass != second_pass
+    assert result.state["passes"] >= 1
+    assert result.state["rotation_seed"] >= 1
+
+
+def test_global_coverage_reports_capacity_without_fabricating_unmeasured_values(tmp_path, monkeypatch) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    inventory = load_capacity_inventory("configs/discovery_capacity.yaml")
+    ledger = CapacityLedger(repository, inventory)
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        return _JsonResponse({"ok": True})
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    for _ in range(2):
+        reservation = ledger.reserve("coingecko", "coins_markets", "https://example.invalid/page")
+        ledger.complete(reservation.reservation_id, outcome="success")
+
+    config = DiscoveryConfig(providers={})
+    engine = CandidateDiscoveryEngine(repository, config, providers={}, ledger=ledger)
+    coverage = cast(dict[str, Any], engine.global_coverage())
+
+    assert coverage["universe"]["coverage"] is None
+    assert coverage["networks"]["coverage"] is None
+    assert coverage["pools"]["coverage"] is None
+    capacity = cast(dict[str, Any], coverage["capacity"])
+    assert capacity["inventory"] == "configs/discovery_capacity.yaml"
+    assert capacity["observed"]["totals"]["requests"] == 2
+    assert capacity["observed"]["totals"]["retries"] == 0
+    assert capacity["observed"]["totals"]["cooldowns"] == 0
+    assert capacity["eta_seconds"]["universe"] is None
+    assert capacity["api_calls"] == 2
+    assert capacity["retries"] == 0
+    assert capacity["cooldowns"] == 0
+    assert capacity["unsupported_segments"]
+
+
+def test_sync_message_records_capacity_consumption(tmp_path, monkeypatch) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    inventory = load_capacity_inventory("configs/discovery_capacity.yaml")
+    ledger = CapacityLedger(repository, inventory)
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        return _JsonResponse([{"id": "bitcoin", "name": "Bitcoin"}])
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    config = DiscoveryConfig(
+        providers={"coingecko": DiscoveryProviderConfig(enabled=True, limit=1)},
+    )
+    provider = CoinGeckoDiscoveryProvider(per_page=1, ledger=ledger)
+    engine = CandidateDiscoveryEngine(repository, config, providers={"coingecko": provider}, ledger=ledger)
+
+    run = engine.sync(provider="coingecko")
+
+    assert run.status == "succeeded"
+    assert "api_calls=1" in run.message
+    assert "retries=0" in run.message
+    assert ledger.summary()["totals"]["requests"] == 1
+
+
+def test_dex_enrichment_modes_control_refresh_of_contracts_with_market_evidence(tmp_path, monkeypatch) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    config = DiscoveryConfig(registry_path=str(tmp_path / "candidates.sqlite"), providers={})
+    measured = DiscoveredCandidate(
+        provider="geckoterminal",
+        provider_id="eth_0xaaa",
+        slug="eth-0xaaa",
+        name="Measured Token",
+        symbol="MEASURED",
+        primary_chain="eth",
+        candidate_type="token",
+        metadata={"chain": "eth", "contract_address": "0xaaa", "reserve_usd": 1000},
+    )
+    unmeasured = DiscoveredCandidate(
+        provider="geckoterminal",
+        provider_id="eth_0xbbb",
+        slug="eth-0xbbb",
+        name="Unmeasured Token",
+        symbol="UNMEASURED",
+        primary_chain="eth",
+        candidate_type="token",
+        metadata={"chain": "eth", "contract_address": "0xbbb"},
+    )
+    engine = CandidateDiscoveryEngine(
+        repository,
+        config,
+        providers={
+            "geckoterminal": StaticDiscoveryProvider("geckoterminal", (measured, unmeasured)),
+            "dexscreener": DexScreenerDiscoveryProvider(),
+        },
+    )
+    engine.sync(provider="geckoterminal", limit=10)
+    selected: list[tuple[str, str]] = []
+
+    def fake_batch(
+        self: DexScreenerDiscoveryProvider,
+        assets: tuple[tuple[str, str], ...] | list[tuple[str, str]],
+        *,
+        budget: ScanBudget | None = None,
+        max_batch_size: int = 30,
+        dedup: bool = True,
+    ) -> DexEnrichmentResult:
+        selected.extend(assets)
+        return DexEnrichmentResult(candidates=(), assets=len(assets), processed=len(assets), batches=1, truncated=False)
+
+    monkeypatch.setattr(DexScreenerDiscoveryProvider, "enrich_contracts", fake_batch)
+
+    incremental = engine.enrich_dex_contracts(mode="incremental")
+    assert incremental.status == "succeeded"
+    assert selected == [("eth", "0xbbb")]
+
+    backfill = engine.enrich_dex_contracts(mode="backfill")
+    assert backfill.status == "succeeded"
+    assert selected[-2:] == [("eth", "0xaaa"), ("eth", "0xbbb")]
+    assert "mode=backfill" in backfill.message
+
+
+def test_geckoterminal_free_page_cap_never_requests_page_eleven(monkeypatch) -> None:
+    api = _FakeGeckoApi(
+        {1: [{"id": "eth"}]},
+        {
+            ("eth", page): _gecko_pool_payload("eth", f"0xpool{page}", f"0xtoken{page}")
+            for page in range(1, GECKOTERMINAL_FREE_MAX_PAGE + 1)
+        },
+    )
+    monkeypatch.setattr(
+        GeckoTerminalDiscoveryProvider,
+        "_get",
+        lambda source, path, params, meter=None: api(source, path, params, meter),
+    )
+    result = GeckoTerminalDiscoveryProvider().discover_scan(state=None, budget=ScanBudget(max_requests=15))
+
+    pool_pages = [page for path, page in api.calls if path.startswith("/networks/") and path.endswith("/pools")]
+    assert pool_pages and max(pool_pages) <= GECKOTERMINAL_FREE_MAX_PAGE
+    assert 11 not in pool_pages
+    assert any(
+        item.get("reason") == "free_api_page_cap" and item.get("scope") == "network_pools"
+        for item in result.state["inaccessible_scope"]
+    )
+    assert result.state["pool_page"] <= GECKOTERMINAL_FREE_MAX_PAGE
+
+
+def test_geckoterminal_stale_over_cap_checkpoint_advances_without_retry() -> None:
+    state: dict[str, Any] = {
+        "pool_page": 11,
+        "network_index": 0,
+        "catalogue_page": 1,
+        "catalogue_fetched": True,
+        "catalogue_complete": False,
+        "seen_contracts": [],
+        "observed_pools": 0,
+        "passes": 0,
+        "last_error": "GeckoTerminal discovery unavailable: HTTP 401",
+    }
+    recovered = GeckoTerminalDiscoveryProvider._normalise_state(state)
+
+    assert recovered["pool_page"] == 1
+    assert recovered["network_index"] == 1
+    assert any(item.get("reason") == "free_api_page_cap" for item in recovered["inaccessible_scope"])
+
+
+def test_read_only_discovery_executor_isolated_from_privileged_operations(monkeypatch) -> None:
+    from hunter.automation.models import AutomationPipelinePlan, AutomationReplayContext
+    from hunter.data_ops import READ_ONLY_DISCOVERY_OPERATIONS, ReadOnlyDiscoveryExecutor
+    from hunter.intelligence.fusion.models import FusionTarget
+    from hunter.plugins.contracts import PipelineContext
+
+    executor = ReadOnlyDiscoveryExecutor()
+    routed: list[tuple[str, str]] = []
+
+    def discovery(plan: AutomationPipelinePlan, context: PipelineContext) -> PipelineContext:
+        routed.append(("discovery", plan.target.target_id))
+        return context
+
+    def pipeline(plan: AutomationPipelinePlan, context: PipelineContext) -> PipelineContext:
+        routed.append(("pipeline", plan.target.target_id))
+        return context
+
+    monkeypatch.setattr(executor, "_discovery", discovery)
+    monkeypatch.setattr(executor, "_pipeline", pipeline)
+    context = PipelineContext()
+
+    def plan_for(target_id: str) -> AutomationPipelinePlan:
+        return AutomationPipelinePlan(
+            job_id="test",
+            job_kind="ingest_project_data",
+            target=FusionTarget(target_type=cast(Any, "operation"), target_id=target_id),
+            run_type="scheduled",
+            selected_engines=(),
+            run_intelligence=False,
+            run_fusion=False,
+            run_opportunity_timing=False,
+            run_investment_committee=False,
+            persistence_policy="atomic",
+            replay=AutomationReplayContext(mode="current", as_of=None),
+        )
+
+    for operation in sorted(READ_ONLY_DISCOVERY_OPERATIONS):
+        executor(plan_for(operation), context)
+    executor(plan_for("coingecko_market_sync"), context)
+
+    assert routed == [
+        ("discovery", "discovery_identity_resolve"),
+        ("discovery", "discovery_market_run"),
+        ("discovery", "discovery_market_run_backfill"),
+        ("discovery", "discovery_queue_refresh"),
+        ("discovery", "discovery_screen"),
+        ("discovery", "discovery_source_health"),
+        ("pipeline", "coingecko_market_sync"),
+    ]
+
+
+def test_automation_start_defaults_to_indefinite_operation(tmp_path, monkeypatch) -> None:
+    import hunter.cli as cli
+
+    config_path = tmp_path / "automation.yaml"
+    config_path.write_text("enabled: true\npolling_interval_seconds: 0\njobs: []\n", encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    class CapturingScheduler:
+        def __init__(self, jobs: object, runner: object, *, polling_interval_seconds: int) -> None:
+            captured["jobs"] = jobs
+
+        def run_loop(self, *, max_iterations: int | None = None) -> None:
+            captured["max_iterations"] = max_iterations
+
+    monkeypatch.setattr(cli, "AutomationScheduler", CapturingScheduler)
+
+    assert cli.main(["--config", str(config_path), "automation", "start"]) == 0
+    assert captured["max_iterations"] is None
+
+
+def test_single_attempt_http_429_still_persists_cooldown(tmp_path, monkeypatch) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    ledger = CapacityLedger(repository, load_capacity_inventory("configs/discovery_capacity.yaml"))
+    calls: list[str] = []
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        calls.append(request.full_url)
+        raise urllib.error.HTTPError(
+            request.full_url,
+            429,
+            "Too Many Requests",
+            {"Retry-After": "90"},
+            None,
+        )
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    with pytest.raises(ProviderUnavailableError):
+        _request_json(
+            "https://api.coingecko.com/api/v3/coins/ethereum/contract/0xabc",
+            provider="CoinGecko",
+            timeout_seconds=1,
+            max_attempts=1,
+            backoff_seconds=0,
+            sleeper=lambda _seconds: None,
+            ledger=ledger,
+            endpoint="coins_contract",
+            max_retry_after_seconds=5.0,
+        )
+
+    assert len(calls) == 1
+    summary = {row["endpoint"]: row for row in ledger.summary()["endpoints"]}["coins_contract"]
+    assert summary["throttles"] == 1
+    assert summary["cooldowns"] == 1
+    assert summary["cooldown_until"]
+
+
+def test_incremental_automation_command_has_no_explicit_limit() -> None:
+    from hunter.data_ops import OPERATION_COMMANDS
+
+    assert OPERATION_COMMANDS["discovery_market_run"] == ("discovery", "run")
+    assert "--limit" in OPERATION_COMMANDS["discovery_market_run_backfill"]
+
+
+def test_dexscreener_sync_provider_shares_one_scan_budget_across_helpers(tmp_path, monkeypatch) -> None:
+    calls: list[str] = []
+    addresses = tuple(f"0x{index:040x}" for index in range(1, 4))
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        path = urllib.parse.urlparse(request.full_url).path
+        calls.append(path)
+        if path == "/token-profiles/latest/v1":
+            return _JsonResponse(
+                [
+                    {"chainId": "eth", "tokenAddress": address, "url": f"https://dexscreener.com/eth/{address}"}
+                    for address in addresses
+                ]
+            )
+        if path.startswith("/token-pairs/v1/"):
+            address = path.rsplit("/", 1)[-1]
+            return _JsonResponse(
+                [
+                    {
+                        "chainId": "eth",
+                        "pairAddress": f"pair-{address}",
+                        "baseToken": {"address": address, "name": "Token", "symbol": "TKN"},
+                        "liquidity": {"usd": 1000},
+                        "volume": {"h24": 25},
+                    }
+                ]
+            )
+        return _JsonResponse([])
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    path = str(tmp_path / "candidates.sqlite")
+    repository = CandidateRegistryRepository(path)
+    config = DiscoveryConfig(
+        registry_path=path,
+        providers={
+            "dexscreener": DiscoveryProviderConfig(
+                enabled=True, limit=250, max_requests_per_cycle=2, min_interval_seconds=0.0
+            )
+        },
+    )
+    provider = DexScreenerDiscoveryProvider(backoff_seconds=0)
+    engine = CandidateDiscoveryEngine(repository, config, providers={"dexscreener": provider})
+
+    run = engine.sync(provider="dexscreener")
+
+    assert len(calls) == 2
+    assert run.candidates_seen == len(addresses)
+    assert run.status == "succeeded"
+
+
+def test_dex_enrichment_cursor_rotates_past_empty_results_and_survives_restarts(tmp_path, monkeypatch) -> None:
+    path = str(tmp_path / "candidates.sqlite")
+    repository = CandidateRegistryRepository(path)
+    addresses = tuple(f"0x{index:040x}" for index in range(1, 6))
+    candidates = tuple(
+        DiscoveredCandidate(
+            provider="geckoterminal",
+            provider_id=f"eth_{address}",
+            slug=f"eth-{address}",
+            name=f"Token {index}",
+            symbol=f"T{index}",
+            primary_chain="eth",
+            candidate_type="token",
+            metadata={"chain": "eth", "contract_address": address},
+        )
+        for index, address in enumerate(addresses, 1)
+    )
+    engine = CandidateDiscoveryEngine(
+        repository,
+        DiscoveryConfig(registry_path=path, providers={}),
+        providers={
+            "geckoterminal": StaticDiscoveryProvider("geckoterminal", candidates),
+            "dexscreener": DexScreenerDiscoveryProvider(),
+        },
+    )
+    engine.sync(provider="geckoterminal", limit=10)
+    selected: list[tuple[tuple[str, str], ...]] = []
+
+    def fake_enrich(
+        self: DexScreenerDiscoveryProvider,
+        assets: tuple[tuple[str, str], ...] | list[tuple[str, str]],
+        *,
+        budget: ScanBudget | None = None,
+        max_batch_size: int = 30,
+        dedup: bool = True,
+    ) -> DexEnrichmentResult:
+        batch = tuple(assets)
+        selected.append(batch)
+        return DexEnrichmentResult((), len(batch), len(batch), 1, False, batch)
+
+    monkeypatch.setattr(DexScreenerDiscoveryProvider, "enrich_contracts", fake_enrich)
+
+    first = engine.enrich_dex_contracts(mode="backfill", limit=2)
+    restarted = CandidateDiscoveryEngine(
+        repository,
+        DiscoveryConfig(registry_path=path, providers={}),
+        providers={"dexscreener": DexScreenerDiscoveryProvider()},
+    )
+    restarted.enrich_dex_contracts(mode="backfill", limit=2)
+    restarted.enrich_dex_contracts(mode="backfill", limit=2)
+
+    assert first.status == "succeeded"
+    assert selected == [
+        (("eth", addresses[0]), ("eth", addresses[1])),
+        (("eth", addresses[2]), ("eth", addresses[3])),
+        (("eth", addresses[4]), ("eth", addresses[0])),
+    ]
+    assert repository.identifier_cursor("dexscreener-enrichment-backfill") == ("contract:eth", addresses[0])
+
+
+def test_dex_enrichment_preserves_rotated_chain_order_under_one_request_budget(tmp_path, monkeypatch) -> None:
+    path = str(tmp_path / "candidates.sqlite")
+    repository = CandidateRegistryRepository(path)
+    base_address = "0x" + "1" * 40
+    eth_address = "0x" + "2" * 40
+    candidates = (
+        DiscoveredCandidate(
+            provider="geckoterminal",
+            provider_id=f"base_{base_address}",
+            slug="base-contract",
+            name="Base contract",
+            symbol="BASE",
+            primary_chain="base",
+            candidate_type="token",
+            metadata={"chain": "base", "contract_address": base_address},
+        ),
+        DiscoveredCandidate(
+            provider="geckoterminal",
+            provider_id=f"eth_{eth_address}",
+            slug="eth-contract",
+            name="Ethereum contract",
+            symbol="ETH",
+            primary_chain="eth",
+            candidate_type="token",
+            metadata={"chain": "eth", "contract_address": eth_address},
+        ),
+    )
+    config = DiscoveryConfig(
+        registry_path=path,
+        seed_market_validation_universe=False,
+        providers={
+            "dexscreener": DiscoveryProviderConfig(enabled=True, max_requests_per_cycle=1, min_interval_seconds=0.0)
+        },
+    )
+    engine = CandidateDiscoveryEngine(
+        repository,
+        config,
+        providers={
+            "geckoterminal": StaticDiscoveryProvider("geckoterminal", candidates),
+            "dexscreener": DexScreenerDiscoveryProvider(backoff_seconds=0),
+        },
+    )
+    engine.sync(provider="geckoterminal", limit=10)
+
+    requested_paths: list[str] = []
+
+    def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
+        requested_paths.append(urllib.parse.urlparse(request.full_url).path)
+        return _JsonResponse([])
+
+    monkeypatch.setattr(urllib.request, "urlopen", opener)
+
+    cursors: list[tuple[str, str] | None] = []
+    for _ in range(4):
+        run = engine.enrich_dex_contracts(mode="backfill")
+        assert run.status == "partial"
+        cursors.append(repository.identifier_cursor("dexscreener-enrichment-backfill"))
+
+    assert [path.split("/")[3] for path in requested_paths] == ["base", "ethereum", "base", "ethereum"]
+    assert cursors == [
+        ("contract:base", base_address),
+        ("contract:eth", eth_address),
+        ("contract:base", base_address),
+        ("contract:eth", eth_address),
+    ]
+
+
+def test_dex_enrichment_legacy_alias_cursor_resumes_at_canonical_identifier(tmp_path, monkeypatch) -> None:
+    path = str(tmp_path / "candidates.sqlite")
+    repository = CandidateRegistryRepository(path)
+    addresses = tuple(f"0x{index:040x}" for index in range(1, 4))
+    candidates = tuple(
+        DiscoveredCandidate(
+            provider="geckoterminal",
+            provider_id=f"eth_{address}",
+            slug=f"eth-{address}",
+            name=f"Token {index}",
+            symbol=f"T{index}",
+            primary_chain="eth",
+            candidate_type="token",
+            metadata={"chain": "eth", "contract_address": address},
+        )
+        for index, address in enumerate(addresses, 1)
+    )
+    engine = CandidateDiscoveryEngine(
+        repository,
+        DiscoveryConfig(registry_path=path, providers={}),
+        providers={
+            "geckoterminal": StaticDiscoveryProvider("geckoterminal", candidates),
+            "dexscreener": DexScreenerDiscoveryProvider(),
+        },
+    )
+    engine.sync(provider="geckoterminal", limit=10)
+    repository.save_identifier_cursor("dexscreener-enrichment-backfill", "contract:ethereum", addresses[0])
+    selected: list[tuple[tuple[str, str], ...]] = []
+
+    def fake_enrich(
+        self: DexScreenerDiscoveryProvider,
+        assets: tuple[tuple[str, str], ...] | list[tuple[str, str]],
+        *,
+        budget: ScanBudget | None = None,
+        max_batch_size: int = 30,
+        dedup: bool = True,
+    ) -> DexEnrichmentResult:
+        batch = tuple(assets)
+        selected.append(batch)
+        return DexEnrichmentResult((), len(batch), len(batch), 1, False, batch)
+
+    monkeypatch.setattr(DexScreenerDiscoveryProvider, "enrich_contracts", fake_enrich)
+
+    run = engine.enrich_dex_contracts(mode="backfill", limit=2)
+
+    assert run.status == "succeeded"
+    assert selected == [(("eth", addresses[1]), ("eth", addresses[2]))]
+
+
+def test_dex_enrichment_cursor_is_not_advanced_when_candidate_persistence_fails(tmp_path, monkeypatch) -> None:
+    path = str(tmp_path / "candidates.sqlite")
+    repository = CandidateRegistryRepository(path)
+    addresses = tuple(f"0x{index:040x}" for index in range(1, 4))
+    candidates = tuple(
+        DiscoveredCandidate(
+            provider="geckoterminal",
+            provider_id=f"eth_{address}",
+            slug=f"eth-{address}",
+            name=f"Token {index}",
+            symbol=f"T{index}",
+            primary_chain="eth",
+            candidate_type="token",
+            metadata={"chain": "eth", "contract_address": address},
+        )
+        for index, address in enumerate(addresses, 1)
+    )
+    engine = CandidateDiscoveryEngine(
+        repository,
+        DiscoveryConfig(registry_path=path, providers={}),
+        providers={
+            "geckoterminal": StaticDiscoveryProvider("geckoterminal", candidates),
+            "dexscreener": DexScreenerDiscoveryProvider(),
+        },
+    )
+    engine.sync(provider="geckoterminal", limit=10)
+
+    def fake_enrich(
+        self: DexScreenerDiscoveryProvider,
+        assets: tuple[tuple[str, str], ...] | list[tuple[str, str]],
+        *,
+        budget: ScanBudget | None = None,
+        max_batch_size: int = 30,
+        dedup: bool = True,
+    ) -> DexEnrichmentResult:
+        batch = tuple(assets)
+        return DexEnrichmentResult((), len(batch), len(batch), 1, False, batch)
+
+    def fail_upsert(candidates: object) -> tuple[int, int]:
+        raise RuntimeError("candidate persistence unavailable")
+
+    monkeypatch.setattr(DexScreenerDiscoveryProvider, "enrich_contracts", fake_enrich)
+    monkeypatch.setattr(repository, "upsert_many", fail_upsert)
+
+    with pytest.raises(RuntimeError, match="candidate persistence unavailable"):
+        engine.enrich_dex_contracts(mode="backfill", limit=2)
+
+    assert repository.identifier_cursor("dexscreener-enrichment-backfill") is None
+
+
+def test_global_network_coverage_uses_persisted_catalogue_not_current_page(tmp_path) -> None:
+    path = str(tmp_path / "candidates.sqlite")
+    repository = CandidateRegistryRepository(path)
+    observed_at = datetime.now(tz=UTC).isoformat()
+    repository.save_network_observations(
+        tuple(
+            {
+                "network_id": network,
+                "name": network,
+                "source_url": "https://example.invalid",
+                "observed_at": observed_at,
+            }
+            for network in ("eth", "base", "solana")
+        )
+    )
+    repository.save_pool_observations(
+        (
+            {
+                "network": "eth",
+                "pool_address": "0xpool",
+                "contract_addresses": ("0xtoken",),
+                "source_url": "https://example.invalid/pool",
+                "observed_at": observed_at,
+            },
+        )
+    )
+    repository.save_scan_state("geckoterminal", {"network_ids": ["eth"]}, "succeeded")
+    engine = CandidateDiscoveryEngine(repository, DiscoveryConfig(registry_path=path, providers={}), providers={})
+
+    coverage = cast(dict[str, Any], engine.global_coverage()["networks"])
+
+    assert coverage["catalogued_networks"] == 3
+    assert coverage["scanned_networks"] == 1
+    assert coverage["coverage"] == 0.333333

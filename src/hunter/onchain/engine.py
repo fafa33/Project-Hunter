@@ -1,15 +1,39 @@
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, localcontext
 
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from hunter.execution.clock import Clock, SystemClock
 from hunter.execution.identity import identity
 from hunter.market_validation.configuration import load_market_validation_config
-from hunter.onchain.adapters import EVMJsonRpcAdapter, EVMProviderUnavailable
+from hunter.onchain.adapters import EVMJsonRpcAdapter, EVMProviderUnavailable, RpcAttemptBudgetExhausted
 from hunter.onchain.configuration import OnChainConfig, load_onchain_config
+from hunter.onchain.dex import (
+    V2_SWAP_TOPIC,
+    V3_SWAP_TOPIC,
+    decode_swap_log,
+    verify_pool_identity,
+)
+from hunter.onchain.evidence import (
+    CORROBORATION_POLICY,
+    TRANSFER_TOPIC,
+    CapitalFlowEvidenceError,
+    as_observation,
+    configured_signing_key,
+    observation_comparison_value,
+    receipt_log_digest,
+    sign_observation,
+    signature_id,
+)
 from hunter.onchain.models import (
     CapitalFlowRecord,
     CapitalFlowSnapshot,
+    DexPoolConfig,
     FlowCategory,
     OnChainSurface,
     RawOnChainObservation,
@@ -17,8 +41,10 @@ from hunter.onchain.models import (
 from hunter.onchain.registry import SurfaceRegistry
 from hunter.onchain.repository import OnChainRepository
 
-TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 ZERO_ADDRESS = "0x0000000000000000000000000000000000000000"
+SWAP_IDENTITY_RPC_CALLS = 4
+MIN_SWAP_RPC_BUDGET = SWAP_IDENTITY_RPC_CALLS + 3
+_ADDRESS_PATTERN = re.compile(r"0x[0-9a-f]{40}")
 
 
 class CapitalFlowEngine:
@@ -27,8 +53,14 @@ class CapitalFlowEngine:
         config: OnChainConfig | None = None,
         repository: OnChainRepository | None = None,
         adapters: dict[int, EVMJsonRpcAdapter] | None = None,
+        evidence_signing_key: Ed25519PrivateKey | None = None,
+        clock: Clock | None = None,
     ) -> None:
         self.config = config or load_onchain_config()
+        self.clock = clock or SystemClock()
+        self.evidence_signing_key = (
+            evidence_signing_key if evidence_signing_key is not None else configured_signing_key()
+        )
         self.repository = repository or OnChainRepository(
             str(self.config.retention.get("runtime_root", "data/onchain/runtime"))
         )
@@ -39,7 +71,7 @@ class CapitalFlowEngine:
             if chain.enabled and chain.family == "evm"
         }
 
-    def sync(self, project: str | None = None) -> tuple[CapitalFlowSnapshot, ...]:
+    def sync(self, project: str | None = None, end_block: int | None = None) -> tuple[CapitalFlowSnapshot, ...]:
         if not self.config.enabled:
             return ()
         surfaces = tuple(
@@ -55,31 +87,77 @@ class CapitalFlowEngine:
                 self.repository.save_snapshots((snapshot,))
                 snapshots.append(snapshot)
                 continue
+            chain_config = next((item for item in self.config.chains if item.chain_id == surface.chain_id), None)
+            acquisition_budget = chain_config.acquisition_rpc_budget if chain_config else 40
             try:
-                states = adapter.check_providers()
-                self.repository.save_provider_states(states)
-                if not any(state.status in {"healthy", "degraded"} for state in states):
-                    snapshot = _unavailable_snapshot(surface, "provider_unavailable", ("live_provider",))
-                    self.repository.save_snapshots((snapshot,))
-                    snapshots.append(snapshot)
-                    continue
-                end_block = adapter.latest_finalized_block()
-                block = adapter.block(end_block)
-                block_hash = str(block.get("hash", ""))
-                end_timestamp = adapter.block_timestamp(end_block)
-                start_block = max(0, end_block - self._block_window(surface.chain_id, "24h"))
-                observations = self._observations(surface, adapter, start_block, end_block, block_hash, end_timestamp)
+                with adapter.request_budget(acquisition_budget):
+                    states = adapter.check_providers()
+                    self.repository.save_provider_states(states)
+                    if not any(state.status in {"healthy", "degraded"} for state in states):
+                        snapshot = _unavailable_snapshot(surface, "provider_unavailable", ("live_provider",))
+                        self.repository.save_snapshots((snapshot,))
+                        snapshots.append(snapshot)
+                        continue
+                    finalized_block = adapter.finalized_block_number()
+                    selected_end_block = finalized_block if end_block is None else end_block
+                    if selected_end_block < 0 or selected_end_block > finalized_block:
+                        raise EVMProviderUnavailable("requested block is not finalized")
+                    block = adapter.block(selected_end_block)
+                    block_hash = str(block.get("hash", ""))
+                    end_timestamp = adapter.block_timestamp(selected_end_block)
+                    start_block = max(0, selected_end_block - self._block_window(surface.chain_id, "24h") + 1)
+                    observations, signatures, acquisition_unavailable = self._observations(
+                        surface, adapter, start_block, selected_end_block, block_hash, end_timestamp
+                    )
+                    swap_observations, swap_signatures, swap_unavailable = self._surface_swap_observations(
+                        surface, adapter, start_block, selected_end_block, block_hash, end_timestamp
+                    )
+                    evidence = observations + swap_observations
+                    signatures = signatures + swap_signatures
+                    acquisition_unavailable = tuple(sorted({*acquisition_unavailable, *swap_unavailable}))
+            except RpcAttemptBudgetExhausted:
+                snapshot = _unavailable_snapshot(surface, "rpc_budget_exhausted", ("live_provider",))
+                self.repository.save_snapshots((snapshot,))
+                snapshots.append(snapshot)
+                continue
             except EVMProviderUnavailable:
                 snapshot = _unavailable_snapshot(surface, "provider_unavailable", ("live_provider",))
                 self.repository.save_snapshots((snapshot,))
                 snapshots.append(snapshot)
                 continue
-            flows = normalize_flows(observations, (surface,))
-            snapshot = snapshot_from_flows(surface, "24h", start_block, end_block, flows, observations, end_timestamp)
-            self.repository.save_raw(observations)
+            flows = normalize_flows(
+                observations,
+                tuple(
+                    s
+                    for s in self.config.surfaces
+                    if s.active and s.project == surface.project and s.chain_id == surface.chain_id
+                ),
+            )
+            snapshot = snapshot_from_flows(
+                surface, "24h", start_block, selected_end_block, flows, evidence, end_timestamp
+            )
+            # Bounded tracked-token evidence is not complete economic coverage.
+            snapshot = replace(
+                snapshot,
+                status="partial",
+                completeness=0.0,
+                unavailable_fields=tuple(
+                    set(snapshot.unavailable_fields)
+                    | {"complete_transfer_coverage", "aggregate_economic_flow"}
+                    | set(acquisition_unavailable)
+                ),
+                gross_inflow=Decimal(0),
+                gross_outflow=Decimal(0),
+                net_external_flow=Decimal(0),
+            )
+            self.repository.save_acquired_evidence(evidence, signatures)
             self.repository.save_flows(flows)
             self.repository.save_snapshots((snapshot,))
-            self.repository.save_checkpoint(surface.chain_id, surface.project, end_block, block_hash)
+            budget_exhausted = bool(
+                {"rpc_budget_exhausted", "swap_rpc_budget_exhausted"} & set(acquisition_unavailable)
+            )
+            if not budget_exhausted:
+                self.repository.save_checkpoint(surface.chain_id, surface.project, selected_end_block, block_hash)
             snapshots.append(snapshot)
         return tuple(snapshots)
 
@@ -134,14 +212,13 @@ class CapitalFlowEngine:
         end_block: int,
         block_hash: str,
         end_timestamp: datetime,
-    ) -> tuple[RawOnChainObservation, ...]:
+    ) -> tuple[tuple[RawOnChainObservation, ...], tuple[dict[str, object], ...], tuple[str, ...]]:
+        existing_rows = {
+            f"{row.get('project')}:{row.get('chain_id')}:{row.get('evidence_id')}": row for row in self.repository.raw()
+        }
+        existing_signatures = {str(row["signature_id"]): row for row in self.repository.evidence_signatures()}
         raw_balance = adapter.native_balance(surface.address, end_block)
-        try:
-            adapter.logs(address=surface.address, from_block=start_block, to_block=end_block, topics=(TRANSFER_TOPIC,))
-        except EVMProviderUnavailable:
-            # Public RPCs often restrict eth_getLogs. Preserve the finalized balance observation
-            # and leave transfer-derived capital classification unavailable.
-            pass
+        native_acquired_at = self.clock.now().astimezone(UTC)
         rows = [
             RawOnChainObservation(
                 project=surface.project,
@@ -152,7 +229,7 @@ class CapitalFlowEngine:
                 block_hash=block_hash,
                 block_timestamp=end_timestamp,
                 observed_address=surface.address,
-                acquisition_timestamp=datetime.now(tz=UTC),
+                acquisition_timestamp=native_acquired_at,
                 finality_status="finalized",
                 source_reference=surface.source_url,
                 evidence_id=identity(
@@ -166,7 +243,388 @@ class CapitalFlowEngine:
                 event_type="native_balance",
             )
         ]
-        return tuple(rows)
+        if self.evidence_signing_key is None:
+            return tuple(rows), (), ("evidence_signing_key",)
+        signatures: list[dict[str, object]] = []
+        unavailable: set[str] = set()
+        address_topic = "0x" + surface.address.lower()[2:].zfill(64)
+        seen: set[str] = set()
+        budget_exhausted = False
+        for asset in self.config.tracked_assets:
+            if asset.chain_id != surface.chain_id or not asset.contract_address:
+                continue
+            for topics in ((TRANSFER_TOPIC, address_topic), (TRANSFER_TOPIC, None, address_topic)):
+                try:
+                    logs = adapter.logs(
+                        address=asset.contract_address, from_block=start_block, to_block=end_block, topics=topics
+                    )
+                    log_acquired_at = self.clock.now().astimezone(UTC)
+                    log_endpoint = adapter.endpoint_identity
+                    for log in logs:
+                        try:
+                            topics_raw = [str(item).lower() for item in log["topics"]]
+                            if (
+                                len(topics_raw) != 3
+                                or topics_raw[0] != TRANSFER_TOPIC
+                                or log.get("removed")
+                                or str(log["address"]).lower() != asset.contract_address.lower()
+                            ):
+                                continue
+                            if any(
+                                len(t) != 66 or not t.startswith("0x") or t[2:26] != "0" * 24 for t in topics_raw[1:]
+                            ):
+                                continue
+                            sender, recipient = ("0x" + t[-40:] for t in topics_raw[1:])
+                            if surface.address.lower() not in (sender, recipient):
+                                continue
+                            number = int(str(log["blockNumber"]), 16)
+                            index = int(str(log["logIndex"]), 16)
+                            tx = str(log["transactionHash"]).lower()
+                            data = str(log["data"]).lower()
+                            block_hash_value = str(log["blockHash"]).lower()
+                            if (
+                                not start_block <= number <= end_block
+                                or index < 0
+                                or re.fullmatch(r"0x[0-9a-f]{64}", tx) is None
+                                or re.fullmatch(r"0x[0-9a-f]{64}", data) is None
+                                or re.fullmatch(r"0x[0-9a-f]{64}", block_hash_value) is None
+                            ):
+                                continue
+                            int(tx, 16)
+                            int(sender, 16)
+                            int(recipient, 16)
+                            amount = int(data, 16)
+                            evidence_id = evm_log_evidence_id(surface.chain_id, tx, index)
+                            if evidence_id in seen:
+                                continue
+                            block = adapter.block(number)
+                            if str(block.get("hash", "")).lower() != block_hash_value:
+                                continue
+                            receipt = adapter.transaction_receipt(tx)
+                            if not receipt_matches_log(receipt, {**log, "topics": topics_raw, "data": data}):
+                                continue
+                            receipt_endpoint = adapter.endpoint_identity
+                            corroborations = adapter.corroborating_receipts(
+                                tx, exclude=(log_endpoint, receipt_endpoint)
+                            )
+                            if not corroborations or not all(
+                                receipt_matches_log(other, {**log, "topics": topics_raw, "data": data})
+                                for _, other in corroborations
+                            ):
+                                continue
+                            verified_at = self.clock.now().astimezone(UTC)
+                            timestamp = datetime.fromtimestamp(int(str(block["timestamp"]), 16), tz=UTC)
+                            incoming = recipient == surface.address.lower()
+                            row = RawOnChainObservation(
+                                project=surface.project,
+                                chain_id=surface.chain_id,
+                                provider=adapter.provider,
+                                endpoint_identity=adapter.endpoint_identity,
+                                block_number=number,
+                                block_hash=block_hash_value,
+                                block_timestamp=timestamp,
+                                observed_address=surface.address,
+                                acquisition_timestamp=log_acquired_at,
+                                finality_status="finalized",
+                                source_reference=surface.source_url,
+                                evidence_id=evidence_id,
+                                transaction_hash=tx,
+                                log_index=index,
+                                counterparty_address=sender if incoming else recipient,
+                                asset_contract=asset.contract_address.lower(),
+                                asset_symbol=asset.symbol,
+                                raw_amount=str(amount),
+                                decimals=asset.decimals,
+                                normalized_amount=_amount(amount, asset.decimals),
+                                direction="in" if incoming else "out",
+                                event_type="erc20_transfer",
+                                log_endpoint=log_endpoint,
+                                receipt_endpoint=receipt_endpoint,
+                                corroborating_endpoints=tuple(sorted(name for name, _ in corroborations)),
+                                receipt_validation_policy=CORROBORATION_POLICY,
+                                receipt_verified_at=verified_at,
+                                log_topics=tuple(topics_raw),
+                                log_data=data,
+                            )
+                            row = replace(row, receipt_log_digest=receipt_log_digest(row))
+                            existing = existing_rows.get(f"{row.project}:{row.chain_id}:{row.evidence_id}")
+                            if existing is not None and signature_id(row) in existing_signatures:
+                                preserved = _preserved_signed_row(row, existing)
+                                if preserved is not None:
+                                    row = preserved
+                                    verified_at = row.receipt_verified_at or verified_at
+                            signed = sign_observation(
+                                row, surface, self.evidence_signing_key, verification_timestamp=verified_at
+                            )
+                            rows.append(row)
+                            signatures.append(signed)
+                            seen.add(evidence_id)
+                        except RpcAttemptBudgetExhausted:
+                            unavailable.add("rpc_budget_exhausted")
+                            budget_exhausted = True
+                            break
+                        except (
+                            KeyError,
+                            TypeError,
+                            ValueError,
+                            AttributeError,
+                            OverflowError,
+                            CapitalFlowEvidenceError,
+                        ):
+                            unavailable.add("transfer_evidence_signing_failed")
+                            continue
+                except RpcAttemptBudgetExhausted:
+                    unavailable.add("rpc_budget_exhausted")
+                    budget_exhausted = True
+                    break
+                except EVMProviderUnavailable:
+                    unavailable.add("transfer_corroboration_unavailable")
+                    continue
+            if budget_exhausted:
+                break
+        return tuple(rows), tuple(signatures), tuple(sorted(unavailable))
+
+    def _surface_swap_observations(
+        self,
+        surface: OnChainSurface,
+        adapter: EVMJsonRpcAdapter,
+        start_block: int,
+        end_block: int,
+        block_hash: str,
+        end_timestamp: datetime,
+    ) -> tuple[tuple[RawOnChainObservation, ...], tuple[dict[str, object], ...], tuple[str, ...]]:
+        pools = tuple(
+            pool_row
+            for pool_row in self.config.dex_pools
+            if pool_row.active and pool_row.chain_id == surface.chain_id and pool_row.project == surface.project
+        )
+        observations: list[RawOnChainObservation] = []
+        signatures: list[dict[str, object]] = []
+        unavailable: set[str] = set()
+        for pool_row in pools:
+            rows, signed, reasons = self._swap_observations(
+                pool_row,
+                adapter,
+                start_block=start_block,
+                end_block=end_block,
+                block_hash=block_hash,
+                end_timestamp=end_timestamp,
+            )
+            observations.extend(rows)
+            signatures.extend(signed)
+            unavailable.update(reasons)
+        return tuple(observations), tuple(signatures), tuple(sorted(unavailable))
+
+    def _swap_observations(
+        self,
+        pool_row: DexPoolConfig,
+        adapter: EVMJsonRpcAdapter,
+        *,
+        start_block: int,
+        end_block: int,
+        block_hash: str,
+        end_timestamp: datetime,
+    ) -> tuple[tuple[RawOnChainObservation, ...], tuple[dict[str, object], ...], tuple[str, ...]]:
+        chain = next((item for item in self.config.chains if item.chain_id == pool_row.chain_id), None)
+        budget = chain.swap_rpc_budget if chain else 12
+        if budget < MIN_SWAP_RPC_BUDGET:
+            return (), (), ("swap_rpc_budget_exhausted",)
+        if self.evidence_signing_key is None:
+            return (), (), ("evidence_signing_key",)
+        with adapter.request_budget(budget):
+            return self._collect_swap_observations(
+                pool_row,
+                adapter,
+                start_block=start_block,
+                end_block=end_block,
+            )
+
+    def _collect_swap_observations(
+        self,
+        pool_row: DexPoolConfig,
+        adapter: EVMJsonRpcAdapter,
+        *,
+        start_block: int,
+        end_block: int,
+    ) -> tuple[tuple[RawOnChainObservation, ...], tuple[dict[str, object], ...], tuple[str, ...]]:
+        unavailable: set[str] = set()
+        try:
+            identity_error = verify_pool_identity(pool_row, adapter, end_block)
+        except RpcAttemptBudgetExhausted:
+            return (), (), ("swap_rpc_budget_exhausted",)
+        except (EVMProviderUnavailable, ValueError, TypeError):
+            return (), (), ("pool_identity_unavailable",)
+        if identity_error is not None:
+            return (), (), (identity_error,)
+        topic = V2_SWAP_TOPIC if pool_row.version == "v2" else V3_SWAP_TOPIC if pool_row.version == "v3" else None
+        if topic is None:
+            return (), (), ("unsupported_dex_schema",)
+        try:
+            logs = adapter.logs(address=pool_row.address, from_block=start_block, to_block=end_block, topics=(topic,))
+        except RpcAttemptBudgetExhausted:
+            return (), (), ("swap_rpc_budget_exhausted",)
+        except EVMProviderUnavailable:
+            return (), (), ("swap_log_provider_unavailable",)
+        existing_rows = {
+            f"{row.get('project')}:{row.get('chain_id')}:{row.get('evidence_id')}": row for row in self.repository.raw()
+        }
+        existing_signatures = {str(row["signature_id"]): row for row in self.repository.evidence_signatures()}
+        observations: list[RawOnChainObservation] = []
+        signatures: list[dict[str, object]] = []
+        seen: set[str] = set()
+        surface = pool_row.as_surface()
+        for log in logs:
+            try:
+                swap_start_used = adapter.request_meter.used if adapter.request_meter is not None else 0
+                if log.get("removed") or str(log.get("address", "")).lower() != pool_row.address:
+                    continue
+                topics_raw = tuple(str(item).lower() for item in log["topics"])
+                decoded = decode_swap_log(pool_row, {**log, "topics": topics_raw})
+                if decoded.status != "AVAILABLE" or decoded.sender is None or decoded.recipient is None:
+                    continue
+                number = int(str(log["blockNumber"]), 16)
+                index = int(str(log["logIndex"]), 16)
+                tx = str(log["transactionHash"]).lower()
+                block_hash_value = str(log["blockHash"]).lower()
+                data = str(log["data"]).lower()
+                if (
+                    not start_block <= number <= end_block
+                    or index < 0
+                    or re.fullmatch(r"0x[0-9a-f]{64}", tx) is None
+                    or topics_raw[0] != topic
+                ):
+                    continue
+                block = adapter.block(number)
+                if (
+                    str(block.get("hash", "")).lower() != block_hash_value
+                    or int(str(block.get("number", hex(number))), 16) != number
+                ):
+                    continue
+                block_timestamp = datetime.fromtimestamp(int(str(block["timestamp"]), 16), tz=UTC)
+                evidence_id = evm_log_evidence_id(pool_row.chain_id, tx, index)
+                if evidence_id in seen:
+                    continue
+                receipt = adapter.transaction_receipt(tx)
+                if not receipt_matches_log(receipt, {**log, "topics": topics_raw, "data": data}):
+                    continue
+                receipt_from = str(receipt.get("from", "")).lower()
+                if _ADDRESS_PATTERN.fullmatch(receipt_from) is None:
+                    continue
+                wallet_code = adapter.code(receipt_from, number)
+                corroborations = adapter.corroborating_receipts(
+                    tx, exclude=(adapter.endpoint_identity, adapter.endpoint_identity)
+                )
+                if not corroborations or not all(
+                    receipt_matches_log(other, {**log, "topics": topics_raw, "data": data})
+                    for _, other in corroborations
+                ):
+                    unavailable.add("swap_corroboration_unavailable")
+                    continue
+                excluded = {pool_row.address, *pool_row.routers}
+                ambiguous = _receipt_swap_count(receipt) > 1
+                attributable = (
+                    wallet_code == "0x"
+                    and receipt_from not in excluded
+                    and str(receipt.get("status", "")).lower() == "0x1"
+                    and str(decoded.recipient).lower() == receipt_from
+                    and not ambiguous
+                )
+                target_amount = decoded.amount_out if decoded.trade_direction == "buy" else decoded.amount_in
+                target_raw = decoded.raw_amount_out if decoded.trade_direction == "buy" else decoded.raw_amount_in
+                acquired_at = self.clock.now().astimezone(UTC)
+                row = RawOnChainObservation(
+                    project=pool_row.project,
+                    chain_id=pool_row.chain_id,
+                    provider=adapter.provider,
+                    endpoint_identity=adapter.endpoint_identity,
+                    block_number=number,
+                    block_hash=block_hash_value,
+                    block_timestamp=block_timestamp,
+                    observed_address=pool_row.address,
+                    acquisition_timestamp=acquired_at,
+                    finality_status="finalized",
+                    source_reference=pool_row.source_url,
+                    evidence_id=evidence_id,
+                    transaction_hash=tx,
+                    log_index=index,
+                    counterparty_address=decoded.sender,
+                    asset_contract=pool_row.target_asset,
+                    asset_symbol=pool_row.target_asset_symbol,
+                    raw_amount=str(target_raw),
+                    decimals=(
+                        pool_row.token0_decimals
+                        if pool_row.target_asset == pool_row.token0
+                        else pool_row.token1_decimals
+                    ),
+                    normalized_amount=target_amount,
+                    direction="unknown",
+                    event_type="dex_swap",
+                    log_endpoint=adapter.endpoint_identity,
+                    receipt_endpoint=adapter.endpoint_identity,
+                    corroborating_endpoints=tuple(sorted(name for name, _ in corroborations)),
+                    receipt_validation_policy=CORROBORATION_POLICY,
+                    receipt_verified_at=acquired_at,
+                    log_address=pool_row.address,
+                    swap_pool_id=pool_row.pool_id,
+                    swap_dex=pool_row.dex,
+                    swap_version=pool_row.version,
+                    swap_event_topic=topic,
+                    token_in_contract=decoded.token_in,
+                    token_out_contract=decoded.token_out,
+                    token_in_raw_amount=str(decoded.raw_amount_in),
+                    token_out_raw_amount=str(decoded.raw_amount_out),
+                    token_in_amount=decoded.amount_in,
+                    token_out_amount=decoded.amount_out,
+                    target_asset_contract=pool_row.target_asset,
+                    trade_direction=decoded.trade_direction,
+                    attributed_wallet=receipt_from if attributable else None,
+                    attribution_status="AVAILABLE" if attributable else "UNAVAILABLE",
+                    attribution_reason=(
+                        None
+                        if attributable
+                        else (
+                            "multi_hop_ambiguous_swap"
+                            if ambiguous
+                            else "wallet_ownership_or_contract_attribution_unavailable"
+                        )
+                    ),
+                    receipt_from=receipt_from,
+                    receipt_status=str(receipt.get("status", "")).lower(),
+                    wallet_code=wallet_code if attributable else None,
+                    swap_status="AMBIGUOUS" if ambiguous else "AVAILABLE",
+                    rpc_request_count=(
+                        adapter.request_meter.used - swap_start_used if adapter.request_meter is not None else 0
+                    ),
+                    log_topics=topics_raw,
+                    log_data=data,
+                )
+                row = replace(row, receipt_log_digest=receipt_log_digest(row))
+                existing = existing_rows.get(f"{row.project}:{row.chain_id}:{row.evidence_id}")
+                if existing is not None and signature_id(row) in existing_signatures:
+                    preserved = _preserved_signed_row(row, existing)
+                    if preserved is not None:
+                        row = preserved
+                signed = sign_observation(row, surface, self.evidence_signing_key)
+                observations.append(row)
+                signatures.append(signed)
+                seen.add(evidence_id)
+            except RpcAttemptBudgetExhausted:
+                unavailable.add("swap_rpc_budget_exhausted")
+                break
+            except EVMProviderUnavailable:
+                unavailable.add("swap_evidence_signing_failed")
+                continue
+            except (
+                KeyError,
+                TypeError,
+                ValueError,
+                AttributeError,
+                OverflowError,
+                CapitalFlowEvidenceError,
+            ):
+                unavailable.add("swap_evidence_signing_failed")
+                continue
+        return tuple(observations), tuple(signatures), tuple(sorted(unavailable))
 
     def _block_window(self, chain_id: int, window: str) -> int:
         chain = next((item for item in self.config.chains if item.chain_id == chain_id), None)
@@ -299,7 +757,80 @@ def _sum(flows: tuple[CapitalFlowRecord, ...], categories: tuple[str, ...]) -> D
 
 
 def _amount(raw: int, decimals: int) -> Decimal:
-    return Decimal(raw) / (Decimal(10) ** Decimal(decimals))
+    with localcontext() as context:
+        context.prec = max(len(str(raw)) + decimals + 1, 28)
+        return Decimal(raw).scaleb(-decimals)
+
+
+def _preserved_signed_row(row: RawOnChainObservation, existing: Mapping[str, object]) -> RawOnChainObservation | None:
+    try:
+        previous = as_observation(existing)
+    except (
+        AttributeError,
+        CapitalFlowEvidenceError,
+        InvalidOperation,
+        KeyError,
+        TypeError,
+        ValueError,
+        OverflowError,
+    ):
+        return None
+    current_value = dict(observation_comparison_value(row))
+    previous_value = dict(observation_comparison_value(previous))
+    for value in (current_value, previous_value):
+        value.pop("acquisition_timestamp", None)
+        value.pop("receipt_verified_at", None)
+        value.pop("rpc_request_count", None)
+    if current_value != previous_value:
+        return None
+    return replace(
+        row,
+        acquisition_timestamp=previous.acquisition_timestamp,
+        receipt_verified_at=previous.receipt_verified_at,
+        rpc_request_count=previous.rpc_request_count,
+    )
+
+
+def _receipt_swap_count(receipt: Mapping[str, object]) -> int:
+    entries = receipt.get("logs")
+    if not isinstance(entries, list):
+        return 0
+    topics = {V2_SWAP_TOPIC, V3_SWAP_TOPIC}
+    count = 0
+    for entry in entries:
+        entry_topics = entry.get("topics") if isinstance(entry, dict) else None
+        if isinstance(entry_topics, (list, tuple)) and entry_topics and str(entry_topics[0]).lower() in topics:
+            count += 1
+    return count
+
+
+def receipt_matches_log(receipt: dict[str, object], log: dict[str, object]) -> bool:
+    keys = ("address", "topics", "data", "transactionHash", "logIndex", "blockNumber", "blockHash")
+    entries = receipt.get("logs")
+    return (
+        str(receipt.get("status", "")).lower() == "0x1"
+        and all(
+            _receipt_value(receipt.get(key)) == _receipt_value(log.get(key))
+            for key in ("transactionHash", "blockNumber", "blockHash")
+        )
+        and isinstance(entries, list)
+        and any(
+            isinstance(entry, dict)
+            and not entry.get("removed")
+            and all(
+                key in entry and key in log and _receipt_value(entry[key]) == _receipt_value(log[key]) for key in keys
+            )
+            for entry in entries
+        )
+    )
+
+
+def _receipt_value(value: object) -> object:
+    if isinstance(value, list):
+        return tuple(_receipt_value(item) for item in value)
+    if isinstance(value, str) and value.startswith("0x"):
+        return value.lower()
+    return value
 
 
 def evm_log_evidence_id(chain_id: int, transaction_hash: str, log_index: int) -> str:

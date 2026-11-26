@@ -67,6 +67,7 @@ from hunter.dashboard.exceptions import DashboardPersistenceError
 from hunter.dashboard_api import build_dashboard_api, render_dashboard_api
 from hunter.data_ops import (
     DATA_OPS_JOB_IDS,
+    ReadOnlyDiscoveryExecutor,
     data_ops_failures,
     data_ops_history,
     data_ops_status,
@@ -82,6 +83,7 @@ from hunter.discovery import (
     discovery_automation_status,
     install_discovery_jobs,
     load_discovery_config,
+    require_discovery_automation,
 )
 from hunter.economic import EconomicDependencyGraphEngine, EconomicGraphRepository
 from hunter.economic.engine import economic_path
@@ -202,7 +204,12 @@ def main(argv: list[str] | None = None) -> int:
     automation = sub.add_parser("automation")
     automation_sub = automation.add_subparsers(dest="automation_command")
     start = automation_sub.add_parser("start")
-    start.add_argument("--max-iterations", type=int, default=1)
+    start.add_argument(
+        "--max-iterations",
+        type=int,
+        default=None,
+        help="bounded diagnostic limit; omit for indefinite operation",
+    )
     automation_sub.add_parser("status")
     automation_sub.add_parser("list-jobs")
     show_job = automation_sub.add_parser("show-job")
@@ -236,6 +243,7 @@ def main(argv: list[str] | None = None) -> int:
     discovery_sub = discovery.add_subparsers(dest="discovery_command")
     discovery_run = discovery_sub.add_parser("run")
     discovery_run.add_argument("--limit", type=int)
+    discovery_run.add_argument("--mode", choices=("backfill", "incremental"), default=None)
     discovery_sync = discovery_sub.add_parser("sync")
     discovery_sync.add_argument(
         "--provider",
@@ -246,6 +254,8 @@ def main(argv: list[str] | None = None) -> int:
     discovery_sub.add_parser("status")
     discovery_sub.add_parser("stats")
     discovery_sub.add_parser("coverage")
+    discovery_sub.add_parser("global-coverage")
+    discovery_sub.add_parser("universe")
     discovery_sub.add_parser("validate")
     discovery_sub.add_parser("registry")
     discovery_candidates = discovery_sub.add_parser("candidates")
@@ -254,14 +264,20 @@ def main(argv: list[str] | None = None) -> int:
     discovery_report.add_argument("--limit", type=int, default=25)
     discovery_candidate = discovery_sub.add_parser("candidate")
     discovery_candidate.add_argument("candidate")
-    discovery_sub.add_parser("screen")
+    discovery_screen = discovery_sub.add_parser("screen")
+    discovery_screen.add_argument("--batch-size", type=int, default=1000)
     discovery_queue = discovery_sub.add_parser("queue")
     discovery_queue.add_argument("queue_command", nargs="?", choices=("refresh",))
     discovery_queue.add_argument("--limit", type=int, default=25)
+    discovery_queue.add_argument("--batch-size", type=int, default=1000)
+    discovery_sub.add_parser("reconcile")
+    discovery_handoff = discovery_sub.add_parser("handoff")
+    discovery_handoff.add_argument("--limit", type=int, default=25)
     discovery_sub.add_parser("conflicts")
     discovery_identity = discovery_sub.add_parser("identity")
     discovery_identity.add_argument("identity_command", choices=("resolve", "coverage", "report", "conflicts"))
     discovery_identity.add_argument("--limit", type=int, default=25)
+    discovery_identity.add_argument("--batch-size", type=int, default=500)
     discovery_automation = discovery_sub.add_parser("automation")
     discovery_automation_sub = discovery_automation.add_subparsers(dest="discovery_automation_command")
     discovery_automation_sub.add_parser("install")
@@ -803,7 +819,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 1
     config = load_automation_config(Path(args.config))
-    runner = AutomationJobRunner()
+    runner = AutomationJobRunner(pipeline_executor=ReadOnlyDiscoveryExecutor())
     scheduler = AutomationScheduler(config.jobs, runner, polling_interval_seconds=config.polling_interval_seconds)
     if args.automation_command == "list-jobs":
         for job in config.jobs:
@@ -818,6 +834,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{run.automation_run_id}\t{run.status}")
         return 0 if run.status in {"succeeded", "partial"} else 2
     if args.automation_command == "start":
+        require_discovery_automation(Path(args.config))
         scheduler.run_loop(max_iterations=args.max_iterations)
         print("scheduler started")
         return 0
@@ -1108,7 +1125,7 @@ def _discovery(args: object) -> int:
     repository = CandidateRegistryRepository(config.registry_path)
     engine = CandidateDiscoveryEngine(repository, config)
     if command == "run":
-        result = engine.run_market_discovery(limit=getattr(args, "limit", None))
+        result = engine.run_market_discovery(limit=getattr(args, "limit", None), mode=getattr(args, "mode", None))
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
     if command == "sync":
@@ -1127,6 +1144,13 @@ def _discovery(args: object) -> int:
             f"sources={stats.source_count} last_run={last_run}"
         )
         return 0
+    if command == "global-coverage":
+        print(json.dumps(engine.global_coverage(), indent=2, sort_keys=True, default=str))
+        return 0
+    if command == "universe":
+        result = engine.enumerate_universe()
+        print(json.dumps(result, indent=2, sort_keys=True, default=str))
+        return 0 if result["status"] in {"succeeded", "unsupported"} else 2
     if command == "coverage":
         stats = repository.stats()
         expected = len(load_market_validation_config(Path(config.market_validation_config)).project_universe)
@@ -1196,6 +1220,43 @@ def _discovery(args: object) -> int:
         print(f"assets_by_category={json.dumps(metrics['assets_by_category'], sort_keys=True)}")
         print(f"provider_overlap={json.dumps(metrics['provider_overlap'], sort_keys=True)}")
         print(f"provider_uniqueness={json.dumps(metrics['provider_uniqueness'], sort_keys=True)}")
+        global_coverage = cast(dict[str, Any], engine.global_coverage())
+        universe = cast(dict[str, Any], global_coverage["universe"])
+        networks = cast(dict[str, Any], global_coverage["networks"])
+        pools = cast(dict[str, Any], global_coverage["pools"])
+        universe_coverage = "unmeasured" if universe["coverage"] is None else f"{universe['coverage']:.2%}"
+        network_coverage = "unmeasured" if networks["coverage"] is None else f"{networks['coverage']:.2%}"
+        print(
+            f"global_universe_assets={universe['accessible_assets']} "
+            f"discovered_universe_assets={universe['matched_assets']} "
+            f"global_universe_coverage={universe_coverage}"
+        )
+        print(
+            f"catalogued_networks={networks['catalogued_networks']} "
+            f"scanned_networks={networks['scanned_networks']} "
+            f"network_coverage={network_coverage}"
+        )
+        print(f"observed_pools={pools['observed_pools']} new_pools={pools['new_pools']} " f"pool_coverage=unmeasured")
+        print(f"unsupported_scope={json.dumps(global_coverage['unsupported_scope'], sort_keys=True)}")
+        evidence = cast(dict[str, Any], global_coverage["evidence"])
+        print(
+            f"identity_verified_assets={evidence['identity_verified_assets']} "
+            f"fresh_market_evidence_assets_24h={evidence['fresh_market_evidence_assets_24h']}"
+        )
+        capacity = cast(dict[str, Any], global_coverage["capacity"])
+        observed = cast(dict[str, Any], capacity["observed"] or {"totals": {}})
+        print(
+            f"capacity_inventory={capacity['inventory']} api_calls={capacity['api_calls']} "
+            f"retries={capacity['retries']} throttles={capacity['throttles']} cooldowns={capacity['cooldowns']}"
+        )
+        print(
+            f"remaining_quota={json.dumps(capacity['remaining_quota'], sort_keys=True)} "
+            f"observed_requests_per_second={json.dumps(capacity['observed_requests_per_second'], sort_keys=True)}"
+        )
+        print(f"eta_seconds={json.dumps(capacity['eta_seconds'], sort_keys=True)}")
+        print(f"capacity_unsupported_segments={json.dumps(capacity['unsupported_segments'], sort_keys=True)}")
+        if observed.get("totals"):
+            print(f"capacity_totals={json.dumps(observed['totals'], sort_keys=True)}")
         return 0
     if command == "validate":
         stats = repository.stats()
@@ -1207,7 +1268,7 @@ def _discovery(args: object) -> int:
         print(json.dumps([candidate_for_report(candidate) for candidate in candidates], indent=2, sort_keys=True))
         return 0
     if command == "screen":
-        results = engine.screen_candidates()
+        results = engine.screen_candidates(limit=int(getattr(args, "batch_size", 1000)))
         counts = Counter(result.status for result in results)
         print(
             f"screened={len(results)} advanced={counts['advanced']} deferred={counts['deferred']} rejected={counts['rejected']}"
@@ -1215,7 +1276,7 @@ def _discovery(args: object) -> int:
         return 0
     if command == "queue":
         entries = (
-            engine.refresh_queue()
+            engine.refresh_queue(limit=int(getattr(args, "batch_size", 1000)))
             if getattr(args, "queue_command", None) == "refresh"
             else repository.queue_entries(limit=int(args.limit))
         )
@@ -1248,6 +1309,16 @@ def _discovery(args: object) -> int:
             )
         )
         return 0
+    if command == "reconcile":
+        payload = {
+            "queue_eligibility_changes": engine.reconcile_eligibility(),
+            "candidate_status_changes": repository.reconcile_candidate_status(),
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+    if command == "handoff":
+        print(json.dumps(engine.handoff_manifest(limit=int(args.limit)), indent=2, sort_keys=True))
+        return 0
     if command == "conflicts":
         print(
             json.dumps(
@@ -1259,7 +1330,7 @@ def _discovery(args: object) -> int:
         identity_command = getattr(args, "identity_command", None)
         identity_engine = CandidateIdentityResolutionEngine(repository)
         if identity_command == "resolve":
-            summary = identity_engine.resolve_all()
+            summary = identity_engine.resolve_batch(limit=int(getattr(args, "batch_size", 500)))
             print(json.dumps(summary.__dict__, indent=2, sort_keys=True))
             return 0
         results = repository.identity_results()
@@ -1405,7 +1476,7 @@ def _discovery_market_metrics(candidates: tuple[CandidateRecord, ...]) -> dict[s
 
 
 def _has_official_link(candidate: CandidateRecord) -> bool:
-    links = candidate.metadata.get("official_links")
+    links = candidate.metadata.get("verified_official_links")
     return isinstance(links, (list, tuple)) and any(str(link).strip() for link in links)
 
 

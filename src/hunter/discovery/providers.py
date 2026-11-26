@@ -2,15 +2,24 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 
 from hunter.acquisition.exceptions import ProviderUnavailableError
+from hunter.discovery.capacity import CapacityLedger, DuplicateCapacityRequest, endpoint_for_url
+
+# GeckoTerminal's free public API rejects page numbers above 10 with HTTP 401
+# ("Upgrade to Analyst plan or above"). This is a documented-by-response free
+# plan restriction, not a rate limit: requests above the cap are never retried.
+GECKOTERMINAL_FREE_MAX_PAGE = 10
 
 
 @dataclass(frozen=True)
@@ -37,6 +46,62 @@ class DiscoveryProvider(Protocol):
 
 
 @dataclass(frozen=True)
+class ScanBudget:
+    """Bounded request allowance and pacing for one provider scan cycle."""
+
+    max_requests: int = 8
+    min_interval_seconds: float = 0.0
+
+
+@dataclass(frozen=True)
+class ProviderScanResult:
+    """Evidence from one bounded scan cycle, including resumable state."""
+
+    candidates: tuple[DiscoveredCandidate, ...]
+    state: dict[str, Any]
+    status: str
+    requests: int
+    network_ids: tuple[str, ...] = ()
+    pool_observations: tuple[dict[str, Any], ...] = ()
+    observed_at: str = ""
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class DexEnrichmentResult:
+    """Bounded batch-enrichment outcome, including the assets actually requested."""
+
+    candidates: tuple[DiscoveredCandidate, ...]
+    assets: int
+    processed: int
+    batches: int
+    truncated: bool
+    processed_assets: tuple[tuple[str, str], ...] = ()
+    failure: str | None = None
+
+
+class _RequestBudgetExhausted(Exception):
+    pass
+
+
+class _RequestMeter:
+    def __init__(self, budget: ScanBudget) -> None:
+        self.budget = budget
+        self.count = 0
+        self._last: float | None = None
+
+    def consume(self, sleeper: Callable[[float], None]) -> None:
+        if self.count >= max(1, self.budget.max_requests):
+            raise _RequestBudgetExhausted
+        if self.budget.min_interval_seconds > 0 and self._last is not None:
+            remaining = self.budget.min_interval_seconds - (time.monotonic() - self._last)
+            if remaining > 0:
+                sleeper(remaining)
+        self._last = time.monotonic()
+        self.count += 1
+
+
+@dataclass(frozen=True)
 class CoinGeckoDiscoveryProvider:
     base_url: str = "https://api.coingecko.com/api/v3"
     timeout_seconds: int = 30
@@ -45,23 +110,39 @@ class CoinGeckoDiscoveryProvider:
     per_page: int = 250
     name: str = "coingecko"
     sleeper: Callable[[float], None] = time.sleep
+    ledger: CapacityLedger | None = None
 
     def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
+        return self.discover_batch(limit=limit, cursor=0)[0][:limit]
+
+    def discover_batch(
+        self, *, limit: int, cursor: int, budget: ScanBudget | None = None
+    ) -> tuple[tuple[DiscoveredCandidate, ...], int]:
         rows: list[DiscoveredCandidate] = []
+        meter = _RequestMeter(budget) if budget else None
         pages = max(1, (max(1, limit) + self.per_page - 1) // self.per_page)
-        for page in range(1, pages + 1):
-            payload = self._get(
-                "/coins/markets",
-                {
-                    "vs_currency": "usd",
-                    "order": "market_cap_desc",
-                    "per_page": min(self.per_page, max(1, limit)),
-                    "page": page,
-                    "sparkline": "false",
-                },
-            )
+        completed = cursor
+        for page in range(cursor + 1, cursor + pages + 1):
+            try:
+                payload = self._get(
+                    "/coins/markets",
+                    {
+                        "vs_currency": "usd",
+                        "order": "market_cap_desc",
+                        "per_page": self.per_page,
+                        "page": page,
+                        "sparkline": "false",
+                    },
+                    meter=meter,
+                )
+            except _RequestBudgetExhausted:
+                # Stop at the last completed page; the cursor remains on this page.
+                break
             if not isinstance(payload, list):
                 raise ProviderUnavailableError("CoinGecko discovery response must be a list")
+            if not payload:
+                return tuple(rows), 0
+            completed = page
             for item in payload:
                 if not isinstance(item, dict):
                     continue
@@ -82,14 +163,39 @@ class CoinGeckoDiscoveryProvider:
                             "market_cap_rank": item.get("market_cap_rank"),
                             "market_cap": item.get("market_cap"),
                             "last_updated": item.get("last_updated"),
+                            "discovery_mode": "global_market_enumeration",
+                            "asset_scope": "coingecko_asset",
                         },
                     )
                 )
-                if len(rows) >= limit:
-                    return tuple(rows)
-        return tuple(rows)
+            if len(payload) < self.per_page:
+                return tuple(rows), 0
+        return tuple(rows), completed
 
-    def _get(self, path: str, params: dict[str, object]) -> object:
+    def enumerate_universe(self) -> dict[str, Any]:
+        """Enumerate the accessible CoinGecko asset universe for a real coverage denominator."""
+        payload = self._get("/coins/list", {"include_platform": "false"})
+        if not isinstance(payload, list):
+            raise ProviderUnavailableError("CoinGecko universe response must be a list")
+        asset_ids = sorted(
+            {
+                str(item.get("id", "")).strip()
+                for item in payload
+                if isinstance(item, dict) and str(item.get("id") or "").strip()
+            }
+        )
+        if not asset_ids:
+            raise ProviderUnavailableError("CoinGecko universe enumeration returned no assets")
+        return {
+            "provider": self.name,
+            "scope": "global_asset_universe",
+            "asset_ids": asset_ids,
+            "asset_count": len(asset_ids),
+            "observed_at": datetime.now(UTC).isoformat(),
+            "source_url": f"{self.base_url.rstrip('/')}/coins/list?include_platform=false",
+        }
+
+    def _get(self, path: str, params: dict[str, object], *, meter: _RequestMeter | None = None) -> object:
         query = urllib.parse.urlencode({key: value for key, value in params.items() if value is not None})
         url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
         if query:
@@ -101,6 +207,9 @@ class CoinGeckoDiscoveryProvider:
             max_attempts=self.max_attempts,
             backoff_seconds=self.backoff_seconds,
             sleeper=self.sleeper,
+            meter=meter,
+            ledger=self.ledger,
+            endpoint=endpoint_for_url("CoinGecko", url),
         )
 
 
@@ -112,6 +221,7 @@ class DefiLlamaDiscoveryProvider:
     backoff_seconds: float = 0.5
     name: str = "defillama"
     sleeper: Callable[[float], None] = time.sleep
+    ledger: CapacityLedger | None = None
 
     def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
         payload = self._get("/protocols")
@@ -157,6 +267,8 @@ class DefiLlamaDiscoveryProvider:
             max_attempts=self.max_attempts,
             backoff_seconds=self.backoff_seconds,
             sleeper=self.sleeper,
+            ledger=self.ledger,
+            endpoint=endpoint_for_url("DefiLlama", url),
         )
 
 
@@ -168,17 +280,241 @@ class GeckoTerminalDiscoveryProvider:
     backoff_seconds: float = 0.5
     name: str = "geckoterminal"
     sleeper: Callable[[float], None] = time.sleep
+    ledger: CapacityLedger | None = None
+    seen_contract_limit: int = 20_000
 
     def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
-        payload = self._get("/networks/trending_pools", {"include": "base_token,quote_token", "page": 1})
+        # Trending pools are a popularity feed, not global enumeration.
+        rows, _ = self._pool_page("/networks/trending_pools", 1, discovery_mode="trending_feed", seen_contracts=set())
+        return rows[:limit]
+
+    def discover_scan(
+        self,
+        *,
+        state: dict[str, Any] | None,
+        budget: ScanBudget,
+        observed_at: str | None = None,
+        max_candidates: int | None = None,
+    ) -> ProviderScanResult:
+        """Enumerate the network catalogue and per-network pools with a durable cursor."""
+        scan = self._normalise_state(state)
+        meter = _RequestMeter(budget)
+        timestamp = observed_at or datetime.now(UTC).isoformat()
+        rows: list[DiscoveredCandidate] = []
+        pool_observations: list[dict[str, Any]] = []
+        seen_contracts = {
+            (str(key[0]), str(key[1]))
+            for key in scan["seen_contracts"]
+            if isinstance(key, (list, tuple)) and len(key) == 2
+        }
+        status = "succeeded"
+        error: str | None = None
+        successful_pages = 0
+
+        while True:
+            try:
+                if not scan["network_ids"] or scan["network_index"] >= len(scan["network_ids"]):
+                    if not scan["started"]:
+                        scan["started"] = True
+                    elif scan["catalogue_complete"]:
+                        scan["passes"] = int(scan["passes"]) + 1
+                        scan["rotation_seed"] = int(scan["rotation_seed"]) + 1
+                        scan["catalogue_page"] = 1
+                        scan["catalogue_complete"] = False
+                        scan["catalogue_fetched"] = False
+                    elif scan["catalogue_fetched"]:
+                        if int(scan["catalogue_page"]) >= GECKOTERMINAL_FREE_MAX_PAGE:
+                            scan["catalogue_complete"] = True
+                            catalogue_record = {
+                                "scope": "network_catalogue",
+                                "page": int(scan["catalogue_page"]) + 1,
+                                "reason": "free_api_page_cap",
+                            }
+                            if catalogue_record not in scan["inaccessible_scope"]:
+                                scan["inaccessible_scope"].append(catalogue_record)
+                        else:
+                            scan["catalogue_page"] = int(scan["catalogue_page"]) + 1
+                        scan["catalogue_fetched"] = False
+                    scan["network_ids"] = []
+                    scan["network_index"] = 0
+                    scan["pool_page"] = 1
+                    catalogue = self._get("/networks", {"page": scan["catalogue_page"]}, meter=meter)
+                    scan["catalogue_fetched"] = True
+                    networks = catalogue.get("data") if isinstance(catalogue, dict) else None
+                    if not isinstance(networks, list):
+                        raise ProviderUnavailableError("GeckoTerminal network catalogue unavailable")
+                    scan["network_ids"] = [
+                        str(item.get("id", "")).strip()
+                        for item in networks
+                        if isinstance(item, dict) and str(item.get("id") or "").strip()
+                    ]
+                    rotation = int(scan["rotation_seed"]) % len(scan["network_ids"]) if scan["network_ids"] else 0
+                    if rotation:
+                        scan["network_ids"] = scan["network_ids"][rotation:] + scan["network_ids"][:rotation]
+                    links = catalogue.get("links") if isinstance(catalogue, dict) else None
+                    if not isinstance(links, dict) or not links.get("next"):
+                        scan["catalogue_complete"] = True
+                    if not scan["network_ids"]:
+                        continue
+
+                network_id = str(scan["network_ids"][scan["network_index"]])
+                path = f"/networks/{urllib.parse.quote(network_id, safe='')}/pools"
+                page_rows, page_pools = self._pool_page(
+                    path,
+                    int(scan["pool_page"]),
+                    discovery_mode="network_pool_enumeration",
+                    seen_contracts=seen_contracts,
+                    meter=meter,
+                    observed_at=timestamp,
+                )
+                successful_pages += 1
+                rows.extend(page_rows)
+                pool_observations.extend(page_pools)
+                for item in page_rows:
+                    metadata = item.metadata or {}
+                    key = (str(metadata.get("chain") or ""), str(metadata.get("contract_address") or ""))
+                    if all(key):
+                        seen_contracts.add(key)
+                if page_pools and int(scan["pool_page"]) < GECKOTERMINAL_FREE_MAX_PAGE:
+                    scan["pool_page"] = int(scan["pool_page"]) + 1
+                else:
+                    if page_pools:
+                        record = {
+                            "scope": "network_pools",
+                            "network_id": network_id,
+                            "page": GECKOTERMINAL_FREE_MAX_PAGE + 1,
+                            "reason": "free_api_page_cap",
+                        }
+                        if record not in scan["inaccessible_scope"]:
+                            scan["inaccessible_scope"].append(record)
+                    # Empty page or the free pagination cap ends this network.
+                    scan["network_index"] = int(scan["network_index"]) + 1
+                    scan["pool_page"] = 1
+                if max_candidates is not None and len(rows) >= max(1, max_candidates):
+                    break
+            except _RequestBudgetExhausted:
+                status = "partial"
+                break
+            except ProviderUnavailableError as exc:
+                error = str(exc)
+                scan["last_error"] = error
+                status = "partial"
+                break
+
+        scan["seen_contracts"] = [list(key) for key in sorted(seen_contracts)[: max(0, self.seen_contract_limit)]]
+        scan["inaccessible_scope"] = list(scan["inaccessible_scope"])[-200:]
+        scan["observed_pools"] = int(scan["observed_pools"]) + len(pool_observations)
+        scan["updated_at"] = timestamp
+        return ProviderScanResult(
+            candidates=tuple(rows),
+            state=scan,
+            status=status,
+            requests=meter.count,
+            network_ids=tuple(str(value) for value in scan["network_ids"]),
+            pool_observations=tuple(pool_observations),
+            observed_at=timestamp,
+            error=error,
+        )
+
+    @staticmethod
+    def _normalise_state(state: dict[str, Any] | None) -> dict[str, Any]:
+        scan = dict(state or {})
+        scan.setdefault("catalogue_page", 1)
+        scan.setdefault("catalogue_complete", False)
+        scan.setdefault("catalogue_fetched", False)
+        scan.setdefault("started", False)
+        scan.setdefault("network_ids", [])
+        scan.setdefault("network_index", 0)
+        scan.setdefault("pool_page", 1)
+        scan.setdefault("seen_contracts", [])
+        scan.setdefault("observed_pools", 0)
+        scan.setdefault("passes", 0)
+        scan.setdefault("rotation_seed", 0)
+        scan.setdefault("last_error", None)
+        scan.setdefault("inaccessible_scope", [])
+        try:
+            catalogue_page = int(scan.get("catalogue_page", 1))
+        except (TypeError, ValueError):
+            catalogue_page = 1
+        if catalogue_page > GECKOTERMINAL_FREE_MAX_PAGE:
+            scan["catalogue_page"] = 1
+            scan["catalogue_complete"] = True
+            scan["catalogue_fetched"] = False
+        try:
+            pool_page = int(scan.get("pool_page", 1))
+        except (TypeError, ValueError):
+            pool_page = 1
+        if pool_page > GECKOTERMINAL_FREE_MAX_PAGE:
+            # A pre-cap checkpoint must never re-issue the page that returned 401.
+            scan["network_index"] = int(scan.get("network_index", 0)) + 1
+            scan["pool_page"] = 1
+            record = {
+                "scope": "network_pools",
+                "network_id": "resumed_checkpoint",
+                "page": pool_page,
+                "reason": "free_api_page_cap",
+            }
+            if record not in scan["inaccessible_scope"]:
+                scan["inaccessible_scope"].append(record)
+        return scan
+
+    def _pool_page(
+        self,
+        path: str,
+        page: int,
+        *,
+        discovery_mode: str,
+        seen_contracts: set[tuple[str, str]],
+        meter: _RequestMeter | None = None,
+        observed_at: str | None = None,
+    ) -> tuple[tuple[DiscoveredCandidate, ...], tuple[dict[str, Any], ...]]:
+        payload = self._get(path, {"include": "base_token,quote_token", "page": page}, meter=meter)
         if not isinstance(payload, dict):
             raise ProviderUnavailableError("GeckoTerminal discovery response must be an object")
+        pools_data = payload.get("data")
+        if not isinstance(pools_data, list):
+            raise ProviderUnavailableError("GeckoTerminal discovery response missing pool data")
         included = payload.get("included")
         if not isinstance(included, list):
             raise ProviderUnavailableError("GeckoTerminal discovery response missing included tokens")
-        pools = _geckoterminal_pool_index(payload.get("data"))
+        timestamp = observed_at or datetime.now(UTC).isoformat()
+        pools = _geckoterminal_pool_index(pools_data)
+        observations: list[dict[str, Any]] = []
+        for pool in pools_data:
+            if not isinstance(pool, dict):
+                continue
+            attributes = pool.get("attributes")
+            relationships = pool.get("relationships")
+            if not isinstance(attributes, dict) or not isinstance(relationships, dict):
+                continue
+            address = str(attributes.get("address") or "").strip()
+            if not address:
+                continue
+            token_ids = [
+                value
+                for value in (
+                    _relationship_id(relationships.get("base_token")),
+                    _relationship_id(relationships.get("quote_token")),
+                )
+                if value
+            ]
+            network = next(
+                (_geckoterminal_network(token_id, None) for token_id in token_ids), None
+            ) or _network_from_path(path)
+            if not network:
+                continue
+            observations.append(
+                {
+                    "network": network,
+                    "pool_address": normalize_contract_address(address, network),
+                    "contract_addresses": tuple(
+                        normalize_contract_address(token_id.split("_", 1)[-1], network) for token_id in token_ids
+                    ),
+                    "source_url": f"{self.base_url.rstrip('/')}{path}?page={page}",
+                    "observed_at": timestamp,
+                }
+            )
         rows: list[DiscoveredCandidate] = []
-        seen: set[tuple[str, str]] = set()
         for item in included:
             if not isinstance(item, dict) or item.get("type") not in {"token", "tokens"}:
                 continue
@@ -193,9 +529,9 @@ class GeckoTerminalDiscoveryProvider:
             if not token_id or not name or not address or not network:
                 continue
             key = (network, address)
-            if key in seen:
+            if key in seen_contracts:
                 continue
-            seen.add(key)
+            seen_contracts.add(key)
             pool_metadata = pools.get(token_id, {})
             rows.append(
                 DiscoveredCandidate(
@@ -212,19 +548,20 @@ class GeckoTerminalDiscoveryProvider:
                         "chain": network,
                         "contract_address": address,
                         "asset_scope": "dex_token",
+                        "discovery_mode": discovery_mode,
                         "reserve_usd": pool_metadata.get("reserve_usd"),
                         "volume_usd": pool_metadata.get("volume_usd"),
                         "pool_address": pool_metadata.get("pool_address"),
                         "pool_name": pool_metadata.get("pool_name"),
                         "dex": pool_metadata.get("dex"),
+                        "observed_at": timestamp,
+                        "source_url": f"{self.base_url.rstrip('/')}{path}?page={page}",
                     },
                 )
             )
-            if len(rows) >= limit:
-                return tuple(rows)
-        return tuple(rows)
+        return tuple(rows), tuple(observations)
 
-    def _get(self, path: str, params: dict[str, object]) -> object:
+    def _get(self, path: str, params: dict[str, object], *, meter: _RequestMeter | None = None) -> object:
         query = urllib.parse.urlencode({key: value for key, value in params.items() if value is not None})
         url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
         if query:
@@ -236,6 +573,9 @@ class GeckoTerminalDiscoveryProvider:
             max_attempts=self.max_attempts,
             backoff_seconds=self.backoff_seconds,
             sleeper=self.sleeper,
+            meter=meter,
+            ledger=self.ledger,
+            endpoint=endpoint_for_url("GeckoTerminal", url),
         )
 
 
@@ -247,22 +587,28 @@ class DexScreenerDiscoveryProvider:
     backoff_seconds: float = 0.5
     name: str = "dexscreener"
     sleeper: Callable[[float], None] = time.sleep
+    ledger: CapacityLedger | None = None
 
-    def discover(self, *, limit: int) -> tuple[DiscoveredCandidate, ...]:
+    def discover(self, *, limit: int, budget: ScanBudget | None = None) -> tuple[DiscoveredCandidate, ...]:
         rows: list[DiscoveredCandidate] = []
         seen: set[tuple[str, str]] = set()
+        meter = _RequestMeter(budget) if budget is not None else None
         for path, source_type in (
             ("/token-profiles/latest/v1", "token_profile"),
             ("/token-boosts/top/v1", "token_boost"),
         ):
-            payload = self._get(path)
+            try:
+                payload = self._get(path) if meter is None else self._get(path, meter=meter)
+            except _RequestBudgetExhausted:
+                break
             if not isinstance(payload, list):
                 raise ProviderUnavailableError("DexScreener discovery response must be a list")
             for item in payload:
                 if not isinstance(item, dict):
                     continue
-                chain = str(item.get("chainId") or "").strip()
-                address = normalize_contract_address(item.get("tokenAddress"), chain)
+                raw_chain = str(item.get("chainId") or "").strip()
+                chain = canonical_registry_chain(raw_chain) or raw_chain
+                address = normalize_contract_address(item.get("tokenAddress"), raw_chain)
                 if not chain or not address:
                     continue
                 key = (chain, address)
@@ -270,19 +616,27 @@ class DexScreenerDiscoveryProvider:
                     continue
                 seen.add(key)
                 links = item.get("links") if isinstance(item.get("links"), list) else []
+                market = self._market_evidence(raw_chain, address, meter=meter)
+                if market.get("market_evidence_status") != "observed" or market.get("market_pair_side") == "quote":
+                    fallback = self._gecko_evidence(raw_chain, address, meter=meter)
+                    if fallback:
+                        market = fallback
+                claimed = tuple(_dexscreener_links(links))
+                verified = self._corroborated_links(raw_chain, address, claimed, meter=meter) if claimed else {}
                 rows.append(
                     DiscoveredCandidate(
                         provider=self.name,
                         provider_id=f"{chain}:{address}",
                         slug=contract_slug(chain, address),
-                        name=_dexscreener_name(item, chain, address),
-                        symbol=None,
+                        name=market.pop("token_name", None) or _dexscreener_name(item, raw_chain, address),
+                        symbol=market.pop("token_symbol", None),
                         sector="dex_market",
                         primary_chain=chain,
                         candidate_type="token",
-                        source_url=str(item.get("url") or "") or f"https://dexscreener.com/{chain}/{address}",
+                        source_url=str(item.get("url") or "") or f"https://dexscreener.com/{raw_chain}/{address}",
                         metadata={
                             "chain": chain,
+                            "dex_chain_id": _dex_chain_id(raw_chain) or raw_chain,
                             "contract_address": address,
                             "asset_scope": "dex_token",
                             "source_type": source_type,
@@ -291,7 +645,9 @@ class DexScreenerDiscoveryProvider:
                             "icon": item.get("icon"),
                             "boost_amount": item.get("amount"),
                             "boost_total_amount": item.get("totalAmount"),
-                            "official_links": tuple(_dexscreener_links(links)),
+                            "claimed_links": claimed,
+                            **verified,
+                            **market,
                         },
                     )
                 )
@@ -299,7 +655,233 @@ class DexScreenerDiscoveryProvider:
                     return tuple(rows)
         return tuple(rows)
 
-    def _get(self, path: str) -> object:
+    def _market_evidence(self, chain: str, address: str, *, meter: _RequestMeter | None = None) -> dict[str, Any]:
+        path = f"/token-pairs/v1/{urllib.parse.quote(chain, safe='')}/{urllib.parse.quote(address, safe='')}"
+        try:
+            payload = self._get(path) if meter is None else self._get(path, meter=meter)
+        except _RequestBudgetExhausted:
+            return {"market_evidence_status": "request_budget_exhausted"}
+        except (ProviderUnavailableError, ValueError):
+            return {"market_evidence_status": "unavailable"}
+        if not isinstance(payload, list):
+            return {"market_evidence_status": "unavailable"}
+        matches = []
+        for pair in payload:
+            if not isinstance(pair, dict) or pair.get("chainId") != chain:
+                continue
+            side = next(
+                (
+                    side
+                    for side in ("base", "quote")
+                    if isinstance(pair.get(f"{side}Token"), dict)
+                    and normalize_contract_address(pair[f"{side}Token"].get("address"), chain) == address
+                ),
+                None,
+            )
+            if side is None:
+                continue
+            liquidity = pair.get("liquidity")
+            amount = _market_number(liquidity.get("usd")) if isinstance(liquidity, dict) else None
+            if amount is not None and amount > 0 and pair.get("pairAddress"):
+                matches.append((side == "base", amount, str(pair["pairAddress"]), side, pair))
+        if not matches:
+            return {"market_evidence_status": "no_matching_liquid_pair"}
+        _, liquidity_usd, pair_address, side, pair = max(matches, key=lambda item: item[:3])
+        token = pair[f"{side}Token"]
+        volume = pair.get("volume")
+        return {
+            "market_evidence_status": "observed",
+            "market_evidence_url": self.base_url.rstrip("/") + path,
+            "market_pair_address": pair_address,
+            "market_pair_side": side,
+            "market_evidence_provider": "dexscreener",
+            "market_evidence_observed_at": datetime.now(UTC).isoformat(),
+            "token_name": str(token.get("name") or "").strip() or None,
+            "token_symbol": str(token.get("symbol") or "").strip().upper() or None,
+            "liquidity_usd": liquidity_usd,
+            "volume_usd": _market_number(volume.get("h24")) if isinstance(volume, dict) else None,
+            "market_cap": _market_number(pair.get("marketCap")) if side == "base" else None,
+            "fdv": _market_number(pair.get("fdv")) if side == "base" else None,
+            "price_usd": _market_number(pair.get("priceUsd")) if side == "base" else None,
+        }
+
+    def _corroborated_links(
+        self, chain: str, address: str, claimed: tuple[str, ...], *, meter: _RequestMeter | None = None
+    ) -> dict[str, Any]:
+        platform = {
+            "eth": "ethereum",
+            "ethereum": "ethereum",
+            "solana": "solana",
+            "base": "base",
+            "bsc": "binance-smart-chain",
+            "arbitrum": "arbitrum-one",
+            "polygon": "polygon-pos",
+            "optimism": "optimistic-ethereum",
+        }.get(chain)
+        if platform is None:
+            return {}
+        provider = CoinGeckoDiscoveryProvider(
+            timeout_seconds=self.timeout_seconds, max_attempts=1, sleeper=self.sleeper, ledger=self.ledger
+        )
+        path = f"/coins/{platform}/contract/{urllib.parse.quote(address, safe='')}"
+        try:
+            payload = provider._get(path, {}) if meter is None else provider._get(path, {}, meter=meter)
+        except (_RequestBudgetExhausted, ProviderUnavailableError, ValueError):
+            return {}
+        if not isinstance(payload, dict):
+            return {}
+        platforms = payload.get("platforms")
+        if not isinstance(platforms, dict) or normalize_contract_address(platforms.get(platform), chain) != address:
+            return {}
+        links = payload.get("links")
+        homepages = links.get("homepage") if isinstance(links, dict) else None
+        if not isinstance(homepages, list):
+            return {}
+        domains = {_homepage_domain(url) for url in homepages}
+        matched = tuple(
+            url for url in claimed if _homepage_domain(url) is not None and _homepage_domain(url) in domains
+        )
+        if not matched:
+            return {}
+        return {
+            "verified_official_links": matched,
+            "official_link_verification_method": "contract_bound_provider_homepage_corroboration",
+            "official_link_evidence_url": provider.base_url + path,
+            "official_link_observed_at": datetime.now(UTC).isoformat(),
+        }
+
+    def _gecko_evidence(self, chain: str, address: str, *, meter: _RequestMeter | None = None) -> dict[str, Any]:
+        network = {
+            "ethereum": "eth",
+            "eth": "eth",
+            "solana": "solana",
+            "base": "base",
+            "bsc": "bsc",
+            "arbitrum": "arbitrum",
+            "polygon": "polygon_pos",
+            "optimism": "optimism",
+        }.get(chain)
+        if network is None:
+            return {}
+        path = f"/networks/{network}/tokens/{urllib.parse.quote(address, safe='')}"
+        provider = GeckoTerminalDiscoveryProvider(
+            timeout_seconds=self.timeout_seconds, max_attempts=1, sleeper=self.sleeper, ledger=self.ledger
+        )
+        try:
+            payload = provider._get(path, {}) if meter is None else provider._get(path, {}, meter=meter)
+        except (_RequestBudgetExhausted, ProviderUnavailableError, ValueError):
+            return {}
+        data = payload.get("data") if isinstance(payload, dict) else None
+        attrs = data.get("attributes") if isinstance(data, dict) else None
+        if not isinstance(attrs, dict) or normalize_contract_address(attrs.get("address"), chain) != address:
+            return {}
+        reserve = _market_number(attrs.get("total_reserve_in_usd"))
+        if reserve is None or reserve <= 0:
+            return {}
+        volume = attrs.get("volume_usd")
+        return {
+            "market_evidence_status": "observed",
+            "market_evidence_provider": "geckoterminal",
+            "market_evidence_url": provider.base_url + path,
+            "market_evidence_observed_at": datetime.now(UTC).isoformat(),
+            "token_name": attrs.get("name"),
+            "token_symbol": attrs.get("symbol"),
+            "reserve_usd": reserve,
+            "volume_usd": _market_number(volume.get("h24")) if isinstance(volume, dict) else None,
+            "market_cap": _market_number(attrs.get("market_cap_usd")),
+            "fdv": _market_number(attrs.get("fdv_usd")),
+            "price_usd": _market_number(attrs.get("price_usd")),
+        }
+
+    def enrich_contracts(
+        self,
+        assets: tuple[tuple[str, str], ...] | list[tuple[str, str]],
+        *,
+        budget: ScanBudget | None = None,
+        max_batch_size: int = 30,
+        dedup: bool = True,
+    ) -> DexEnrichmentResult:
+        """Enrich already-discovered contracts with DexScreener's 30-address token endpoint."""
+        meter = _RequestMeter(budget) if budget else None
+        groups: dict[str, tuple[str, list[str]]] = {}
+        originals: dict[tuple[str, str], tuple[str, str]] = {}
+        seen: set[tuple[str, str]] = set()
+        batch_limit = max(1, min(30, max_batch_size))
+        for platform, address in assets:
+            chain_id = _dex_chain_id(platform)
+            registry_chain = _registry_chain(platform) or platform.strip().lower()
+            normalized = normalize_contract_address(address, registry_chain)
+            if not chain_id or not normalized or (chain_id, normalized) in seen:
+                continue
+            seen.add((chain_id, normalized))
+            original_value = normalized if registry_chain.lower() != "solana" else address.strip()
+            originals[(chain_id, normalized)] = (platform.strip().lower(), original_value)
+            if chain_id not in groups:
+                groups[chain_id] = (registry_chain, [])
+            groups[chain_id][1].append(normalized)
+
+        asset_count = sum(len(addresses) for _chain, addresses in groups.values())
+        observed_at = datetime.now(UTC).isoformat()
+        rows: list[DiscoveredCandidate] = []
+        processed_assets: list[tuple[str, str]] = []
+        processed = 0
+        batches = 0
+        truncated = False
+        failure: str | None = None
+        for chain_id in groups:
+            registry_chain, addresses = groups[chain_id]
+            for start in range(0, len(addresses), batch_limit):
+                chunk = addresses[start : start + batch_limit]
+                path = f"/tokens/v1/{urllib.parse.quote(chain_id, safe='')}/" + ",".join(
+                    urllib.parse.quote(address, safe="") for address in chunk
+                )
+                fingerprint = f"{chain_id}|{','.join(chunk)}"
+                try:
+                    payload = self._get(
+                        path,
+                        meter=meter,
+                        dedup_key=hashlib.sha256(fingerprint.encode()).hexdigest() if dedup else None,
+                        batch_size=len(chunk),
+                    )
+                except _RequestBudgetExhausted:
+                    truncated = True
+                    failure = "request budget exhausted"
+                    break
+                except (ProviderUnavailableError, DuplicateCapacityRequest) as exc:
+                    truncated = True
+                    failure = f"{type(exc).__name__}: {exc}"
+                    break
+                processed += len(chunk)
+                processed_assets.extend(
+                    originals.get((chain_id, address), (registry_chain, address)) for address in chunk
+                )
+                batches += 1
+                rows.extend(
+                    _dexscreener_batch_rows(
+                        payload,
+                        chain_id=chain_id,
+                        chain=registry_chain,
+                        base_url=self.base_url,
+                        path=path,
+                        batch_size=len(chunk),
+                        batch_index=start // batch_limit,
+                        observed_at=observed_at,
+                    )
+                )
+            if truncated:
+                break
+        return DexEnrichmentResult(
+            tuple(rows), asset_count, processed, batches, truncated, tuple(processed_assets), failure
+        )
+
+    def _get(
+        self,
+        path: str,
+        *,
+        meter: _RequestMeter | None = None,
+        dedup_key: str | None = None,
+        batch_size: int | None = None,
+    ) -> object:
         url = f"{self.base_url.rstrip('/')}/{path.lstrip('/')}"
         return _request_json(
             url,
@@ -308,7 +890,166 @@ class DexScreenerDiscoveryProvider:
             max_attempts=self.max_attempts,
             backoff_seconds=self.backoff_seconds,
             sleeper=self.sleeper,
+            ledger=self.ledger,
+            endpoint=endpoint_for_url("DexScreener", url),
+            meter=meter,
+            dedup_key=dedup_key,
+            batch_size=batch_size,
+            payload_validator=_require_dexscreener_batch_payload,
         )
+
+
+_REGISTRY_CHAIN_BY_PLATFORM = {
+    "eth": "eth",
+    "ethereum": "eth",
+    "base": "base",
+    "bsc": "bsc",
+    "binance-smart-chain": "bsc",
+    "arbitrum": "arbitrum",
+    "arbitrum-one": "arbitrum",
+    "polygon": "polygon",
+    "polygon-pos": "polygon",
+    "optimism": "optimism",
+    "optimistic-ethereum": "optimism",
+    "solana": "solana",
+    "avax": "avax",
+    "avalanche": "avax",
+}
+
+# DexScreener's token-v1 path and response chainId use these full chain IDs;
+# the shorter registry chain names above are kept for contract identity merging.
+_DEX_CHAIN_BY_PLATFORM = {
+    "eth": "ethereum",
+    "ethereum": "ethereum",
+    "base": "base",
+    "bsc": "bsc",
+    "binance-smart-chain": "bsc",
+    "arbitrum": "arbitrum",
+    "arbitrum-one": "arbitrum",
+    "polygon": "polygon",
+    "polygon-pos": "polygon",
+    "optimism": "optimism",
+    "optimistic-ethereum": "optimism",
+    "solana": "solana",
+    "avax": "avalanche",
+    "avalanche": "avalanche",
+}
+
+
+def _registry_chain(platform: str) -> str | None:
+    normalized = platform.strip().lower()
+    if normalized.startswith("contract:"):
+        normalized = normalized.split(":", 1)[1]
+    return _REGISTRY_CHAIN_BY_PLATFORM.get(normalized)
+
+
+def _dex_chain_id(platform: str) -> str | None:
+    normalized = platform.strip().lower()
+    if normalized.startswith("contract:"):
+        normalized = normalized.split(":", 1)[1]
+    return _DEX_CHAIN_BY_PLATFORM.get(normalized)
+
+
+def canonical_registry_chain(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized.startswith("contract:"):
+        normalized = normalized.split(":", 1)[1]
+    return _REGISTRY_CHAIN_BY_PLATFORM.get(normalized, normalized)
+
+
+def registry_chain_aliases(value: object) -> tuple[str, ...]:
+    canonical = canonical_registry_chain(value)
+    if not canonical:
+        return ()
+    aliases = {canonical}
+    aliases.update(name for name, registry in _REGISTRY_CHAIN_BY_PLATFORM.items() if registry == canonical)
+    return tuple(sorted(aliases))
+
+
+def _require_dexscreener_batch_payload(payload: object) -> None:
+    if not isinstance(payload, list):
+        raise ProviderUnavailableError("DexScreener discovery returned an unexpected batch payload shape")
+
+
+def _dexscreener_batch_rows(
+    payload: object,
+    *,
+    chain_id: str,
+    chain: str,
+    base_url: str,
+    path: str,
+    batch_size: int,
+    batch_index: int,
+    observed_at: str,
+) -> tuple[DiscoveredCandidate, ...]:
+    if not isinstance(payload, list):
+        raise ProviderUnavailableError("DexScreener discovery returned an unexpected batch payload shape")
+    by_address: dict[str, tuple[bool, float, dict[str, Any]]] = {}
+    for pair in payload:
+        if not isinstance(pair, dict) or str(pair.get("chainId") or "").strip().lower() != chain_id:
+            continue
+        liquidity_obj = pair.get("liquidity")
+        liquidity = _market_number(liquidity_obj.get("usd")) if isinstance(liquidity_obj, dict) else None
+        if liquidity is None or liquidity <= 0 or not pair.get("pairAddress"):
+            continue
+        for side in ("base", "quote"):
+            token = pair.get(f"{side}Token")
+            if not isinstance(token, dict):
+                continue
+            token_address = normalize_contract_address(token.get("address"), chain_id)
+            if not token_address:
+                continue
+            previous = by_address.get(token_address)
+            if previous is None or liquidity > previous[1]:
+                by_address[token_address] = (side == "base", liquidity, pair)
+
+    rows: list[DiscoveredCandidate] = []
+    for address, (is_base, _liquidity, pair) in sorted(by_address.items()):
+        side = "base" if is_base else "quote"
+        token = pair.get(f"{side}Token")
+        if not isinstance(token, dict):
+            continue
+        liquidity_obj = pair.get("liquidity")
+        volume_obj = pair.get("volume")
+        rows.append(
+            DiscoveredCandidate(
+                provider="dexscreener",
+                provider_id=f"{chain}:{address}",
+                slug=contract_slug(chain, address),
+                name=str(token.get("name") or "").strip() or address,
+                symbol=str(token.get("symbol") or "").strip().upper() or None,
+                sector="dex_market",
+                primary_chain=chain,
+                candidate_type="token",
+                source_url=f"{base_url.rstrip('/')}{path}",
+                metadata={
+                    "chain": chain,
+                    "dex_chain_id": chain_id,
+                    "contract_address": address,
+                    "asset_scope": "dex_token",
+                    "discovery_mode": "global_market_enumeration",
+                    "market_evidence_status": "observed",
+                    "market_evidence_provider": "dexscreener",
+                    "market_evidence_url": f"{base_url.rstrip('/')}{path}",
+                    "market_evidence_observed_at": observed_at,
+                    "market_pair_address": str(pair.get("pairAddress") or ""),
+                    "market_pair_side": side,
+                    "batch_endpoint": "tokens/v1",
+                    "batch_size": batch_size,
+                    "batch_index": batch_index,
+                    "chain_mapping_provenance": "verified_dexscreener_chain_id_map",
+                    "liquidity_usd": (
+                        _market_number(liquidity_obj.get("usd")) if isinstance(liquidity_obj, dict) else None
+                    ),
+                    "volume_usd": _market_number(volume_obj.get("h24")) if isinstance(volume_obj, dict) else None,
+                    "market_cap": _market_number(pair.get("marketCap")) if is_base else None,
+                    "fdv": _market_number(pair.get("fdv")) if is_base else None,
+                    "price_usd": _market_number(pair.get("priceUsd")) if is_base else None,
+                    "observed_at": observed_at,
+                },
+            )
+        )
+    return tuple(rows)
 
 
 def _request_json(
@@ -319,6 +1060,13 @@ def _request_json(
     max_attempts: int,
     backoff_seconds: float,
     sleeper: Callable[[float], None],
+    meter: _RequestMeter | None = None,
+    max_retry_after_seconds: float = 60.0,
+    ledger: CapacityLedger | None = None,
+    endpoint: str | None = None,
+    dedup_key: str | None = None,
+    batch_size: int | None = None,
+    payload_validator: Callable[[object], None] | None = None,
 ) -> object:
     request = urllib.request.Request(
         url,
@@ -328,23 +1076,72 @@ def _request_json(
         },
     )
     last_error: Exception | None = None
+    endpoint_name = endpoint or endpoint_for_url(provider, url)
     for attempt in range(1, max(1, max_attempts) + 1):
+        reservation = None
         try:
+            if meter is not None:
+                meter.consume(sleeper)
+            if ledger is not None:
+                reservation = ledger.reserve(
+                    provider,
+                    endpoint_name,
+                    url,
+                    dedup_key=dedup_key,
+                    batch_size=batch_size,
+                    retry=attempt > 1,
+                    sleeper=sleeper,
+                )
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
+                payload = json.loads(response.read().decode("utf-8"))
+            if payload_validator is not None:
+                payload_validator(payload)
+            if reservation is not None and ledger is not None:
+                ledger.complete(reservation.reservation_id, status_code=200, outcome="success")
+            return payload
+        except ProviderUnavailableError as exc:
+            if reservation is not None and ledger is not None:
+                ledger.complete(reservation.reservation_id, outcome="failure", error=str(exc))
+            raise
+        except (ValueError, UnicodeDecodeError) as exc:
+            if reservation is not None and ledger is not None:
+                ledger.complete(reservation.reservation_id, outcome="failure", error=str(exc))
+            raise ProviderUnavailableError(f"{provider} discovery returned invalid JSON: {exc}") from exc
         except urllib.error.HTTPError as exc:
+            retry_after = _retry_after_seconds(exc.headers, max_retry_after_seconds) if exc.code == 429 else None
+            if reservation is not None and ledger is not None:
+                ledger.complete(
+                    reservation.reservation_id,
+                    status_code=exc.code,
+                    outcome="throttled" if exc.code == 429 else "failure",
+                    retry_after_seconds=retry_after,
+                    error=str(exc),
+                )
+            # Persist a 429 cooldown even for single-attempt helper calls.
+            # Otherwise a helper with max_attempts=1 raises before this branch
+            # and the next cycle can retry inside the provider's Retry-After.
+            if exc.code == 429 and retry_after is not None and ledger is not None:
+                ledger.cooldown(provider, endpoint_name, seconds=retry_after, reason="HTTP 429 Retry-After")
             if exc.code in {408, 425, 429, 500, 502, 503, 504} and attempt < max_attempts:
-                _sleep(attempt, backoff_seconds, sleeper)
+                if exc.code == 429 and retry_after is not None:
+                    if ledger is None:
+                        sleeper(retry_after)
+                else:
+                    _sleep(attempt, backoff_seconds, sleeper)
                 last_error = exc
                 continue
             raise ProviderUnavailableError(f"{provider} discovery unavailable: HTTP {exc.code}") from exc
         except TimeoutError as exc:
+            if reservation is not None and ledger is not None:
+                ledger.complete(reservation.reservation_id, outcome="failure", error=str(exc))
             last_error = exc
             if attempt < max_attempts:
                 _sleep(attempt, backoff_seconds, sleeper)
                 continue
             raise ProviderUnavailableError(f"{provider} discovery timed out") from exc
         except urllib.error.URLError as exc:
+            if reservation is not None and ledger is not None:
+                ledger.complete(reservation.reservation_id, outcome="failure", error=str(exc))
             last_error = exc
             if attempt < max_attempts:
                 _sleep(attempt, backoff_seconds, sleeper)
@@ -356,6 +1153,35 @@ def _request_json(
 def _sleep(attempt: int, backoff_seconds: float, sleeper: Callable[[float], None]) -> None:
     if backoff_seconds > 0:
         sleeper(backoff_seconds * (2 ** (attempt - 1)))
+
+
+def _retry_after_seconds(headers: object, cap_seconds: float) -> float | None:
+    """Read a bounded Retry-After window; HTTP dates and seconds are both accepted."""
+    getter = getattr(headers, "get", None)
+    if not callable(getter):
+        return None
+    value = getter("Retry-After")
+    if value is None:
+        return None
+    text = str(value).strip()
+    try:
+        seconds = float(text)
+    except ValueError:
+        try:
+            retry_at = parsedate_to_datetime(text)
+        except (TypeError, ValueError, IndexError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=UTC)
+        seconds = (retry_at - datetime.now(UTC)).total_seconds()
+    return max(0.0, min(seconds, max(0.0, cap_seconds)))
+
+
+def _network_from_path(path: str) -> str | None:
+    parts = [part for part in path.split("/") if part]
+    if len(parts) >= 2 and parts[0] == "networks" and parts[1] != "trending_pools":
+        return urllib.parse.unquote(parts[1])
+    return None
 
 
 def _geckoterminal_network(token_id: str, relationships: object) -> str | None:
@@ -412,6 +1238,45 @@ def _pool_volume(payload: object) -> object:
     if isinstance(payload, dict):
         return payload.get("h24") or payload.get("24h")
     return None
+
+
+def _homepage_domain(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        host = parsed.hostname
+        if parsed.scheme != "https" or not host or parsed.username or parsed.password or parsed.port not in (None, 443):
+            return None
+    except ValueError:
+        return None
+    host = host.lower().removeprefix("www.")
+    if host in {
+        "x.com",
+        "twitter.com",
+        "t.me",
+        "telegram.me",
+        "discord.com",
+        "discord.gg",
+        "github.com",
+        "linktr.ee",
+        "medium.com",
+        "facebook.com",
+        "instagram.com",
+        "youtube.com",
+    }:
+        return None
+    return host
+
+
+def _market_number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        return None
+    try:
+        number = float(value)
+    except (ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) and number >= 0 else None
 
 
 def _dexscreener_links(links: list[object]) -> tuple[str, ...]:

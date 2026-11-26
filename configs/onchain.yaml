@@ -6,12 +6,11 @@ chains:
     network: ethereum
     family: evm
     enabled: true
-    rpc_endpoint: https://ethereum.publicnode.com
+    rpc_endpoint: https://eth.drpc.org
     rpc_endpoints:
-      - https://ethereum.publicnode.com
+      - https://eth.drpc.org
       - https://rpc.flashbots.net
-      - https://eth.llamarpc.com
-      - https://rpc.ankr.com/eth
+      - https://rpc.mevblocker.io
     rpc_env: HUNTER_ETHEREUM_RPC_URL
     explorer_url: https://etherscan.io
     native_asset: ETH
@@ -21,6 +20,8 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
+    swap_rpc_budget: 12
   - chain_id: 42161
     network: arbitrum
     family: evm
@@ -38,6 +39,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
   - chain_id: 10
     network: optimism
     family: evm
@@ -55,6 +57,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
   - chain_id: 8453
     network: base
     family: evm
@@ -72,6 +75,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
   - chain_id: 137
     network: polygon
     family: evm
@@ -89,6 +93,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
   - chain_id: 56
     network: bnb
     family: evm
@@ -106,6 +111,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
   - chain_id: 43114
     network: avalanche
     family: evm
@@ -123,6 +129,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
 
 tracked_assets:
   - chain_id: 1
@@ -140,6 +147,7 @@ tracked_assets:
     asset_type: stablecoin
     decimals: 6
     contract_address: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    coingecko_id: usd-coin
   - chain_id: 1
     symbol: USDT
     asset_type: stablecoin
@@ -150,6 +158,28 @@ tracked_assets:
     asset_type: stablecoin
     decimals: 18
     contract_address: "0x6B175474E89094C44Da98b954EedeAC495271d0F"
+
+dex_pools:
+  - pool_id: uniswap-v3-ethereum-usdc-weth-0005
+    project: uniswap
+    chain_id: 1
+    address: "0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640"
+    dex: uniswap
+    version: v3
+    token0: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    token1: "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2"
+    token0_decimals: 6
+    token1_decimals: 18
+    target_asset: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"
+    target_asset_symbol: USDC
+    source_url: https://docs.uniswap.org/contracts/v3/reference/deployments/ethereum-deployments
+    source_type: official_documentation
+    verification_timestamp: "2026-11-25T00:00:00+00:00"
+    confidence: 0.95
+    active: true
+    valid_from: "2021-05-05T00:00:00+00:00"
+    valid_to:
+    routers: []
 
 surface_registry:
   - project: aave

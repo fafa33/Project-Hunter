@@ -489,3 +489,175 @@ def test_trusted_publisher_learning_is_selected_for_exact_workflow() -> None:
     families = context["applicable_defect_families"]
     assert isinstance(families, list)
     assert any(family["id"] == "DFF-014" for family in families)
+
+
+def test_onchain_execution_budget_family_reaches_spm_context() -> None:
+    context = EngineeringContextAuthority().compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        scope=_scope("src/hunter/onchain/", "configs/onchain.yaml"),
+        budget_bytes=1_000_000,
+    )
+    families = cast(list[dict[str, object]], context["applicable_defect_families"])
+    family = next((item for item in families if item.get("id") == "DFF-059"), None)
+    assert family is not None
+    invariant = str(family.get("invariant", ""))
+    for token in ("REQUEST_LIMIT", "TIMEOUT_SECONDS", "retry_limit", "DEADLINE_SECONDS", "max_block_range"):
+        assert token in invariant
+
+
+def test_onchain_range_and_provenance_families_reach_spm_context() -> None:
+    context = EngineeringContextAuthority().compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        scope=_scope(
+            "src/hunter/onchain/",
+            "configs/onchain.yaml",
+            "tests/test_onchain_capital_flow_acquisition.py",
+        ),
+        budget_bytes=1_000_000,
+    )
+    families = cast(list[dict[str, object]], context["applicable_defect_families"])
+    range_family = next((item for item in families if item.get("id") == "DFF-060"), None)
+    provenance_family = next((item for item in families if item.get("id") == "DFF-061"), None)
+
+    assert range_family is not None
+    assert provenance_family is not None
+    assert "inclusive" in str(range_family.get("invariant", ""))
+    assert "acquisition_timestamp" in str(provenance_family.get("invariant", ""))
+    assert "receipt_verified_at" in str(provenance_family.get("invariant", ""))
+
+
+def test_issue_587_review_remediation_families_reach_spm_context() -> None:
+    context = EngineeringContextAuthority().compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        scope=_scope(
+            "src/hunter/onchain/",
+            "src/hunter/discovery/",
+            "tests/test_onchain_capital_flow_acquisition.py",
+            "tests/test_global_discovery_candidate_registry.py",
+        ),
+        budget_bytes=1_000_000,
+    )
+    families = cast(list[dict[str, object]], context["applicable_defect_families"])
+    by_id = {str(item.get("id")): item for item in families}
+
+    for family_id in ("DFF-062", "DFF-063", "DFF-064", "DFF-065", "DFF-066", "DFF-067"):
+        assert family_id in by_id
+    assert "signature" in str(by_id["DFF-062"].get("invariant", "")).lower()
+    assert "finalized" in str(by_id["DFF-063"].get("invariant", "")).lower()
+    assert "cursor" in str(by_id["DFF-064"].get("invariant", "")).lower()
+    assert "catalogue" in str(by_id["DFF-065"].get("invariant", "")).lower()
+    assert "replay" in str(by_id["DFF-066"].get("invariant", "")).lower()
+    assert "precision" in str(by_id["DFF-067"].get("invariant", "")).lower()
+
+
+def test_issue_587_identity_and_usd_evidence_families_reach_spm_context() -> None:
+    context = EngineeringContextAuthority().compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        scope=_scope(
+            "configs/onchain.yaml",
+            "src/hunter/cli.py",
+            "src/hunter/discovery/",
+            "src/hunter/historical_acquisition/",
+            "src/hunter/market_validation/",
+            "src/hunter/onchain/",
+            "tests/test_discovery_identity_handoff.py",
+            "tests/test_historical_acquisition.py",
+            "tests/test_market_validation_input_authority.py",
+        ),
+        budget_bytes=1_000_000,
+    )
+    families = cast(list[dict[str, object]], context["applicable_defect_families"])
+    by_id = {str(item.get("id")): item for item in families}
+
+    for family_id in ("DFF-068", "DFF-069"):
+        assert family_id in by_id
+    assert "fail closed" in str(by_id["DFF-068"].get("invariant", "")).lower()
+    assert "causal" in str(by_id["DFF-069"].get("invariant", "")).lower()
+    assert "canonical valuation" in str(by_id["DFF-069"].get("invariant", "")).lower()
+    assert "wallet performance" in str(by_id["DFF-069"].get("invariant", "")).lower()
+
+
+def test_issue_587_swap_wallet_evidence_families_reach_spm_context() -> None:
+    context = EngineeringContextAuthority().compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        scope=_scope(
+            "configs/onchain.yaml",
+            "src/hunter/market_validation/acquisition_sources.py",
+            "src/hunter/onchain/adapters.py",
+            "src/hunter/onchain/configuration.py",
+            "src/hunter/onchain/dex.py",
+            "src/hunter/onchain/engine.py",
+            "src/hunter/onchain/evidence.py",
+            "src/hunter/onchain/models.py",
+            "src/hunter/onchain/wallet_performance.py",
+            "tests/test_onchain_swap_wallet_evidence.py",
+        ),
+        budget_bytes=1_000_000,
+    )
+    families = cast(list[dict[str, object]], context["applicable_defect_families"])
+    by_id = {str(item.get("id")): item for item in families}
+
+    for family_id in ("DFF-070", "DFF-071"):
+        assert family_id in by_id
+    assert "verified pool" in str(by_id["DFF-070"].get("invariant", "")).lower()
+    assert "rpc budget" in str(by_id["DFF-070"].get("invariant", "")).lower()
+    assert "fifo" in str(by_id["DFF-071"].get("invariant", "")).lower()
+    assert "fees" in str(by_id["DFF-071"].get("invariant", "")).lower()
+
+
+def test_issue_587_current_head_codex_review_families_reach_spm_context() -> None:
+    context = EngineeringContextAuthority().compile(
+        ENGINEERING_IMPLEMENT_TASK_KEY,
+        scope=_scope(
+            "src/hunter/discovery/capacity.py",
+            "src/hunter/discovery/engine.py",
+            "src/hunter/discovery/identity.py",
+            "src/hunter/discovery/models.py",
+            "src/hunter/discovery/providers.py",
+            "src/hunter/discovery/repository.py",
+            "src/hunter/market_validation/acquisition_sources.py",
+            "src/hunter/onchain/adapters.py",
+            "src/hunter/onchain/engine.py",
+            "src/hunter/onchain/wallet_performance.py",
+            "tests/test_engineering_context_authority.py",
+            "tests/test_global_discovery_candidate_registry.py",
+            "tests/test_onchain_swap_wallet_evidence.py",
+        ),
+        budget_bytes=1_000_000,
+    )
+    families = cast(list[dict[str, object]], context["applicable_defect_families"])
+    by_id = {str(item.get("id")): item for item in families}
+    expected = (
+        "DFF-072",
+        "DFF-073",
+        "DFF-074",
+        "DFF-075",
+        "DFF-076",
+        "DFF-077",
+        "DFF-078",
+        "DFF-079",
+        "DFF-080",
+        "DFF-081",
+        "DFF-082",
+        "DFF-083",
+    )
+
+    for family_id in expected:
+        assert family_id in by_id
+    assert "own block" in str(by_id["DFF-072"].get("invariant", "")).lower()
+    assert "rpc attempt" in str(by_id["DFF-073"].get("invariant", "")).lower()
+    assert "target asset" in str(by_id["DFF-074"].get("invariant", "")).lower()
+    assert "refresh" in str(by_id["DFF-075"].get("invariant", "")).lower()
+    assert "complete receipt" in str(by_id["DFF-076"].get("invariant", "")).lower()
+    assert "normalized" in str(by_id["DFF-077"].get("invariant", "")).lower()
+    assert "signed metadata" in str(by_id["DFF-078"].get("invariant", "")).lower()
+    assert "completed page" in str(by_id["DFF-079"].get("invariant", "")).lower()
+    assert "retry attempt" in str(by_id["DFF-080"].get("invariant", "")).lower()
+    assert "canonical chain" in str(by_id["DFF-081"].get("invariant", "")).lower()
+    assert "consideration" in str(by_id["DFF-082"].get("invariant", "")).lower()
+    assert "provider-wide quota" in str(by_id["DFF-083"].get("invariant", "")).lower()
+    assert "market evidence provenance" in str(by_id["DFF-075"].get("invariant", "")).lower()
+    assert "last-known provenance" in str(by_id["DFF-075"].get("invariant", "")).lower()
+    assert "malformed json" in str(by_id["DFF-064"].get("invariant", "")).lower()
+    assert "unexpected batch payload" in str(by_id["DFF-064"].get("invariant", "")).lower()
+    assert "every retry attempt" in str(by_id["DFF-073"].get("invariant", "")).lower()

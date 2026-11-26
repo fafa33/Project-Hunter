@@ -78,8 +78,17 @@ def test_all_active_rulesets_with_bypass_arrays_are_observed_with_the_dedicated_
     seen = json.loads(seen_path.read_text())
     assert seen["GH_TOKEN"] == READ_TOKEN
     assert seen["GITHUB_TOKEN"] is None  # the runner token is never offered to the observer
-    # LC_CTYPE is added by the Python interpreter that runs the fake gh (C-locale coercion), not by the caller.
-    allowed = {"PATH", "HOME", "GH_CONFIG_DIR", "GH_TOKEN", "GH_PROMPT_DISABLED", "GH_NO_UPDATE_NOTIFIER", "LC_CTYPE"}
+    # LC_CTYPE and __CF_USER_TEXT_ENCODING are added by the Python interpreter that runs the fake gh on macOS, not by the caller.
+    allowed = {
+        "__CF_USER_TEXT_ENCODING",
+        "PATH",
+        "HOME",
+        "GH_CONFIG_DIR",
+        "GH_TOKEN",
+        "GH_PROMPT_DISABLED",
+        "GH_NO_UPDATE_NOTIFIER",
+        "LC_CTYPE",
+    }
     assert set(seen["keys"]) <= allowed
     assert PUSH_TOKEN not in json.dumps(seen)
 

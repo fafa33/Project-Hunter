@@ -118,15 +118,86 @@ GeckoTerminal and DexScreener records are keyed by chain plus contract address w
 evidence is available. This allows cross-provider overlap without relying on ticker
 symbols. Hunter records provider disagreements and source uniqueness through source
 references and does not treat a single decentralized-market listing as proof of project
-quality, official identity, or long-term investment merit.
+quality, official identity, or long-term investment merit. The selected `market_pair_address`,
+`market_pair_side` and `market_evidence_provider` are refreshable market provenance: a
+liquidity-driven pair or evidence-provider change is persisted in place, stale pair provenance
+is cleared only by a fresh provider observation, last-known provenance survives transient
+unavailability or an unrelated provider sync, and historical pair-selection disagreements are
+normalized, while genuine identity disagreements remain conflicts.
 
 Provider failures are reported as unavailable discovery runs and are not treated as
 absence of market candidates. Adapters use bounded deterministic retry/backoff for
-timeout, rate-limit, and temporary server failures; provider failure records the run as
-unavailable and does not write partial registry state. Endpoint configuration can be
+timeout, rate-limit, and temporary server failures; a failure before any batch completes
+records the run as unavailable without writing invented registry state. When a later batch
+fails through budget exhaustion, provider unavailability, or a duplicate capacity reservation,
+completed batches are returned as an explicit partial result, persisted, and used to advance
+the cursor only through already-processed contracts; the failed batch remains retryable, and a
+failed dedup reservation does not block its immediate retry. Malformed JSON or an unexpected
+HTTP-200 payload shape is validated before capacity success is recorded and becomes a provider
+failure rather than an empty successful batch. A bounded `Retry-After` on HTTP 429
+is honored before the normal exponential backoff fallback. Endpoint configuration can be
 overridden with `HUNTER_DISCOVERY_<PROVIDER>_BASE_URL`, `HUNTER_DISCOVERY_<PROVIDER>_LIMIT`,
 `HUNTER_DISCOVERY_<PROVIDER>_TIMEOUT_SECONDS`, `HUNTER_DISCOVERY_<PROVIDER>_MAX_ATTEMPTS`,
 and `HUNTER_DISCOVERY_<PROVIDER>_BACKOFF_SECONDS`.
+
+## Free Capacity
+
+`configs/discovery_capacity.yaml` is a machine-readable capacity inventory. It records
+only documented or owner-specified static limits; observed request counts, retries,
+throttles, cooldowns, and throughput are not stored there. Every value carries explicit
+provenance:
+
+- `official_documentation`: published by the provider.
+- `owner_specified`: supplied by the repository owner, not published in the fetched docs.
+- `not_documented`: no numeric free ceiling is asserted; the value stays null.
+
+Current entries distinguish CoinGecko's documented Demo `100 calls/min`, GeckoTerminal's
+documented public `10 calls/min`, DexScreener's official profile/boost `60 req/min`, and
+DexScreener's owner-specified market `300 req/min` with `30` addresses per batch.
+DefiLlama's free API is available without authentication, but no numeric free request
+ceiling is documented. Monthly credits remain null where no numeric allowance is published.
+
+`CapacityLedger` persists every HTTP attempt in additive registry tables
+(`capacity_requests`, `capacity_cooldowns`, and `capacity_cooldown_events`), including
+contract-corroboration calls made through the CoinGecko and GeckoTerminal adapters. It
+reserves one slot per declared quota group (endpoint families with genuinely independent
+ceilings remain separate), enforces a rolling per-minute budget, deduplicates repeat
+batch requests inside a bounded window, and
+persists bounded 429 cooldowns. Retries reuse the original batch deduplication key rather
+than being rejected as duplicates. Observed capacity is therefore evidence from the live
+run, not a claim derived from documentation.
+
+DexScreener already-discovered contracts are enriched through
+`GET /tokens/v1/{chainId}/{tokenAddresses}` in batches of at most 30 addresses. Batches
+use DexScreener's full canonical `chainId` values (for example `ethereum`, not `eth`)
+for the path and response filtering, while retaining the shorter registry chain name for
+contract identity merging. Exact contract addresses are preserved, and each source record
+records `dex_chain_id`, `batch_endpoint`, `batch_size`, `batch_index`,
+`chain_mapping_provenance`, `discovery_mode`, and `asset_scope`. Incremental mode skips
+contracts that already have market evidence and deduplicates repeat batches within the
+ledger window; backfill mode disables that deduplication so a refresh can actually re-read
+the contract. A deduplicated or unavailable batch is recorded as a partial/unavailable
+discovery run, never an uncaught CLI error. Bounded runs report `contracts`, `processed`,
+`batches`, and `rows`, and mark the run partial when the request budget leaves contracts
+unprocessed. The batch path does not re-fetch CoinGecko or GeckoTerminal for the same
+contract.
+
+GeckoTerminal catalogue enumeration rotates the network order after each completed
+catalogue pass so repeated bounded runs do not permanently starve later networks. The
+free public API rejects page numbers above 10 with HTTP 401 (`Upgrade to Analyst plan or
+above`); that is a plan restriction, not a rate limit. Scanner state therefore caps both
+catalogue and per-network pool pagination at 10, records the unreachable page as
+`free_api_page_cap`, and advances to the next network instead of retrying an unauthorized
+request. A stale persisted checkpoint above page 10 is normalized to the next network.
+
+There is no parallel discovery daemon: the existing `discovery-market-run` automation job
+is the single resumable runner, scheduled every 15 minutes for incremental discovery and
+carrying metadata for a 24-hour free-capacity observation window. A separate bounded
+`discovery-market-run-backfill` job runs hourly with at most five contracts per cycle, so
+historical refresh cannot starve incremental discovery. `automation start` has no finite
+iteration default; the LaunchAgent omits `--max-iterations` for indefinite operation. The
+scheduler executor routes only allowlisted read-only discovery operations to the candidate
+implementation; unrelated operation and analytical jobs stay on the legacy executor.
 
 ## Coverage
 
@@ -139,6 +210,21 @@ Discovery reporting also includes assets by provider, ecosystem, chain, category
 overlap, provider uniqueness, new candidates, and unique canonical candidate counts. These
 metrics are designed for market visibility, not investment scoring.
 
+Global coverage uses only real denominators. The CoinGecko `/coins/list` response gives
+the accessible asset universe, the enumerated GeckoTerminal catalogue gives the scanned
+network denominator, and pool coverage stays `null`/unmeasured because no global pool
+denominator exists. Equity-coverage claims are never inferred from trending feeds or
+provider-specific lists.
+
+`hunter discovery coverage` also reports capacity telemetry from the ledger: inventory
+path, observed API calls, retries, throttles, cooldowns, remaining quota where a numeric
+limit exists, observed request rates, a universe ETA derived from observed CoinGecko
+throughput and the 250-asset page size, identity-verified assets, and assets whose
+market/protocol evidence carries a provider-reported observation timestamp inside 24
+hours. A recent generic source sync timestamp does not qualify as fresh market evidence.
+Network-pool ETA stays null. Unmeasured or unsupported segments are listed explicitly
+rather than assigned fabricated values.
+
 ## CLI
 
 - `hunter discovery sync`
@@ -148,6 +234,8 @@ metrics are designed for market visibility, not investment scoring.
 - `hunter discovery sync --provider dexscreener --limit 250`
 - `hunter discovery sync --provider all --limit 250`
 - `hunter discovery run --limit 250`
+- `hunter discovery run --mode incremental --limit 250`
+- `hunter discovery run --mode backfill --limit 250`
 - `hunter discovery status`
 - `hunter discovery coverage`
 - `hunter discovery report`

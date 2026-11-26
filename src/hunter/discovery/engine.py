@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+import math
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from hunter.acquisition.exceptions import ProviderUnavailableError
 from hunter.acquisition.project_identifiers import ProjectIdentifier, load_project_identifiers
+from hunter.discovery.capacity import (
+    CapacityInventory,
+    CapacityLedger,
+    DuplicateCapacityRequest,
+    load_capacity_inventory,
+)
 from hunter.discovery.configuration import DiscoveryConfig
+from hunter.discovery.identity import (
+    CandidateIdentityResolutionEngine,
+    identity_is_accepted,
+    related_ticker_candidates,
+)
 from hunter.discovery.models import (
     CandidateAlias,
     CandidateIdentifier,
@@ -22,8 +35,11 @@ from hunter.discovery.providers import (
     DiscoveredCandidate,
     DiscoveryProvider,
     GeckoTerminalDiscoveryProvider,
+    ScanBudget,
+    canonical_registry_chain,
     contract_slug,
     normalize_contract_address,
+    registry_chain_aliases,
 )
 from hunter.discovery.repository import CandidateRegistryRepository
 from hunter.execution.identity import identity
@@ -37,9 +53,12 @@ class CandidateDiscoveryEngine:
         config: DiscoveryConfig,
         *,
         providers: dict[str, DiscoveryProvider] | None = None,
+        ledger: CapacityLedger | None = None,
     ) -> None:
         self.repository = repository
         self.config = config
+        self.capacity_inventory: CapacityInventory = load_capacity_inventory(config.capacity_inventory_path)
+        self.ledger = ledger or (CapacityLedger(repository, self.capacity_inventory) if providers is None else None)
         self.providers = providers or self._configured_providers(config)
 
     def sync(self, *, provider: str = "seed", limit: int | None = None) -> DiscoveryRun:
@@ -108,6 +127,7 @@ class CandidateDiscoveryEngine:
 
     def sync_provider(self, provider: str, *, limit: int | None = None) -> DiscoveryRun:
         started_at = datetime.now(tz=UTC)
+        ledger_before = dict(self.ledger.summary()["totals"]) if self.ledger else None
         if provider not in self.providers:
             run = DiscoveryRun(
                 run_id=identity("candidate-discovery-run", {"provider": provider, "started_at": started_at}),
@@ -122,10 +142,62 @@ class CandidateDiscoveryEngine:
             )
             self.repository.save_run(run)
             return run
+        next_cursor: int | None = None
+        source = self.providers[provider]
+        scan_status = "succeeded"
+        scan_message = ""
+        gecko_state: dict[str, object] | None = None
+        gecko_status = ""
         try:
-            raw_candidates = self.providers[provider].discover(
-                limit=limit or self.config.provider(provider).limit or 250,
-            )
+            provider_config = self.config.provider(provider)
+            budget = limit or provider_config.limit or 250
+            max_requests = getattr(provider_config, "max_requests_per_cycle", 8)
+            min_interval = getattr(provider_config, "min_interval_seconds", 0.0)
+            if not isinstance(max_requests, int):
+                max_requests = 8
+            if not isinstance(min_interval, (int, float)):
+                min_interval = 0.0
+            scan_budget = ScanBudget(max_requests=max_requests, min_interval_seconds=float(min_interval))
+            if isinstance(source, GeckoTerminalDiscoveryProvider):
+                result = source.discover_scan(
+                    state=self.repository.scan_state(provider),
+                    budget=scan_budget,
+                    observed_at=started_at.isoformat(),
+                    max_candidates=limit,
+                )
+                raw_candidates = result.candidates
+                self.repository.save_network_observations(
+                    tuple(
+                        {
+                            "network_id": network_id,
+                            "name": network_id,
+                            "source_url": f"{source.base_url.rstrip('/')}/networks",
+                            "observed_at": result.observed_at,
+                        }
+                        for network_id in result.network_ids
+                    )
+                )
+                new_pools = self.repository.save_pool_observations(result.pool_observations)
+                result.state["new_pools"] = new_pools
+                gecko_state = result.state
+                gecko_status = result.status
+                scan_status = result.status
+                scan_message = (
+                    f"requests={result.requests} networks={len(result.network_ids)} "
+                    f"pools={len(result.pool_observations)} new_pools={new_pools}"
+                )
+                if result.error:
+                    scan_message = f"{scan_message} error={result.error}"
+            elif isinstance(source, CoinGeckoDiscoveryProvider) and limit is None:
+                raw_candidates, next_cursor = source.discover_batch(
+                    limit=budget,
+                    cursor=self.repository.discovery_page_cursor(provider),
+                    budget=scan_budget,
+                )
+            elif isinstance(source, DexScreenerDiscoveryProvider):
+                raw_candidates = source.discover(limit=budget, budget=scan_budget)
+            else:
+                raw_candidates = source.discover(limit=budget)
         except ProviderUnavailableError as exc:
             run = DiscoveryRun(
                 run_id=identity("candidate-discovery-run", {"provider": provider, "started_at": started_at}),
@@ -136,12 +208,15 @@ class CandidateDiscoveryEngine:
                 candidates_created=0,
                 candidates_updated=0,
                 status="unavailable",
-                message=str(exc),
+                message=f"{exc}{self._capacity_suffix(ledger_before)}",
             )
             self.repository.save_run(run)
             return run
         candidates = tuple(self._provider_candidate(item, observed_at=started_at) for item in raw_candidates)
         created, updated = self.repository.upsert_many(candidates)
+        if gecko_state is not None:
+            self.repository.save_scan_state(provider, gecko_state, gecko_status)
+        message = (scan_message or f"synced {len(candidates)} candidates") + self._capacity_suffix(ledger_before)
         run = DiscoveryRun(
             run_id=identity("candidate-discovery-run", {"provider": provider, "started_at": started_at}),
             provider=provider,
@@ -150,47 +225,454 @@ class CandidateDiscoveryEngine:
             candidates_seen=len(candidates),
             candidates_created=created,
             candidates_updated=updated,
-            status="succeeded",
-            message=f"synced {len(candidates)} candidates",
+            status=scan_status,
+            message=message,
         )
         self.repository.save_run(run)
-        self.repository.save_checkpoint(provider, str(len(candidates)), run.status)
+        if next_cursor is not None:
+            self.repository.save_checkpoint(provider, f"page:{next_cursor}", run.status)
+        elif not isinstance(source, (CoinGeckoDiscoveryProvider, GeckoTerminalDiscoveryProvider)):
+            self.repository.save_checkpoint(provider, str(len(candidates)), run.status)
         return run
+
+    def enumerate_universe(self, provider: str = "coingecko") -> dict[str, object]:
+        """Persist the accessible provider universe used as a real coverage denominator."""
+        source = self.providers.get(provider)
+        if not isinstance(source, CoinGeckoDiscoveryProvider):
+            return {
+                "provider": provider,
+                "status": "unsupported",
+                "reason": "provider has no accessible global asset universe endpoint",
+                "observed_at": datetime.now(tz=UTC).isoformat(),
+            }
+        try:
+            payload = source.enumerate_universe()
+        except ProviderUnavailableError as exc:
+            return {
+                "provider": provider,
+                "status": "unavailable",
+                "reason": str(exc),
+                "observed_at": datetime.now(tz=UTC).isoformat(),
+            }
+        self.repository.save_universe_assets(
+            provider, tuple(str(value) for value in payload["asset_ids"]), str(payload["observed_at"])
+        )
+        return {
+            "provider": provider,
+            "status": "succeeded",
+            "scope": payload["scope"],
+            "asset_count": payload["asset_count"],
+            "observed_at": payload["observed_at"],
+            "source_url": payload["source_url"],
+        }
+
+    def enrich_dex_contracts(self, *, limit: int | None = None, mode: str | None = None) -> DiscoveryRun:
+        """Enrich already-discovered contracts via DexScreener's bounded token-v1 batches."""
+        selected_mode = (
+            self.config.normalized_mode()
+            if mode is None
+            else ("backfill" if mode.strip().lower() == "backfill" else "incremental")
+        )
+        started_at = datetime.now(tz=UTC)
+        ledger_before = dict(self.ledger.summary()["totals"]) if self.ledger else None
+        source = self.providers.get("dexscreener")
+        if not isinstance(source, DexScreenerDiscoveryProvider):
+            run = DiscoveryRun(
+                run_id=identity("candidate-discovery-run", {"provider": "dexscreener-batch", "started_at": started_at}),
+                provider="dexscreener-batch",
+                started_at=started_at,
+                finished_at=datetime.now(tz=UTC),
+                candidates_seen=0,
+                candidates_created=0,
+                candidates_updated=0,
+                status="unsupported",
+                message="DexScreener batch enrichment provider is not configured",
+            )
+            self.repository.save_run(run)
+            return run
+
+        groups = self.repository.identifier_groups()
+        contract_groups: dict[tuple[str, str], set[str]] = {}
+        for (namespace, value), candidate_ids in groups.items():
+            if not namespace.startswith("contract:"):
+                continue
+            chain = canonical_registry_chain(namespace.split(":", 1)[1])
+            contract_groups.setdefault((chain, value), set()).update(candidate_ids)
+        contract_identifiers = sorted((f"contract:{chain}", value) for chain, value in contract_groups)
+        cursor_key = f"dexscreener-enrichment-{selected_mode}"
+        cursor = self.repository.identifier_cursor(cursor_key)
+        if cursor is not None and cursor[0].startswith("contract:"):
+            namespace, value = cursor
+            chain = canonical_registry_chain(namespace.split(":", 1)[1])
+            cursor = (f"contract:{chain}", value)
+        if cursor is not None and cursor in contract_identifiers:
+            index = contract_identifiers.index(cursor)
+            ordered_identifiers = contract_identifiers[index + 1 :] + contract_identifiers[: index + 1]
+        else:
+            ordered_identifiers = contract_identifiers
+        assets: list[tuple[str, str]] = []
+        for identifier in ordered_identifiers:
+            namespace, value = identifier
+            chain = canonical_registry_chain(namespace.split(":", 1)[1])
+            candidate_ids = contract_groups[(chain, value)]
+            if selected_mode == "incremental" and any(
+                self._has_current_market_measure(candidate_id) for candidate_id in candidate_ids
+            ):
+                continue  # incremental: never re-fetch a contract that already has market evidence
+            assets.append((namespace.split(":", 1)[1], value))
+            if limit is not None and len(assets) >= max(1, limit):
+                break
+
+        config = self.config.provider("dexscreener")
+        budget = ScanBudget(
+            max_requests=max(1, config.max_requests_per_cycle),
+            min_interval_seconds=max(0.0, config.min_interval_seconds),
+        )
+        try:
+            result = source.enrich_contracts(tuple(assets), budget=budget, dedup=selected_mode != "backfill")
+        except (ProviderUnavailableError, DuplicateCapacityRequest) as exc:
+            status = "partial" if isinstance(exc, DuplicateCapacityRequest) else "unavailable"
+            run = DiscoveryRun(
+                run_id=identity("candidate-discovery-run", {"provider": "dexscreener-batch", "started_at": started_at}),
+                provider="dexscreener-batch",
+                started_at=started_at,
+                finished_at=datetime.now(tz=UTC),
+                candidates_seen=0,
+                candidates_created=0,
+                candidates_updated=0,
+                status=status,
+                message=(
+                    f"mode={selected_mode} contracts={len(assets)} error={exc}"
+                    f"{self._capacity_suffix(ledger_before)}"
+                ),
+            )
+            self.repository.save_run(run)
+            return run
+        candidates = tuple(self._provider_candidate(item, observed_at=started_at) for item in result.candidates)
+        created, updated = self.repository.upsert_many(candidates)
+        if result.processed_assets:
+            namespace, value = result.processed_assets[-1]
+            if not namespace.startswith("contract:"):
+                namespace = f"contract:{namespace}"
+            self.repository.save_identifier_cursor(cursor_key, namespace, value)
+        status = "succeeded" if result.assets and not result.truncated and result.failure is None else "partial"
+        message = (
+            f"mode={selected_mode} contracts={result.assets} processed={result.processed} "
+            f"batches={result.batches} rows={len(candidates)}"
+        )
+        if result.truncated:
+            message += f" unprocessed={result.assets - result.processed}"
+        if result.failure is not None:
+            message += f" error={result.failure}"
+        run = DiscoveryRun(
+            run_id=identity("candidate-discovery-run", {"provider": "dexscreener-batch", "started_at": started_at}),
+            provider="dexscreener-batch",
+            started_at=started_at,
+            finished_at=datetime.now(tz=UTC),
+            candidates_seen=len(candidates),
+            candidates_created=created,
+            candidates_updated=updated,
+            status=status,
+            message=message + self._capacity_suffix(ledger_before),
+        )
+        self.repository.save_run(run)
+        return run
+
+    def _has_current_market_measure(self, candidate_id: str) -> bool:
+        candidate = self.repository.get(candidate_id)
+        return candidate is not None and _has_market_or_protocol_measure(candidate)
+
+    def global_coverage(self) -> dict[str, object]:
+        """Report coverage from measured denominators only; unmeasured values stay null."""
+        universe_ids = set(self.repository.universe_assets("coingecko"))
+        discovered_ids = set(self.repository.identifier_values("coingecko"))
+        matched = universe_ids & discovered_ids
+        universe_coverage = round(len(matched) / len(universe_ids), 6) if universe_ids else None
+        scan = self.repository.scan_state("geckoterminal") or {}
+        catalogue_ids = {str(row["network_id"]) for row in self.repository.network_observations()}
+        pools = self.repository.pool_observations()
+        scanned_networks = {str(item["network"]) for item in pools}
+        network_coverage = (
+            round(len(catalogue_ids & scanned_networks) / len(catalogue_ids), 6) if catalogue_ids else None
+        )
+        candidates = self.repository.list_candidates(limit=100_000)
+        observations = [
+            str(source.observed_at) for candidate in candidates for source in candidate.sources if source.observed_at
+        ]
+        fresh_cutoff = datetime.now(tz=UTC) - timedelta(hours=24)
+        fresh_market_evidence = sum(
+            1
+            for candidate in candidates
+            if _has_market_or_protocol_measure(candidate)
+            and (observed_at := _market_observation_at(candidate)) is not None
+            and observed_at >= fresh_cutoff
+        )
+        identity_verified = sum(1 for result in self.repository.identity_results() if result.outcome == "exact")
+        ledger_summary = self.ledger.summary() if self.ledger else None
+        capacity = self._capacity_telemetry(ledger_summary, universe_size=len(universe_ids), matched=len(matched))
+        return {
+            "scope": "global_market_enumeration",
+            "generated_at": datetime.now(tz=UTC).isoformat(),
+            "universe": {
+                "provider": "coingecko",
+                "scope": "global_asset_universe",
+                "accessible_assets": len(universe_ids),
+                "discovered_assets": len(discovered_ids),
+                "matched_assets": len(matched),
+                "coverage": universe_coverage,
+                "unmeasured_reason": (
+                    None
+                    if universe_ids
+                    else "no verified accessible universe enumeration recorded; coverage is unmeasured"
+                ),
+                "observed_at": self.repository.universe_observed_at("coingecko"),
+                "provenance": "CoinGecko /coins/list snapshot persisted in the discovery registry",
+            },
+            "networks": {
+                "provider": "geckoterminal",
+                "scope": "network_catalogue_enumeration",
+                "catalogued_networks": len(catalogue_ids),
+                "scanned_networks": len(scanned_networks),
+                "coverage": network_coverage,
+                "unmeasured_reason": (
+                    None if catalogue_ids else "no network catalogue page has been enumerated; coverage is unmeasured"
+                ),
+            },
+            "pools": {
+                "provider": "geckoterminal",
+                "scope": "per_network_pool_pages",
+                "observed_pools": len(pools),
+                "new_pools": int(scan.get("new_pools") or 0),
+                "coverage": None,
+                "unmeasured_reason": "GeckoTerminal public API exposes no global pool denominator",
+            },
+            "evidence": {
+                "identity_verified_assets": identity_verified,
+                "fresh_market_evidence_assets_24h": fresh_market_evidence,
+                "criteria": (
+                    "identity_verified_assets counts exact identity outcomes; "
+                    "fresh_market_evidence_assets_24h counts candidates with a market/protocol measure and a "
+                    "provider-observed market timestamp within 24 hours; generic source sync timestamps do not "
+                    "qualify; the fields are reported separately"
+                ),
+            },
+            "capacity": capacity,
+            "freshness": {
+                "oldest_observation": min(observations) if observations else None,
+                "newest_observation": max(observations) if observations else None,
+                "universe_observed_at": self.repository.universe_observed_at("coingecko"),
+                "scan_observed_at": scan.get("updated_at"),
+            },
+            "provenance": {
+                "registry_path": self.config.registry_path,
+                "source_urls": {
+                    "universe": "https://api.coingecko.com/api/v3/coins/list",
+                    "networks": "https://api.geckoterminal.com/api/v2/networks",
+                },
+            },
+            "scan_progress": {
+                "coingecko_page": self.repository.discovery_page_cursor("coingecko"),
+                "geckoterminal": {
+                    key: scan.get(key)
+                    for key in (
+                        "catalogue_page",
+                        "catalogue_complete",
+                        "network_index",
+                        "pool_page",
+                        "passes",
+                        "observed_pools",
+                        "new_pools",
+                        "last_error",
+                        "inaccessible_scope",
+                        "updated_at",
+                    )
+                },
+            },
+            "unsupported_scope": [
+                *(
+                    {
+                        "provider": "geckoterminal",
+                        "scope": str(item.get("scope") or "unspecified"),
+                        "reason": str(item.get("reason") or "inaccessible"),
+                        "page": item.get("page"),
+                    }
+                    for item in (scan.get("inaccessible_scope") or [])
+                    if isinstance(item, dict)
+                ),
+                {
+                    "provider": "dexscreener",
+                    "scope": "token_profile_and_boost_feed",
+                    "reason": "public profiles and paid boosts are not a global asset universe",
+                },
+                {
+                    "provider": "defillama",
+                    "scope": "protocol_catalogue",
+                    "reason": "protocol listings are not an exhaustive asset universe",
+                },
+                {
+                    "provider": "geckoterminal",
+                    "scope": "trending_pools",
+                    "reason": "popularity feed is distinct from network catalogue enumeration",
+                },
+            ],
+            "trending_feeds": ("geckoterminal:trending_pools", "dexscreener:token-boosts/top/v1"),
+        }
 
     def screen_candidates(self, *, limit: int = 1000) -> tuple[CandidateScreeningResult, ...]:
         screened_at = datetime.now(tz=UTC)
-        results = tuple(
-            self._screen_candidate(candidate, screened_at=screened_at)
-            for candidate in self.repository.list_candidates(limit=limit)
-        )
+        batch = self.repository.fair_candidates("screening", limit)
+        previous = self.repository.latest_screening_by_candidate()
+        results = tuple(self._screen_candidate(candidate, screened_at=screened_at) for candidate in batch)
         for result in results:
-            self.repository.save_screening_result(result)
+            prior = previous.get(result.candidate_id)
+            if prior is None or prior.screening_id != result.screening_id:
+                self.repository.save_screening_result(result)
         return results
 
     def refresh_queue(self, *, limit: int = 1000) -> tuple[CandidateQueueEntry, ...]:
+        """Refresh queue entries from current screening without re-screening the same cohort."""
         now = datetime.now(tz=UTC)
-        results = self.screen_candidates(limit=limit)
-        candidates = {candidate.candidate_id: candidate for candidate in self.repository.list_candidates(limit=limit)}
+        batch = self.repository.fair_candidates("queue", limit)
+        previous = self.repository.latest_screening_by_candidate()
+        screened: dict[str, CandidateScreeningResult] = {}
+        for candidate in batch:
+            result = self._screen_candidate(candidate, screened_at=now)
+            prior = previous.get(candidate.candidate_id)
+            if prior is None or prior.screening_id != result.screening_id:
+                self.repository.save_screening_result(result)
+                screened[candidate.candidate_id] = result
+            else:
+                screened[candidate.candidate_id] = prior
+        identities = self.repository.latest_identity_by_candidate()
+        ticker_groups = self.repository.alias_groups(alias_type="ticker_symbol")
         entries = tuple(
-            self._queue_entry(result, candidates[result.candidate_id], updated_at=now)
-            for result in results
-            if result.candidate_id in candidates
+            self._queue_entry(
+                screened[candidate.candidate_id],
+                candidate,
+                updated_at=now,
+                identity_accepted=identity_is_accepted(
+                    identities.get(candidate.candidate_id),
+                    candidate=candidate,
+                    related_candidate_ids=related_ticker_candidates(candidate, ticker_groups),
+                ),
+            )
+            for candidate in batch
         )
         self.repository.save_queue_entries(entries)
         return entries
 
-    def run_market_discovery(self, *, limit: int | None = None) -> dict[str, object]:
+    def handoff_manifest(self, *, limit: int = 25) -> dict[str, object]:
+        """Read-only evidence manifest for downstream intelligence stages.
+
+        This does not execute Whale, Capital Flow, or Opportunity engines: those
+        require evidence formats that are not present in the registry. It only
+        exposes candidates whose identity and screening evidence are accepted.
+        """
+        identities = self.repository.latest_identity_by_candidate()
+        ticker_groups = self.repository.alias_groups(alias_type="ticker_symbol")
+        screenings = self.repository.latest_screening_by_candidate()
+        queue_entries = self.repository.all_queue_entries()
+        candidates = {
+            item.candidate_id: item
+            for item in self.repository.candidates_by_ids(tuple(entry.candidate_id for entry in queue_entries))
+        }
+        eligible = [entry for entry in queue_entries if entry.eligible_for_deep_analysis]
+        eligible.sort(key=lambda entry: (-entry.priority_score, entry.candidate_id))
+        shortlist: list[dict[str, object]] = []
+        for entry in eligible:
+            candidate = candidates.get(entry.candidate_id)
+            result = identities.get(entry.candidate_id)
+            if candidate is None or not identity_is_accepted(
+                result,
+                candidate=candidate,
+                related_candidate_ids=related_ticker_candidates(candidate, ticker_groups),
+            ):
+                continue
+            screening = screenings.get(entry.candidate_id)
+            shortlist.append(
+                {
+                    "candidate_id": entry.candidate_id,
+                    "slug": candidate.slug,
+                    "name": candidate.name,
+                    "symbol": candidate.symbol,
+                    "priority": entry.priority,
+                    "priority_score": entry.priority_score,
+                    "identity_outcome": result.outcome if result else None,
+                    "identity_confidence": result.confidence if result else None,
+                    "identity_reason": result.reason if result else None,
+                    "identity_evidence_fingerprint": result.evidence_fingerprint if result else None,
+                    "screening_status": screening.status if screening else None,
+                    "screening_score": screening.score if screening else None,
+                    "missing_evidence": sorted(set(entry.missing_evidence)),
+                }
+            )
+            if len(shortlist) >= max(1, min(limit, 1000)):
+                break
+        return {
+            "eligible_queue_entries": len(eligible),
+            "shortlist_size": len(shortlist),
+            "shortlist": shortlist,
+            "handoff_boundary": "read-only evidence manifest; no Whale/Capital Flow/Opportunity engine execution",
+        }
+
+    def reconcile_eligibility(self) -> int:
+        """Fail closed: queue eligibility must match accepted identity + screening."""
+        identities = self.repository.latest_identity_by_candidate()
+        ticker_groups = self.repository.alias_groups(alias_type="ticker_symbol")
+        screenings = self.repository.latest_screening_by_candidate()
+        states = self.repository.candidate_lifecycle_states()
+        queue_entries = self.repository.all_queue_entries()
+        candidates = {
+            item.candidate_id: item
+            for item in self.repository.candidates_by_ids(tuple(entry.candidate_id for entry in queue_entries))
+        }
+        updates: list[tuple[str, bool]] = []
+        for entry in queue_entries:
+            result = screenings.get(entry.candidate_id)
+            candidate = candidates.get(entry.candidate_id)
+            accepted = candidate is not None and identity_is_accepted(
+                identities.get(entry.candidate_id),
+                candidate=candidate,
+                related_candidate_ids=related_ticker_candidates(candidate, ticker_groups),
+            )
+            advanced = result is not None and result.status == "advanced" and result.advanced
+            lifecycle_ok = states.get(entry.candidate_id) in {"analyzable", "identified", "ranked"}
+            expected = accepted and advanced and lifecycle_ok
+            if expected != bool(entry.eligible_for_deep_analysis):
+                updates.append((entry.candidate_id, expected))
+        return self.repository.set_queue_eligibility(tuple(updates))
+
+    def run_market_discovery(self, *, limit: int | None = None, mode: str | None = None) -> dict[str, object]:
+        selected_mode = (
+            self.config.normalized_mode()
+            if mode is None
+            else ("backfill" if mode.strip().lower() == "backfill" else "incremental")
+        )
         seed_run = self.sync_configured_universe()
+        universe = self.enumerate_universe()
         provider_run = self.sync(provider="all", limit=limit)
-        screening = self.screen_candidates()
-        queue = self.refresh_queue()
+        dex_run = self.enrich_dex_contracts(limit=limit, mode=selected_mode)
+        stage_limit = max(1, min(int(limit) if limit else 500, 10_000))
+        identity = CandidateIdentityResolutionEngine(self.repository).resolve_batch(limit=stage_limit)
+        screening = self.screen_candidates(limit=stage_limit)
+        queue = self.refresh_queue(limit=stage_limit)
+        eligibility_changes = self.reconcile_eligibility()
+        status_changes = self.repository.reconcile_candidate_status()
         stats = self.repository.stats()
         return {
+            "mode": selected_mode,
             "seed_run": seed_run.run_id,
             "provider_run": provider_run.run_id,
+            "dex_enrichment_run": dex_run.run_id,
+            "universe": universe,
+            "coverage": self.global_coverage(),
             "candidates": stats.total_candidates,
+            "identity_evaluated": identity.evaluated,
+            "identity_unchanged": identity.unchanged,
             "screened": len(screening),
             "queued": len(queue),
+            "eligibility_changes": eligibility_changes,
+            "status_changes": status_changes,
             "top": [entry.candidate_id for entry in queue[:10]],
         }
 
@@ -298,17 +780,26 @@ class CandidateDiscoveryEngine:
         chain = str(metadata.get("chain") or candidate.primary_chain or "").strip().lower()
         contract_address = normalize_contract_address(metadata.get("contract_address"), chain)
         if chain and contract_address:
-            identifiers.append(
-                CandidateIdentifier(
-                    candidate_id,
-                    f"contract:{chain}",
-                    contract_address,
-                    candidate.provider,
-                    0.98,
-                    observed_at,
-                    observed_at,
-                )
-            )
+            seen_identifiers = {(identifiers[0].namespace, identifiers[0].value)}
+            for alias in registry_chain_aliases(chain):
+                for namespace, value in (
+                    (f"contract:{alias}", contract_address),
+                    (candidate.provider, f"{alias}:{contract_address}"),
+                ):
+                    if (namespace, value) in seen_identifiers:
+                        continue
+                    seen_identifiers.add((namespace, value))
+                    identifiers.append(
+                        CandidateIdentifier(
+                            candidate_id,
+                            namespace,
+                            value,
+                            candidate.provider,
+                            0.98 if namespace.startswith("contract:") else 0.95,
+                            observed_at,
+                            observed_at,
+                        )
+                    )
         aliases = [CandidateAlias(candidate_id, candidate.name, "provider_name", candidate.provider, 0.95)]
         if candidate.symbol:
             aliases.append(
@@ -352,6 +843,86 @@ class CandidateDiscoveryEngine:
             metadata=metadata,
         )
 
+    def _capacity_telemetry(
+        self,
+        summary: dict[str, Any] | None,
+        *,
+        universe_size: int,
+        matched: int,
+    ) -> dict[str, Any]:
+        inventory = self.ledger.inventory if self.ledger is not None else self.capacity_inventory
+        endpoints = list(summary["endpoints"]) if summary else []
+        totals = (
+            dict(summary["totals"])
+            if summary
+            else {
+                "requests": 0,
+                "retries": 0,
+                "throttles": 0,
+                "failures": 0,
+                "successes": 0,
+                "cooldowns": 0,
+            }
+        )
+        rates = {f"{row['provider']}:{row['endpoint']}": _observed_rate_per_second(row) for row in endpoints}
+        coin_rate = rates.get("coingecko:coins_markets")
+        remaining_pages = math.ceil(max(0, universe_size - matched) / 250) if universe_size else None
+        universe_eta = round(remaining_pages / coin_rate, 1) if coin_rate and remaining_pages else None
+        gecko_rate = rates.get("geckoterminal:network_pools")
+        return {
+            "inventory": inventory.source_path,
+            "documented": inventory.as_dict(),
+            "observed": summary,
+            "api_calls": int(totals["requests"]),
+            "retries": int(totals["retries"]),
+            "throttles": int(totals["throttles"]),
+            "cooldowns": int(totals["cooldowns"]),
+            "failures": int(totals["failures"]),
+            "remaining_quota": {
+                f"{row['provider']}:{row['endpoint']}": row["remaining_quota"]
+                for row in endpoints
+                if row["remaining_quota"] is not None
+            },
+            "observed_requests_per_second": {key: value for key, value in rates.items() if value is not None},
+            "eta_seconds": {
+                "universe": universe_eta,
+                "network_pools": None,
+                "reason": (
+                    "universe ETA uses observed CoinGecko /coins/markets throughput and a 250-asset page; "
+                    "pool ETA is unmeasured because GeckoTerminal exposes no global pool denominator"
+                ),
+                "geckoterminal_observed_requests_per_second": gecko_rate,
+            },
+            "unsupported_segments": [
+                {
+                    "provider": "geckoterminal",
+                    "scope": "global_pool_denominator",
+                    "reason": "public API exposes no global pool denominator; pool coverage stays null",
+                },
+                {
+                    "provider": "defillama",
+                    "scope": "numeric_free_request_ceiling",
+                    "reason": "free API is available without authentication but no numeric ceiling is documented",
+                },
+                {
+                    "provider": "dexscreener",
+                    "scope": "market_rate_and_batch_limit",
+                    "reason": "300 requests/min and 30 addresses/batch are owner-specified, not published in fetched docs",
+                },
+            ],
+        }
+
+    def _capacity_suffix(self, before: dict[str, Any] | None) -> str:
+        if self.ledger is None or before is None:
+            return ""
+        totals = self.ledger.summary()["totals"]
+        return (
+            f" api_calls={int(totals['requests']) - int(before.get('requests', 0))}"
+            f" retries={int(totals['retries']) - int(before.get('retries', 0))}"
+            f" throttles={int(totals['throttles']) - int(before.get('throttles', 0))}"
+            f" cooldowns={int(totals['cooldowns']) - int(before.get('cooldowns', 0))}"
+        )
+
     def _configured_providers(self, config: DiscoveryConfig) -> dict[str, DiscoveryProvider]:
         providers: dict[str, DiscoveryProvider] = {}
         coingecko = config.provider("coingecko")
@@ -361,6 +932,7 @@ class CandidateDiscoveryEngine:
                 timeout_seconds=coingecko.timeout_seconds,
                 max_attempts=coingecko.max_attempts,
                 backoff_seconds=coingecko.backoff_seconds,
+                ledger=self.ledger,
             )
         defillama = config.provider("defillama")
         if defillama.enabled:
@@ -369,6 +941,7 @@ class CandidateDiscoveryEngine:
                 timeout_seconds=defillama.timeout_seconds,
                 max_attempts=defillama.max_attempts,
                 backoff_seconds=defillama.backoff_seconds,
+                ledger=self.ledger,
             )
         geckoterminal = config.provider("geckoterminal")
         if geckoterminal.enabled:
@@ -377,6 +950,7 @@ class CandidateDiscoveryEngine:
                 timeout_seconds=geckoterminal.timeout_seconds,
                 max_attempts=geckoterminal.max_attempts,
                 backoff_seconds=geckoterminal.backoff_seconds,
+                ledger=self.ledger,
             )
         dexscreener = config.provider("dexscreener")
         if dexscreener.enabled:
@@ -385,6 +959,7 @@ class CandidateDiscoveryEngine:
                 timeout_seconds=dexscreener.timeout_seconds,
                 max_attempts=dexscreener.max_attempts,
                 backoff_seconds=dexscreener.backoff_seconds,
+                ledger=self.ledger,
             )
         return providers
 
@@ -393,10 +968,18 @@ class CandidateDiscoveryEngine:
         chain = str(metadata.get("chain") or candidate.primary_chain or "").strip().lower()
         contract_address = normalize_contract_address(metadata.get("contract_address"), chain)
         if chain and contract_address:
-            existing = self.repository.find_by_identifier(f"contract:{chain}", contract_address)
-            if existing:
-                return existing.candidate_id
-        return self._candidate_id(candidate.provider, candidate.provider_id)
+            for alias in registry_chain_aliases(chain):
+                for namespace, value in (
+                    (f"contract:{alias}", contract_address),
+                    (candidate.provider, f"{alias}:{contract_address}"),
+                ):
+                    existing = self.repository.find_by_identifier(namespace, value)
+                    if existing:
+                        return existing.candidate_id
+        existing = self.repository.find_by_identifier(candidate.provider, candidate.provider_id)
+        if existing:
+            return existing.candidate_id
+        return identity("candidate", {"namespace": candidate.provider, "value": candidate.provider_id})
 
     def _candidate_id(self, namespace: str, value: str) -> str:
         existing = self.repository.find_by_identifier(namespace, value)
@@ -483,6 +1066,7 @@ class CandidateDiscoveryEngine:
         candidate: CandidateRecord,
         *,
         updated_at: datetime,
+        identity_accepted: bool = False,
     ) -> CandidateQueueEntry:
         score = (
             0.0 if result.status == "rejected" else round(min(result.score + (0.1 if result.advanced else 0.0), 1.0), 4)
@@ -497,18 +1081,28 @@ class CandidateDiscoveryEngine:
             priority = "low"
         else:
             priority = "defer"
+        reasons = list(result.reasons)
+        if not identity_accepted:
+            reasons.append("accepted identity evidence required before deep analysis")
+        else:
+            reasons.append("accepted current identity evidence")
         return CandidateQueueEntry(
             queue_entry_id=identity("candidate-queue-entry", {"candidate": candidate.candidate_id}),
             candidate_id=candidate.candidate_id,
             priority_score=score,
             priority=priority,  # type: ignore[arg-type]
-            priority_reasons=result.reasons,
+            priority_reasons=tuple(reasons),
             missing_evidence=result.missing_evidence,
             lifecycle_state=candidate.lifecycle_status,
             created_at=candidate.first_seen_at,
             updated_at=updated_at,
             source_run_id="latest-screening",
-            eligible_for_deep_analysis=candidate.lifecycle_status == "analyzable" and result.advanced,
+            eligible_for_deep_analysis=(
+                identity_accepted
+                and result.status == "advanced"
+                and result.advanced
+                and candidate.lifecycle_status in {"analyzable", "identified", "ranked"}
+            ),
         )
 
 
@@ -551,11 +1145,39 @@ def _has_market_or_protocol_measure(candidate: CandidateRecord) -> bool:
         "volume",
         "volume_usd",
         "reserve_usd",
-        "boost_amount",
     }
     return any(candidate.metadata.get(key) not in {None, ""} for key in keys)
+
+
+def _market_observation_at(candidate: CandidateRecord) -> datetime | None:
+    """Return the newest provider-reported market observation time, if parseable."""
+    observations: list[datetime] = []
+    for key in ("market_evidence_observed_at", "last_updated"):
+        value = (candidate.metadata or {}).get(key)
+        if not value:
+            continue
+        try:
+            observations.append(_parse_iso(str(value)))
+        except (TypeError, ValueError):
+            continue
+    return max(observations) if observations else None
 
 
 def _has_rejection_marker(candidate: CandidateRecord) -> bool:
     markers = ("spam", "scam", "impersonation", "blocked")
     return any(bool(candidate.metadata.get(marker)) for marker in markers)
+
+
+def _observed_rate_per_second(row: dict[str, Any]) -> float | None:
+    first = row.get("first_attempt_at")
+    last = row.get("last_attempt_at")
+    if not first or not last:
+        return None
+    span = (_parse_iso(str(last)) - _parse_iso(str(first))).total_seconds()
+    attempts = int(row.get("attempts") or 0)
+    return round(attempts / span, 6) if span > 0 and attempts else None
+
+
+def _parse_iso(value: str) -> datetime:
+    parsed = datetime.fromisoformat(value)
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)

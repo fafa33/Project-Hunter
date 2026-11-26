@@ -91,3 +91,17 @@ def test_data_ops_dependency_order_and_schedules(tmp_path: Path) -> None:
     assert by_id["dataops-market-validation-run"].metadata["depends_on"] == "dataops-scenario-refresh"
     assert by_id["dataops-committee-evaluation"].metadata["depends_on"] == "dataops-market-validation-run"
     assert tuple(job.job_id for job in config.jobs if job.job_id in DATA_OPS_JOB_IDS) == DATA_OPS_JOB_IDS
+
+
+def test_data_ops_installer_satisfies_discovery_startup_guard(tmp_path: Path, monkeypatch) -> None:
+    from hunter.automation import AutomationScheduler
+    from hunter.cli import main
+    from hunter.discovery.automation import DISCOVERY_JOB_IDS, require_discovery_automation
+
+    path = tmp_path / "automation.yaml"
+    install_data_ops_jobs(path)
+    assert require_discovery_automation(path) == DISCOVERY_JOB_IDS
+    calls = []
+    monkeypatch.setattr(AutomationScheduler, "run_loop", lambda self, **kwargs: calls.append(kwargs))
+    assert main(["--config", str(path), "automation", "start", "--max-iterations", "1"]) == 0
+    assert calls == [{"max_iterations": 1}]

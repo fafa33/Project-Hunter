@@ -8,6 +8,8 @@ import yaml
 DISCOVERY_JOB_IDS = (
     "discovery-source-health",
     "discovery-market-run",
+    "discovery-market-run-backfill",
+    "discovery-identity-resolution",
     "discovery-candidate-screening",
     "discovery-queue-refresh",
 )
@@ -16,7 +18,7 @@ DISCOVERY_JOB_IDS = (
 def install_discovery_jobs(path: Path = Path("configs/automation.yaml")) -> tuple[str, ...]:
     payload = _load_yaml(path)
     existing_jobs = {str(job.get("job_id")): job for job in payload.get("jobs", ()) if isinstance(job, dict)}
-    for job in _discovery_jobs():
+    for job in discovery_job_definitions():
         existing_jobs[str(job["job_id"])] = job
     payload["enabled"] = True
     payload["timezone"] = str(payload.get("timezone", "UTC"))
@@ -39,22 +41,102 @@ def discovery_automation_status(path: Path = Path("configs/automation.yaml")) ->
     }
 
 
-def _discovery_jobs() -> tuple[dict[str, Any], ...]:
+def require_discovery_automation(path: Path = Path("configs/automation.yaml")) -> tuple[str, ...]:
+    payload = _load_yaml(path)
+    present = {
+        str(job.get("job_id")): job
+        for job in payload.get("jobs", ())
+        if isinstance(job, dict) and job.get("job_id") in DISCOVERY_JOB_IDS
+    }
+    if not present:
+        return ()
+    missing = tuple(
+        job_id for job_id in DISCOVERY_JOB_IDS if job_id not in present or present[job_id].get("enabled") is not True
+    )
+    if missing:
+        msg = "incomplete discovery automation configuration; missing or disabled jobs: " + ", ".join(missing)
+        raise ValueError(msg)
+    return DISCOVERY_JOB_IDS
+
+
+def discovery_job_definitions() -> tuple[dict[str, Any], ...]:
     return (
         _job("discovery-source-health", "Discovery source health check", "hourly", "discovery_source_health"),
-        _job("discovery-market-run", "Global discovery market run", "every_6_hours", "discovery_market_run"),
-        _job("discovery-candidate-screening", "Discovery candidate screening", "every_6_hours", "discovery_screen"),
-        _job("discovery-queue-refresh", "Discovery queue refresh", "every_6_hours", "discovery_queue_refresh"),
+        _job(
+            "discovery-market-run",
+            "Global discovery market run",
+            "cron",
+            "discovery_market_run",
+            {
+                "free_capacity_observation_window_hours": 24,
+                "discovery_mode": "incremental",
+                "budget_aware_resumable": True,
+                "fair_network_rotation": True,
+                "no_parallel_daemon": True,
+                "indefinite_operation": True,
+            },
+            expression="*/15 * * * *",
+        ),
+        _job(
+            "discovery-market-run-backfill",
+            "Bounded discovery market backfill",
+            "cron",
+            "discovery_market_run_backfill",
+            {
+                "discovery_mode": "backfill",
+                "bounded_contracts_per_cycle": 5,
+                "does_not_starve_incremental": True,
+            },
+            expression="0 * * * *",
+        ),
+        # Staggered six-hour handoff: discovery -> identity -> screening -> queue.
+        _job(
+            "discovery-identity-resolution",
+            "Bounded candidate identity resolution",
+            "cron",
+            "discovery_identity_resolve",
+            {
+                "evidence_gated": True,
+                "bounded_fair_batch": True,
+                "no_parallel_daemon": True,
+            },
+            expression="5 */6 * * *",
+        ),
+        _job(
+            "discovery-candidate-screening",
+            "Discovery candidate screening",
+            "cron",
+            "discovery_screen",
+            expression="10 */6 * * *",
+        ),
+        _job(
+            "discovery-queue-refresh",
+            "Discovery queue refresh",
+            "cron",
+            "discovery_queue_refresh",
+            expression="15 */6 * * *",
+        ),
     )
 
 
-def _job(job_id: str, name: str, schedule_type: str, operation: str) -> dict[str, Any]:
+def _job(
+    job_id: str,
+    name: str,
+    schedule_type: str,
+    operation: str,
+    metadata: dict[str, Any] | None = None,
+    *,
+    expression: str | None = None,
+) -> dict[str, Any]:
+    schedule: dict[str, Any] = {"type": schedule_type}
+    if expression is not None:
+        schedule["expression"] = expression
     return {
         "job_id": job_id,
         "name": name,
         "enabled": True,
         "job_kind": "ingest_project_data",
-        "schedule": {"type": schedule_type},
+        "schedule": schedule,
         "timezone": "UTC",
         "target": {"type": "operation", "id": operation},
         "run_type": "scheduled",
@@ -68,7 +150,7 @@ def _job(job_id: str, name: str, schedule_type: str, operation: str) -> dict[str
         "as_of_policy": {"mode": "current"},
         "timeout_seconds": 3600,
         "concurrency_policy": {"prevent_overlapping": True, "scope": "job_target"},
-        "metadata": {"operation": operation, "records_metrics": True},
+        "metadata": {"operation": operation, "records_metrics": True, **(metadata or {})},
     }
 
 

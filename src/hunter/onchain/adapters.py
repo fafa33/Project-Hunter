@@ -5,7 +5,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from time import perf_counter
@@ -23,6 +24,22 @@ class EVMProviderUnavailable(Exception):
     def __init__(self, message: str, *, failure_type: str = "unavailable") -> None:
         super().__init__(message)
         self.failure_type = failure_type
+
+
+class RpcAttemptBudgetExhausted(EVMProviderUnavailable):
+    def __init__(self) -> None:
+        super().__init__("rpc attempt budget exhausted", failure_type="local_budget_exhausted")
+
+
+@dataclass(slots=True)
+class RpcAttemptMeter:
+    limit: int
+    used: int = 0
+
+    def charge(self) -> None:
+        if self.used >= self.limit:
+            raise RpcAttemptBudgetExhausted()
+        self.used += 1
 
 
 @dataclass
@@ -74,6 +91,7 @@ class EVMJsonRpcAdapter:
         self._cooldown_failure_type: dict[str, str] = {}
         self._last_successful_provider: str | None = None
         self._last_successful_request: datetime | None = None
+        self._request_meter: RpcAttemptMeter | None = None
 
     @property
     def provider(self) -> str:
@@ -82,6 +100,26 @@ class EVMJsonRpcAdapter:
     @property
     def endpoint_identity(self) -> str:
         return endpoint_identity(self._active_endpoint)
+
+    @property
+    def request_meter(self) -> RpcAttemptMeter | None:
+        return self._request_meter
+
+    @contextmanager
+    def request_budget(self, limit: int) -> Iterator[RpcAttemptMeter]:
+        previous = self._request_meter
+        if previous is None:
+            meter = RpcAttemptMeter(limit)
+        else:
+            remaining = max(0, previous.limit - previous.used)
+            meter = RpcAttemptMeter(previous.used + min(limit, remaining), used=previous.used)
+        self._request_meter = meter
+        try:
+            yield meter
+        finally:
+            if previous is not None:
+                previous.used = meter.used
+            self._request_meter = previous
 
     def state(self) -> ProviderState:
         states = self.check_providers()
@@ -113,11 +151,46 @@ class EVMJsonRpcAdapter:
             raise EVMProviderUnavailable("eth_blockNumber returned invalid payload", failure_type="invalid_response")
         return max(int(latest, 16) - self.config.finality_depth, 0)
 
+    def finalized_block_number(self) -> int:
+        result = self._rpc("eth_getBlockByNumber", ("finalized", False))
+        if not isinstance(result, dict) or not isinstance(result.get("number"), str):
+            raise EVMProviderUnavailable("finalized block is unavailable", failure_type="invalid_response")
+        return int(str(result["number"]), 16)
+
     def block(self, number: int) -> dict[str, Any]:
         result = self._rpc("eth_getBlockByNumber", (hex(number), False))
         if not isinstance(result, dict):
             raise EVMProviderUnavailable("eth_getBlockByNumber returned no block", failure_type="invalid_response")
         return result
+
+    def transaction_receipt(self, tx: str) -> dict[str, Any]:
+        result = self._rpc("eth_getTransactionReceipt", (tx,))
+        if not isinstance(result, dict):
+            raise EVMProviderUnavailable("missing transaction receipt", failure_type="invalid_response")
+        return result
+
+    def corroborating_receipts(self, tx: str, *, exclude: tuple[str, ...]) -> tuple[tuple[str, dict[str, Any]], ...]:
+        results = []
+        seen = set(exclude)
+        for endpoint in self._ordered_endpoints():
+            name = endpoint_identity(endpoint)
+            if name in seen:
+                continue
+            seen.add(name)
+            cooldown = self._cooldown_until.get(endpoint)
+            if cooldown and cooldown > datetime.now(UTC):
+                continue
+            try:
+                if self._rpc_endpoint(endpoint, "eth_chainId", ()) != hex(self.config.chain_id):
+                    continue
+                receipt = self._rpc_endpoint(endpoint, "eth_getTransactionReceipt", (tx,))
+                if isinstance(receipt, dict):
+                    results.append((name, receipt))
+            except RpcAttemptBudgetExhausted:
+                raise
+            except EVMProviderUnavailable:
+                continue
+        return tuple(results)
 
     def block_timestamp(self, number: int) -> datetime:
         block = self.block(number)
@@ -130,10 +203,22 @@ class EVMJsonRpcAdapter:
             raise EVMProviderUnavailable("eth_getBalance returned invalid payload", failure_type="invalid_response")
         return int(result, 16)
 
+    def code(self, address: str, block_number: int) -> str:
+        result = self._rpc("eth_getCode", (address, hex(block_number)))
+        if not isinstance(result, str):
+            raise EVMProviderUnavailable("eth_getCode returned invalid payload", failure_type="invalid_response")
+        return result.lower()
+
+    def contract_call(self, address: str, data: str, block_number: int) -> str:
+        result = self._rpc("eth_call", ({"to": address, "data": data}, hex(block_number)))
+        if not isinstance(result, str):
+            raise EVMProviderUnavailable("eth_call returned invalid payload", failure_type="invalid_response")
+        return result.lower()
+
     def logs(
-        self, *, address: str | None, from_block: int, to_block: int, topics: tuple[str, ...]
+        self, *, address: str | None, from_block: int, to_block: int, topics: tuple[str | None, ...]
     ) -> tuple[dict[str, Any], ...]:
-        if to_block - from_block > self.config.max_block_range:
+        if to_block - from_block + 1 > self.config.max_block_range:
             raise EVMProviderUnavailable(
                 "requested block range exceeds configured maximum", failure_type="invalid_response"
             )
@@ -173,6 +258,8 @@ class EVMJsonRpcAdapter:
         try:
             chain_id = self._rpc_endpoint(endpoint, "eth_chainId", ())
             latest = self._rpc_endpoint(endpoint, "eth_blockNumber", ())
+        except RpcAttemptBudgetExhausted:
+            raise
         except EVMProviderUnavailable as exc:
             cooldown_until = _cooldown(now, exc.failure_type)
             if cooldown_until is not None:
@@ -243,6 +330,8 @@ class EVMJsonRpcAdapter:
                 self._last_successful_provider = endpoint
                 self._last_successful_request = datetime.now(tz=UTC)
                 return result
+            except RpcAttemptBudgetExhausted:
+                raise
             except EVMProviderUnavailable as exc:
                 errors.append(exc)
                 cooldown_until = _cooldown(datetime.now(tz=UTC), exc.failure_type)
@@ -255,8 +344,12 @@ class EVMJsonRpcAdapter:
         errors: list[EVMProviderUnavailable] = []
         for attempt in range(self.config.retry_limit + 1):
             try:
+                if self._request_meter is not None:
+                    self._request_meter.charge()
                 transport = self._single_transport or self._transport_factory(endpoint)
                 return transport.rpc(method, params)
+            except RpcAttemptBudgetExhausted:
+                raise
             except EVMProviderUnavailable as exc:
                 errors.append(exc)
                 if attempt < self.config.retry_limit:
@@ -264,18 +357,15 @@ class EVMJsonRpcAdapter:
         raise errors[-1] if errors else EVMProviderUnavailable("provider unavailable")
 
     def _ordered_endpoints(self) -> tuple[str, ...]:
-        endpoints = self.config.rpc_endpoints or (self.config.rpc_endpoint,)
-        if self._last_successful_provider in endpoints:
-            return (
-                self._last_successful_provider,
-                *(endpoint for endpoint in endpoints if endpoint != self._last_successful_provider),
-            )
-        return endpoints
+        return self.config.rpc_endpoints or (self.config.rpc_endpoint,)
 
 
 def endpoint_identity(endpoint: str) -> str:
-    parsed = urllib.parse.urlparse(endpoint)
-    return f"{parsed.scheme}://{parsed.netloc}"
+    value = endpoint.strip()
+    parsed = urllib.parse.urlparse(value if "://" in value else f"//{value}")
+    host = (parsed.hostname or value).lower()
+    port = parsed.port
+    return f"{host}:{port}" if port else host
 
 
 def _provider_state(

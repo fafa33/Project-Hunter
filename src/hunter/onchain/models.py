@@ -59,6 +59,8 @@ class ChainConfig:
     native_asset: str = ""
     wrapped_native_asset: str | None = None
     deployment_start_block: int | None = None
+    swap_rpc_budget: int = 12
+    acquisition_rpc_budget: int = 40
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,7 @@ class AssetConfig:
     asset_type: str
     decimals: int
     contract_address: str | None = None
+    coingecko_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +102,61 @@ class OnChainSurface:
 
 
 @dataclass(frozen=True)
+class DexPoolConfig:
+    pool_id: str
+    project: str
+    chain_id: int
+    address: str
+    dex: str
+    version: str
+    token0: str
+    token1: str
+    token0_decimals: int
+    token1_decimals: int
+    target_asset: str
+    source_url: str
+    source_type: str
+    verification_timestamp: datetime
+    confidence: float
+    valid_from: datetime
+    evidence_id: str
+    target_asset_symbol: str = ""
+    active: bool = True
+    valid_to: datetime | None = None
+    routers: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for name in ("address", "token0", "token1", "target_asset"):
+            object.__setattr__(self, name, str(getattr(self, name)).lower())
+        object.__setattr__(self, "routers", tuple(str(item).lower() for item in self.routers))
+        for name in ("verification_timestamp", "valid_from"):
+            object.__setattr__(self, name, getattr(self, name).astimezone(UTC))
+        if self.valid_to is not None:
+            object.__setattr__(self, "valid_to", self.valid_to.astimezone(UTC))
+
+    def as_surface(self) -> OnChainSurface:
+        return OnChainSurface(
+            project=self.project,
+            chain_id=self.chain_id,
+            network="ethereum" if self.chain_id == 1 else f"chain-{self.chain_id}",
+            address=self.address,
+            address_type="liquidity_pool",
+            protocol_role=f"{self.dex}_{self.version}_pool",
+            asset_scope=f"{self.token0}:{self.token1}",
+            source_url=self.source_url,
+            source_type=self.source_type,
+            verification_timestamp=self.verification_timestamp,
+            confidence=self.confidence,
+            active=self.active,
+            valid_from=self.valid_from,
+            valid_to=self.valid_to,
+            evidence_id=self.evidence_id,
+            deployment_start_block=None,
+            project_state="verified_surface",
+        )
+
+
+@dataclass(frozen=True)
 class RawOnChainObservation:
     project: str
     chain_id: int
@@ -122,6 +180,35 @@ class RawOnChainObservation:
     normalized_amount: Decimal | None = None
     direction: str = "unknown"
     event_type: str = "unknown"
+    log_endpoint: str | None = None
+    receipt_endpoint: str | None = None
+    corroborating_endpoints: tuple[str, ...] = ()
+    receipt_validation_policy: str | None = None
+    receipt_verified_at: datetime | None = None
+    receipt_log_digest: str | None = None
+    log_topics: tuple[str, ...] = ()
+    log_data: str = ""
+    log_address: str | None = None
+    swap_pool_id: str | None = None
+    swap_dex: str | None = None
+    swap_version: str | None = None
+    swap_event_topic: str | None = None
+    token_in_contract: str | None = None
+    token_out_contract: str | None = None
+    token_in_raw_amount: str | None = None
+    token_out_raw_amount: str | None = None
+    token_in_amount: Decimal | None = None
+    token_out_amount: Decimal | None = None
+    target_asset_contract: str | None = None
+    trade_direction: str = "unknown"
+    attributed_wallet: str | None = None
+    attribution_status: str = "UNAVAILABLE"
+    attribution_reason: str | None = None
+    receipt_from: str | None = None
+    receipt_status: str | None = None
+    wallet_code: str | None = None
+    swap_status: str = "UNAVAILABLE"
+    rpc_request_count: int = 0
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "block_timestamp", self.block_timestamp.astimezone(UTC))
@@ -131,6 +218,20 @@ class RawOnChainObservation:
             object.__setattr__(self, "counterparty_address", self.counterparty_address.lower())
         if self.asset_contract is not None:
             object.__setattr__(self, "asset_contract", self.asset_contract.lower())
+        if self.log_address is not None:
+            object.__setattr__(self, "log_address", self.log_address.lower())
+        if self.swap_event_topic is not None:
+            object.__setattr__(self, "swap_event_topic", self.swap_event_topic.lower())
+        for name in (
+            "token_in_contract",
+            "token_out_contract",
+            "target_asset_contract",
+            "attributed_wallet",
+            "receipt_from",
+        ):
+            value = getattr(self, name)
+            if value is not None:
+                object.__setattr__(self, name, value.lower())
 
 
 @dataclass(frozen=True)

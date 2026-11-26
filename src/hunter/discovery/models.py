@@ -20,6 +20,61 @@ CandidateType = Literal["project", "protocol", "token", "network", "infrastructu
 IdentityResolutionOutcome = Literal["exact", "probable", "ambiguous", "conflict", "rejected", "unresolved"]
 CandidatePriority = Literal["critical", "high", "medium", "low", "defer"]
 
+IDENTITY_POLICY_VERSION = "identity-policy-v2"
+SCREENING_STATUS_NOT_SCREENED = "not_screened"
+QUEUE_STATUS_NOT_QUEUED = "not_queued"
+QUEUE_STATUS_QUEUED = "queued"
+QUEUE_STATUS_ELIGIBLE = "deep_analysis_eligible"
+
+MARKET_SELECTION_METADATA_KEYS = frozenset({"market_pair_address", "market_pair_side"})
+MARKET_EVIDENCE_PROVENANCE_KEYS = MARKET_SELECTION_METADATA_KEYS | frozenset({"market_evidence_provider"})
+
+VOLATILE_IDENTITY_METADATA_KEYS = frozenset(
+    {
+        "last_updated",
+        "market_evidence_observed_at",
+        "market_evidence_provider",
+        "official_link_observed_at",
+        "observed_at",
+        "fetched_at",
+        "retrieved_at",
+        "scraped_at",
+        "seen_at",
+        "market_evidence_url",
+        "batch_endpoint",
+        "batch_size",
+        "batch_index",
+        "discovery_mode",
+        *MARKET_SELECTION_METADATA_KEYS,
+    }
+)
+
+
+def normalize_identity_disagreements(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Exclude historical observation-only disagreements, preserving genuine conflicts."""
+    normalized = dict(metadata)
+    conflicts = normalized.get("provider_disagreements")
+    if isinstance(conflicts, dict):
+        normalized["provider_disagreements"] = {
+            key: value for key, value in conflicts.items() if key not in VOLATILE_IDENTITY_METADATA_KEYS
+        }
+    return normalized
+
+
+REFRESHABLE_DISCOVERY_METADATA_KEYS = VOLATILE_IDENTITY_METADATA_KEYS | frozenset(
+    {
+        "liquidity_usd",
+        "volume_usd",
+        "volume_24h_usd",
+        "market_cap",
+        "fdv",
+        "price_usd",
+        "reserve_usd",
+        "tvl_usd",
+        "market_evidence_status",
+    }
+)
+
 
 @dataclass(frozen=True)
 class CandidateIdentifier:
@@ -117,6 +172,8 @@ class CandidateIdentity:
     conflicts: tuple[str, ...] = ()
     related_candidate_ids: tuple[str, ...] = ()
     evaluated_at: datetime = field(default_factory=lambda: datetime.now(tz=UTC))
+    policy_version: str = IDENTITY_POLICY_VERSION
+    evidence_fingerprint: str = ""
 
     def __post_init__(self) -> None:
         if not self.candidate_id.strip() or not self.reason.strip():

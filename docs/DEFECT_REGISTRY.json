@@ -1212,6 +1212,356 @@
       "guard": "Run 45376425177 attempt 1 reproduced the API visibility race: validation completed at 10:47:18Z but publisher failed three seconds later. Publisher observes at most five snapshots with five-second intervals and five-second request timeouts, requires complete job listing and unique same-attempt terminal evidence, and refuses contradictory terminal outcomes or ambiguous identity. Earlier attempts cannot authorize publication. Governance remains unchanged.",
       "test": "tests/test_pr376_prevention_regressions.py::test_m3_trusted_publisher_receipt_is_checkout_free_and_job_bound; tests/test_pr376_prevention_regressions.py::test_trusted_publisher_waits_for_exact_attempt_terminal_evidence; tests/test_pr376_prevention_regressions.py::test_m3_trusted_receipt_binds_job_attempt_and_digest",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-136",
+      "class": "unbounded-automation-start-invocation-blocks-deterministic-cli-test",
+      "source": "Issue #587 / PR #788 at head 87f87d6a3ab845c9428984a4c893cb5667883d09: automation start now defaults to indefinite operation, but legacy tests/test_automation.py::test_cli_commands invoked it without an iteration limit. The deterministic Pytest lane never reached a terminal assertion, so the exact-head Hunter / Pre-PR Preflight and Trusted Candidate Preflight Validation runs were cancelled at timeout instead of producing proof.",
+      "classification": "systemic",
+      "guard_boundary": "deterministic CLI regression lane, at each tests/test_automation.py invocation of the automation start command",
+      "guard": "The production automation start default stays indefinite by owner design (the LaunchAgent deliberately omits --max-iterations); the deterministic suite supplies its own finite bound. test_cli_commands now invokes automation start with --max-iterations 1, so the CLI test terminates on the command's own contract instead of an external CI timeout. No scheduler, deployment configuration, production default or iteration ceiling was changed.",
+      "test": "tests/test_automation.py::test_cli_commands",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-137",
+      "class": "signed-capital-flow-amount-normalization-loses-precision",
+      "source": "Issue #587 / PR #788 at head 5e672a033b889c80d089a82ea48188881d05db1a: SonarCloud pythonbugs:S3518 (AaISLpJSkxhTJ_ZpaeYi) flagged Decimal(10) ** Decimal(decimals) as division by zero in _validate_observation; a 40-digit raw amount with decimals=0 was rejected because the default Decimal context rounded the quotient before comparison",
+      "classification": "isolated",
+      "guard_boundary": "canonical signed evidence validation, before any capital-flow row is accepted by Whale or Market Validation",
+      "guard": "Normalize raw amounts with Decimal.scaleb inside a localcontext precision derived from the validated digit count and decimal exponent. The divisor expression is removed, zero-decimal amounts stay exact, and malformed amounts still fail closed before signature or digest acceptance.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_capital_flow_evidence_preserves_high_precision_zero_decimal_amount; tests/test_onchain_capital_flow_acquisition.py::test_capital_flow_evidence_hostile_cases",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-138",
+      "class": "market-validation-source-adapter-returns-inconsistent-tuple-lengths",
+      "source": "Issue #587 / PR #788 at head 5e672a033b889c80d089a82ea48188881d05db1a: SonarCloud python:S8495 (AaISLpPtkxhTJ_ZpaeYj) flagged _whale_engine_sources returning both a 0-tuple and a 1-tuple",
+      "classification": "isolated",
+      "guard_boundary": "market-validation acquisition source assembly, before whale context reaches weighting",
+      "guard": "Return a consistently typed Sequence[EngineValidationSource] from _whale_engine_sources (empty list when unavailable, one-element list when present). The unavailable and available paths have one sequence contract and all existing caller extension behavior is unchanged.",
+      "test": "tests/test_whale_acquisition.py::test_whale_engine_sources_returns_consistent_sequence_when_unavailable; tests/test_whale_acquisition.py::test_whale_source_connects_to_market_validation_weighting",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-139",
+      "class": "unbounded-rpc-execution-without-machine-checkable-budget",
+      "source": "Issue #587 / PR #788 during bounded live E2E: an initial sync lido validation invoked existing public RPC acquisition without a machine-checkable request cap, per-request timeout, retry ceiling, or wall-clock deadline; the owner had to abort it. An external abort is not a terminal validation result and cannot distinguish insufficient evidence from a runaway execution.",
+      "classification": "systemic",
+      "guard_boundary": "SPM-compiled onchain E2E execution boundary, before any live RPC request is issued",
+      "guard": "Every live onchain acquisition/E2E run must declare and enforce five bounds before dispatch: REQUEST_LIMIT=40 total RPC requests counted at the transport, TIMEOUT_SECONDS=8 per request, retry_limit=0, DEADLINE_SECONDS=180 wall clock, and max_block_range=100 per eth_getLogs query. A missing or relaxed bound is BLOCKED before network work; exceeding a bound fails closed. The defect is promoted into DFF-059 so the same invariant reaches EngineeringContextAuthority/SPM for any onchain surface, and the bounded regression proves the family is compiled into the engineering.implement context.",
+      "test": "tests/test_engineering_context_authority.py::test_onchain_execution_budget_family_reaches_spm_context; tests/test_onchain_capital_flow_acquisition.py::test_evm_adapter_finality_retry_logs_and_timeout_failure; tests/test_onchain_capital_flow_acquisition.py::test_tracked_transfer_acquisition_retains_real_log_and_deduplicates",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-140",
+      "class": "inclusive-block-range-off-by-one",
+      "source": "Issue #587 / PR #788 independent review at head 4d9e0a1fb351bd28655db3d97c2ff76dca833305: max_block_range=100 was treated as a difference, so engine.sync requested [end-100,end] (101 inclusive blocks) and EVMJsonRpcAdapter.logs accepted to_block-from_block==100.",
+      "classification": "systemic",
+      "guard_boundary": "onchain block-window construction and RPC adapter before eth_getLogs",
+      "guard": "Treat max_block_range as an inclusive block count. Construct windows with end - window + 1 and reject any request whose to_block - from_block + 1 exceeds the configured maximum. Boundary regressions pin 1, 100 and 101 inclusive blocks, and DFF-060 carries the invariant into the SPM engineering.implement context.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_evm_adapter_enforces_inclusive_block_range; tests/test_onchain_capital_flow_acquisition.py::test_engine_constructs_inclusive_max_block_window; tests/test_engineering_context_authority.py::test_onchain_range_and_provenance_families_reach_spm_context",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-141",
+      "class": "historical-block-timestamp-used-as-evidence-provenance",
+      "source": "Issue #587 / PR #788 independent review at head 4d9e0a1fb351bd28655db3d97c2ff76dca833305: CapitalFlowEngine._observations reused the historical block timestamp for acquisition_timestamp and receipt_verified_at, so signed provenance could not distinguish when evidence was acquired from when the receipt was independently verified.",
+      "classification": "systemic",
+      "guard_boundary": "onchain evidence construction and canonical signature verification",
+      "guard": "Inject a Clock into CapitalFlowEngine, sample acquisition_timestamp after native/log acquisition and receipt_verified_at only after successful independent receipt corroboration, keep block_timestamp bound to chain history, and sign/reverify both sampled values. Regression coverage pins distinct deterministic timestamps and rejects tampering with either signed field.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_engine_records_distinct_acquisition_and_verification_timestamps; tests/test_onchain_capital_flow_acquisition.py::test_capital_flow_evidence_hostile_cases; tests/test_engineering_context_authority.py::test_onchain_range_and_provenance_families_reach_spm_context",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-142",
+      "class": "signed-evidence-pair-mutated-by-repeated-acquisition",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: repeated sync with an advancing clock re-signed an unchanged transfer under the same signature ID after save_raw had already overwritten the raw observation.",
+      "classification": "systemic",
+      "guard_boundary": "onchain acquisition write boundary before any raw or signature persistence",
+      "guard": "Resolve and verify the complete signature set before writing raw observations; preserve acquisition_timestamp, receipt_verified_at, raw payload, and signature for an unchanged signed observation, and persist both stores through one repository operation that checks every signature conflict before any write.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_repeated_sync_preserves_immutable_signed_pair_with_advancing_clock; tests/test_onchain_capital_flow_acquisition.py::test_repository_conflicting_signature_never_overwrites_raw_observation",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-143",
+      "class": "requested-finalized-height-leaked-across-chain-surfaces",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: engine.sync mutated its requested end_block to the first surface's finalized height and reused that value for later surfaces.",
+      "classification": "systemic",
+      "guard_boundary": "per-surface onchain block selection and snapshot binding",
+      "guard": "Never mutate the caller's requested end_block. Select each surface's finalized height into a local value and bind that exact value to its window, observations, snapshot, and checkpoint.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_sync_keeps_each_chain_on_its_own_finalized_height",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-144",
+      "class": "discovery-enrichment-cursor-not-persisted",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: DexScreener backfill restarted from the same sorted contract identifiers, so bounded runs and empty-result cohorts never advanced.",
+      "classification": "systemic",
+      "guard_boundary": "discovery enrichment checkpoint boundary across process restarts",
+      "guard": "Persist a mode-specific identifier cursor, rotate through sorted contract identifiers with wrap-around, preserve case-sensitive identifier values verbatim, advance only after processed assets have been persisted, and dispatch regrouped chain batches in the rotated input order so a truncated allowance advances toward unprocessed chains.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_cursor_rotates_past_empty_results_and_survives_restarts; tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_preserves_rotated_chain_order_under_one_request_budget; tests/test_global_discovery_candidate_registry.py::test_dexscreener_processed_assets_preserve_case_sensitive_identifiers; tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_cursor_is_not_advanced_when_candidate_persistence_fails",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-145",
+      "class": "discovery-helper-requests-bypass-shared-scan-budget",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: sync_provider constructed a ScanBudget but DexScreener token-pairs and CoinGecko/GeckoTerminal corroboration helpers issued unbounded requests.",
+      "classification": "systemic",
+      "guard_boundary": "discovery provider request meter shared by discovery and all helper lookups",
+      "guard": "Pass the constructed ScanBudget through discover and every helper, meter all DexScreener, CoinGecko, and GeckoTerminal requests, and preserve accumulated rows when the shared budget is exhausted.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_dexscreener_sync_provider_shares_one_scan_budget_across_helpers",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-146",
+      "class": "coverage-denominator-from-current-scan-page",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: global_coverage used the network IDs on the current GeckoTerminal scan page as its catalogue denominator.",
+      "classification": "systemic",
+      "guard_boundary": "global coverage denominator derived from persisted network catalogue",
+      "guard": "Count catalogued_networks from persisted network_observations, count scanned_networks from persisted pool observations, and compute coverage as their intersection divided by the persisted catalogue size.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_global_network_coverage_uses_persisted_catalogue_not_current_page",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-147",
+      "class": "evidence-conversion-error-escapes-per-row-rejection",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: verified_capital_flow_rows called as_observation before the guarded verification block, so a malformed chain_id raised instead of rejecting that row.",
+      "classification": "systemic",
+      "guard_boundary": "per-row evidence admission before surface resolution and signature verification",
+      "guard": "Include observation conversion and preserved-row comparison inside per-row guards, reject malformed rows individually without allowing an invalid duplicate to evict a valid accepted observation with the same evidence ID, and never abort repeated acquisition on corrupt stored evidence.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_verified_rows_reject_malformed_context_rows_individually; tests/test_onchain_capital_flow_acquisition.py::test_corrupt_stored_amount_is_rejected_without_aborting_signed_row_preservation",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-148",
+      "class": "post-cutoff-provenance-admitted-by-replay",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: replay accepted acquisition and receipt-verification timestamps up to FUTURE_TOLERANCE after as_of, allowing knowledge acquired after the cutoff to influence a historical verdict.",
+      "classification": "systemic",
+      "guard_boundary": "replay cutoff for acquisition and receipt-verification provenance",
+      "guard": "Require acquisition_timestamp <= as_of and receipt_verified_at <= as_of in every validated evidence family including swaps; keep chain-timestamp skew tolerance only for block_timestamp and its derived chain-history consistency checks.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_capital_flow_evidence_hostile_cases; tests/test_onchain_swap_wallet_evidence.py::test_swap_evidence_rejects_post_cutoff_provenance",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-149",
+      "class": "acquired-amount-rounded-by-precision-context",
+      "source": "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: _amount divided raw integers under the default Decimal precision, so acquisition could normalize a value that exact validation later rejected.",
+      "classification": "systemic",
+      "guard_boundary": "onchain amount normalization before signed evidence construction",
+      "guard": "Normalize with a local Decimal precision derived from the raw digit count plus token decimals, using exact scaling, so high-precision zero-decimal and other large values survive without rounding.",
+      "test": "tests/test_onchain_capital_flow_acquisition.py::test_engine_acquires_high_precision_zero_decimal_amount_without_rounding",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-150",
+      "class": "automation-starts-with-partial-discovery-job-set",
+      "source": "Issue #587 live scheduler evidence at deployed head 87f87d6a3ab845c9428984a4c893cb5667883d09: discovery-identity-resolution was absent from the deployed automation and discovery configs, producing zero identity_results while 19,500 rows remained not_resolved and 16,076 candidates had no primary_chain.",
+      "classification": "systemic",
+      "guard_boundary": "automation start before scheduler loop entry",
+      "guard": "Require the full discovery job set before automation starts; if discovery jobs are present but any required job is missing or disabled, fail closed before scheduler.run_loop. Keep no-op behavior only when discovery automation is entirely absent.",
+      "test": "tests/test_discovery_identity_handoff.py::test_V_partial_discovery_automation_fails_closed",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-151",
+      "class": "historical-usd-value-not-causal-exact-or-evidence-bound",
+      "source": "Issue #587 market-validation checkpoint at head a1a81a106396992e05b275ae77512231ad9e696a: point-in-time USD value was unavailable although the repository-declared free CoinGecko history source supplied a prior at-or-before price with exact source provenance.",
+      "classification": "systemic",
+      "guard_boundary": "historical USD valuation and market-validation economic context",
+      "guard": "Require an exact chain/contract provider mapping, a causal at-or-before price point, a freshness ceiling, exact Decimal valuation, and persisted source provenance; expose the result only as economic context and never as canonical valuation, wallet attribution, or wallet performance.",
+      "test": "tests/test_historical_acquisition.py::test_historical_usd_valuation_is_exact_and_evidence_bound; tests/test_historical_acquisition.py::test_historical_usd_valuation_fails_closed_for_wrong_chain_stale_and_future_points; tests/test_market_validation_input_authority.py::test_capital_flow_usd_metrics_preserve_evidence_and_never_infer_wallet_performance",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-152",
+      "class": "swap-detection-without-verified-pool-and-receipt-binding",
+      "source": "Issue #587 owner criterion comment 7172851514: swap detection must bind exact chain, verified pool identity, token contracts and decimals, finalized successful receipt, exact transaction and log, provenance, wallet attribution, and a bounded RPC budget; unsupported, failed, wrong-pool, or multi-hop events must fail closed.",
+      "classification": "systemic",
+      "guard_boundary": "onchain DEX event acquisition, decoding, signing, and replay verification",
+      "guard": "Decode only explicitly supported V2/V3 swap schemas from an active verified pool configuration, verify pool token contracts and decimals onchain, bind the signed log to the transaction receipt and independent corroboration, separate router/pool from trader, mark ambiguous multi-hop swaps unavailable, and enforce a per-chain RPC budget.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_v2_and_v3_logs_decode_exact_direction_and_amounts; tests/test_onchain_swap_wallet_evidence.py::test_unsupported_failed_and_unknown_pool_logs_are_rejected; tests/test_onchain_swap_wallet_evidence.py::test_router_and_pool_addresses_are_not_attributed_wallets; tests/test_onchain_swap_wallet_evidence.py::test_multi_hop_same_asset_direction_is_ambiguous_not_double_counted; tests/test_onchain_swap_wallet_evidence.py::test_swap_evidence_replay_and_tamper_rejection; tests/test_onchain_swap_wallet_evidence.py::test_adapter_enforces_bounded_swap_rpc_budget",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-153",
+      "class": "wallet-performance-fabricated-from-unverified-swaps",
+      "source": "Issue #587 owner criterion comment 7172851514: wallet performance must consume only verified attributed swaps, keep chain and asset identity exact, use deterministic documented FIFO only with sufficient inventory, keep fees separate, and expose only evidence-bound signals through existing consumers.",
+      "classification": "systemic",
+      "guard_boundary": "wallet performance aggregation and whale/market-validation context exposure",
+      "guard": "Aggregate only verified per-chain attributed swaps, reject ambiguous attribution and partial inventory, compute exact Decimal FIFO realized P&L from causally valued buys and sells, leave net P&L unavailable without fees, and expose gross realized context without ranking insufficient evidence.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_partial_inventory_fees_and_cross_chain_are_unavailable; tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_fifo_profitable_and_losing_cases; tests/test_onchain_swap_wallet_evidence.py::test_market_validation_swap_wallet_context_uses_identity_and_usd_integration; tests/test_market_validation_input_authority.py::test_capital_flow_usd_metrics_preserve_evidence_and_never_infer_wallet_performance",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-154",
+      "class": "per-log-canonical-block-evidence",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQb comment PRRC_kwDOTRDHr8678AAAABF-oRt: each observed swap log must bind its own canonical block hash and timestamp, not the final block in the scanned range.",
+      "classification": "systemic",
+      "guard_boundary": "onchain swap log acquisition and canonical evidence binding",
+      "guard": "Fetch and validate the exact block for every accepted log, bind the log's block hash and block number to that block, and use that block's timestamp for receipt validation, evidence signing, freshness, and replay.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_swap_observations_use_each_logs_own_block_hash_and_timestamp",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-155",
+      "class": "rpc-attempt-budget-accounting",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQe comment PRRC_kwDOTRDHr8678AAAABF-oRu: every RPC attempt must be charged to the swap budget before dispatch, including failures and chainId/log calls.",
+      "classification": "systemic",
+      "guard_boundary": "bounded EVM RPC acquisition and adapter retry endpoints",
+      "guard": "Charge one attempt to the active request meter before each RPC endpoint dispatch, count failed attempts and internal chainId/log calls, and charge corroboration attempts so recorded counts match real network work.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_swap_rpc_meter_charges_each_attempt_before_dispatch_including_failures; tests/test_onchain_swap_wallet_evidence.py::test_swap_observations_record_actual_rpc_attempt_count",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-156",
+      "class": "wallet-fifo-cross-asset-contamination",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQf comment PRRC_kwDOTRDHr8678AAAABF-oRv: FIFO inventory must be isolated by exact target asset contract because a USDC buy cannot offset a WETH sell.",
+      "classification": "systemic",
+      "guard_boundary": "wallet performance FIFO aggregation and market-validation context",
+      "guard": "Group wallet performance by chain, exact attributed wallet, and exact target asset contract; keep each asset group independently unavailable when its own inventory is incomplete; aggregate only fully available groups.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_isolates_fifo_by_exact_target_asset",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-157",
+      "class": "volatile-discovery-metadata-identity-conflict",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQi comment PRRC_kwDOTRDHr8678AAAABF-oR4: refreshing volatile market observations must not create provider disagreements that block identity handoff.",
+      "classification": "systemic",
+      "guard_boundary": "discovery metadata merge and candidate identity resolution",
+      "guard": "Refresh volatile timestamps and market measurements by overwriting prior values without recording provider disagreements, while preserving conflicts for genuine identity evidence.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_volatile_discovery_metadata_refreshes_without_identity_conflict",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-158",
+      "class": "multi-hop-and-unproven-wallet-attribution",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQq comment PRRC_kwDOTRDHr8678AAAABF-oR8: full receipt swap-topic counts and recipient ownership must gate wallet attribution; final block hash and sender are not wallet proof.",
+      "classification": "systemic",
+      "guard_boundary": "swap receipt validation and attributed wallet evidence",
+      "guard": "Inspect the complete receipt for all V2/V3 swap-topic logs, mark any receipt with more than one swap log ambiguous, and attribute a wallet only when the decoded recipient equals the receipt sender and is not a router, pool, or contract.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_full_receipt_multihop_leg_is_not_wallet_attributed",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-159",
+      "class": "unnormalized-swap-freshness-scores",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQv comment PRRC_kwDOTRDHr8678AAAABF-oSD: freshness must decrease monotonically from 1.0 for current evidence to 0.0 at the horizon and must be boundary tested.",
+      "classification": "systemic",
+      "guard_boundary": "market-validation evidence freshness scoring and SPM context",
+      "guard": "Normalize swap freshness from elapsed time against an explicit horizon, clamp future evidence to 1.0 and horizon-or-older evidence to 0.0, and test current, midpoint, horizon, stale, and future boundaries.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_freshness_is_decreasing_and_normalized; tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_context_uses_normalized_freshness",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-161",
+      "class": "signed-swap-replay-metadata-preservation",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQD comment 4704219796 (KF-6c65bf6231ff): overlapping swap replay must preserve original signed acquisition metadata when only the request count changes.",
+      "classification": "systemic",
+      "guard_boundary": "onchain replay reconciliation and signed observation uniqueness",
+      "guard": "Treat every row-derived signed field as identity evidence; preserve acquisition timestamp, verification timestamp, and request count only when all other signed values match, and fail closed otherwise.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_overlapping_swap_replay_preserves_original_signed_metadata",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-162",
+      "class": "coingecko-completed-page-cursor",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQG comment 4704219802 (KF-f6980616124a): a resumed batch cursor must represent the last fully completed page, not the requested page range.",
+      "classification": "systemic",
+      "guard_boundary": "bounded CoinGecko batch acquisition and page checkpoint persistence",
+      "guard": "Advance the batch cursor only after a page fetch completes, preserve the previous cursor on exhaustion before the first page, and return the last completed page.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_coingecko_batch_resume_advances_only_through_completed_pages; tests/test_global_discovery_candidate_registry.py::test_coingecko_batch_budget_exhaustion_before_first_page_keeps_cursor",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-163",
+      "class": "discovery-retry-budget-accounting",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQL comment 4704219814 (KF-8aaa66db4647): every batch enrichment HTTP retry attempt must consume the supplied scan budget.",
+      "classification": "systemic",
+      "guard_boundary": "DexScreener enrichment HTTP retry dispatcher and capacity ledger",
+      "guard": "Pass the active batch meter into the shared HTTP dispatcher and charge every retry attempt exactly once there, without pre-consumption outside the retry loop.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_dexscreener_retry_attempts_consume_batch_budget",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-164",
+      "class": "canonical-chain-alias-identity-resume",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQQ comment 4704219819 (KF-e9211e2d4ae): equivalent chain aliases must resolve to one canonical identity and durable enrichment cursor.",
+      "classification": "systemic",
+      "guard_boundary": "provider chain normalization, candidate identity aliasing, and DexScreener cursor rotation",
+      "guard": "Use provider-native chain aliases only for transport and evidence, canonicalize registry identity and cursors, emit deduplicated alias identifiers, and aggregate candidate IDs per canonical contract.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_dexscreener_profile_canonicalizes_chain_aliases; tests/test_global_discovery_candidate_registry.py::test_dex_batch_enrichment_matches_legacy_chain_alias_candidate; tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_legacy_alias_cursor_resumes_at_canonical_identifier",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-165",
+      "class": "consideration-side-causal-usd",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQZ comment 4704219828 (KF-f0962d81e187): wallet FIFO must value the signed input or output consideration causally rather than substituting target notional.",
+      "classification": "systemic",
+      "guard_boundary": "onchain signed consideration valuation and wallet performance FIFO valuation",
+      "guard": "Keep target USD metrics separate from wallet performance, resolve buy input and sell output consideration contracts from signed evidence to configured tracked assets in the onchain boundary, and fail closed when consideration valuation is unavailable.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_market_validation_swap_wallet_context_uses_identity_and_usd_integration; tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_context_does_not_substitute_target_notional_for_consideration",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-166",
+      "class": "cross-provider-discovery-mode-provenance",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868ZcTb at 01d78d3ee8ec9c4c85527c56a5119bea418ce35e; reproduced RED then verified GREEN locally. Historical false conflicts reproduced RED in Gateway job job_01M8CCZH5P008KPYJ2D7VRHK4H; extended regression verifies historical normalization, fingerprint stability and mixed genuine conflicts; 99 focused tests passed locally on 2026-11-26. Published exact-head verification pending.",
+      "classification": "systemic",
+      "guard_boundary": "src/hunter/discovery/repository.py::_merge_metadata",
+      "guard": "Treat discovery mode as volatile observation provenance, not identity evidence. Normalize historical volatile provider disagreements at merge, identity conflict evaluation and fingerprint boundaries; preserve genuine disagreements.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_dexscreener_batch_provenance_is_not_identity_evidence",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-167",
+      "class": "discovery-installer-startup-parity",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868ZcTy at 01d78d3ee8ec9c4c85527c56a5119bea418ce35e; reproduced RED then verified GREEN locally.",
+      "classification": "systemic",
+      "guard_boundary": "src/hunter/discovery/automation.py::require_discovery_automation",
+      "guard": "Share discovery job definitions across installers, preserve scalar metadata and read-only operation routing, and verify installer output at startup.",
+      "test": "tests/test_data_ops.py::test_data_ops_installer_satisfies_discovery_startup_guard",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-168",
+      "class": "provider-wide-rate-allowance-split-across-endpoints",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868g_MD comment 4712110994 at exact head 386b0319f597cf8068c569ec24859705231258eb: the shared ledger counted each GeckoTerminal endpoint family independently, accepting ten networks, ten network_pools and ten token reservations at one timestamp against a documented 10 calls/min public API ceiling; reproduced RED then verified GREEN locally.",
+      "classification": "systemic",
+      "guard_boundary": "capacity ledger reservation partition",
+      "guard": "Reserve against a declared provider-wide quota group so every endpoint governed by one ceiling draws from one rolling bucket across scans, helpers and processes, while endpoint telemetry and independent limits remain distinct; migrate existing reservations into the shared partition.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_geckoterminal_public_api_rate_limit_is_shared_across_network_pool_and_token_requests",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-169",
+      "class": "market-pair-selection-identity-conflict",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868jZnS comment PRRC_kwDOTRDHr88AAAABGO06fQ at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: a liquidity-driven pair selection change produced a permanent provider disagreement and blocked identity handoff.",
+      "classification": "systemic",
+      "guard_boundary": "discovery metadata classification, merge and identity fingerprint boundaries",
+      "guard": "Classify selected market pair address, side and evidence provider as refreshable market provenance, overwrite them on refresh, clear stale pair provenance only when a fresh provider observation is present, preserve last-known provenance on unavailable or unrelated observations, normalize historical pair-selection disagreements, exclude them from identity fingerprints, and preserve genuine identity conflicts.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_market_pair_selection_refreshes_without_identity_conflict; tests/test_global_discovery_candidate_registry.py::test_market_evidence_provider_refreshes_without_identity_conflict; tests/test_global_discovery_candidate_registry.py::test_market_provenance_survives_unavailable_and_unrelated_observations",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-170",
+      "class": "enrichment-progress-discarded-on-sibling-batch-failure",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868jZnX comment PRRC_kwDOTRDHr88AAAABGO06hw at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: a successful first batch was discarded when a later batch raised provider unavailability or a duplicate capacity request.",
+      "classification": "systemic",
+      "guard_boundary": "DexScreener batch loop and enrich_dex_contracts persistence boundary",
+      "guard": "Validate provider response shape before completing a capacity reservation, convert malformed JSON or an unexpected HTTP-200 payload into a provider failure, return completed rows, processed assets and an explicit error marker for budget exhaustion, provider unavailability and duplicate reservations; persist those results before advancing the cursor, and allow failed dedup reservations to retry immediately so the failed batch remains retryable.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_persists_completed_batches_before_sibling_failure; tests/test_global_discovery_candidate_registry.py::test_dexscreener_batch_truncation_preserves_completed_rows; tests/test_global_discovery_candidate_registry.py::test_dexscreener_malformed_json_preserves_completed_rows; tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_error_payload_preserves_completed_rows_and_is_retryable; tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_retries_failed_dedup_batch_in_incremental_mode; tests/test_global_discovery_candidate_registry.py::test_failed_dedup_reservation_does_not_block_immediate_retry",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-171",
+      "class": "unmetered-transfer-acquisition-budget",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868jZnb comment PRRC_kwDOTRDHr88AAAABGO06jQ at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: transfer corroboration issued hundreds of RPC attempts because the meter was installed only for swap acquisition.",
+      "classification": "systemic",
+      "guard_boundary": "live on-chain acquisition boundary before provider checks, transfers and swaps",
+      "guard": "Install one config-declared total RPC allowance around all acquisition, make nested swap budgets inherit the same allowance, charge each retry attempt before dispatch, preserve explicit partial coverage on exhaustion, record each swap's own RPC count, and skip checkpoint advancement while unprocessed work remains.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_nested_swap_budget_cannot_reset_total_acquisition_budget; tests/test_onchain_swap_wallet_evidence.py::test_sync_total_acquisition_budget_bounds_transfers_and_preserves_partial_coverage; tests/test_onchain_swap_wallet_evidence.py::test_retry_attempts_are_charged_to_the_total_acquisition_budget; tests/test_onchain_swap_wallet_evidence.py::test_each_swap_records_its_own_rpc_attempt_count",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -3011,6 +3361,740 @@
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #588 / PR #757; stuck collector run 44354491426 despite exact-head Codex completion; Hosted Pre-PR run 44362780632 and Trusted Preflight run 44362790081 exposed GITHUB_ACTIONS-only context leakage; fixed on signed PR #757 lineage after repository binding was added."
+      ]
+    },
+    {
+      "id": "DFF-059",
+      "title": "unbounded-rpc-execution-without-spm-budget",
+      "invariant": "Any live on-chain acquisition or E2E run, including one continued from an earlier session, must carry a machine-checkable execution budget before any RPC request is issued: REQUEST_LIMIT total RPC requests counted at the transport, TIMEOUT_SECONDS per request, retry_limit=0 automatic retries, DEADLINE_SECONDS overall wall clock, and max_block_range as an inclusive block count per eth_getLogs query. An owner abort, CI timeout, or best-effort harness is never evidence of a bounded run; a missing or weakened bound fails closed as BLOCKED before network work, and a bound breach terminates the run without claiming success. This invariant must be present in the canonical defect registry so EngineeringContextAuthority/SPM compiles it into the engineering.implement context for any change touching onchain acquisition, configuration, or its Whale/Market Validation consumers.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/",
+          "configs/onchain.yaml",
+          "src/hunter/market_validation/acquisition_sources.py",
+          "src/hunter/intelligence/engines/whale/engine.py",
+          "tests/test_onchain_capital_flow_acquisition.py",
+          "tests/test_whale_acquisition.py"
+        ],
+        "rationale": "These surfaces own RPC dispatch, acquisition windows, signing/corroboration, and the downstream Whale/Market Validation consumers. Removing or relaxing any budget there can turn an unbounded exploratory run into apparent validation evidence."
+      },
+      "prevention": {
+        "mechanism": "SPM/engineering.implement prevention context must include DFF-059 for any onchain-surface scope; execution must be wrapped by a counting transport that refuses the next request at REQUEST_LIMIT, urlopen/read timeout of TIMEOUT_SECONDS, retry_limit=0 at the adapter/config boundary, a monotonic or POSIX DEADLINE_SECONDS alarm, and adapter.logs rejection of any window wider than max_block_range. adapter.logs must reject any window whose to_block - from_block + 1 exceeds max_block_range, and engine windows must use end - window + 1. Live E2E evidence must report the measured request count, timeout, retries, deadline, and inclusive block count; absent or out-of-bounds values are BLOCKED, not E2E_SUCCESS or a passive INSUFFICIENT_EVIDENCE verdict.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/evidence_intelligence/engineering_context_authority.py::EngineeringContextAuthority::compile"
+      },
+      "regression_evidence": [
+        "tests/test_engineering_context_authority.py::test_onchain_execution_budget_family_reaches_spm_context",
+        "tests/test_onchain_capital_flow_acquisition.py::test_evm_adapter_finality_retry_logs_and_timeout_failure",
+        "tests/test_onchain_capital_flow_acquisition.py::test_tracked_transfer_acquisition_retains_real_log_and_deduplicates"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788, 2026-11-25: an initial sync lido public-RPC validation ran without a machine-checkable request cap, timeout ceiling, retry ceiling, or wall-clock deadline and was aborted by the owner. The corrected bounded Compound/USDC known-transaction run used 17 of 40 RPC requests, 8-second timeout, 0 retries, a 180-second deadline, nominally 100-block windows, free public sources, and isolated repository/signing material, and produced signed corroborated evidence for tx 0x45c0ca210996e6ec93766efb228971eaa01e74285329524bffdea63a922eb5eb in block 26491366. Independent review later found those windows spanned 101 inclusive blocks; PRH-140/DFF-060 correct the bound to 100 inclusive blocks and the Stage 4 harness must rerun with the corrected window and verified network finality."
+      ]
+    },
+    {
+      "id": "DFF-060",
+      "title": "inclusive-range-boundary-off-by-one",
+      "invariant": "A configured maximum block range is an inclusive block count: every constructed window and adapter RPC request must satisfy end - start + 1 <= max_block_range, including one-block, exact-limit, and limit-plus-one boundaries.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/adapters.py",
+          "configs/onchain.yaml",
+          "tests/test_onchain_capital_flow_acquisition.py"
+        ],
+        "rationale": "These paths construct the acquisition window, enforce the RPC range cap, configure its value, and pin the one-block/exact-limit/limit-plus-one boundary. Treating max_block_range as a subtraction treats a configured limit of 100 as 101 inclusive blocks and lets an oversized eth_getLogs request reach the provider."
+      },
+      "prevention": {
+        "mechanism": "SPM/engineering.implement prevention context must include DFF-060 for onchain-surface scope. CapitalFlowEngine must construct windows as end - window + 1 and EVMJsonRpcAdapter.logs must reject requests whose to_block - from_block + 1 exceeds max_block_range before any RPC call. Boundary tests pin 1, 100 and 101 inclusive blocks.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/adapters.py::EVMJsonRpcAdapter::logs"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_capital_flow_acquisition.py::test_evm_adapter_enforces_inclusive_block_range",
+        "tests/test_onchain_capital_flow_acquisition.py::test_engine_constructs_inclusive_max_block_window",
+        "tests/test_engineering_context_authority.py::test_onchain_range_and_provenance_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 independent review at head 4d9e0a1fb351bd28655db3d97c2ff76dca833305: engine start_block = end_block - max_range and adapter range check to_block - from_block > max_range both permitted 101 blocks under max_block_range=100."
+      ]
+    },
+    {
+      "id": "DFF-061",
+      "title": "historical-timestamp-reused-as-provenance",
+      "invariant": "block_timestamp is chain history; acquisition_timestamp and receipt_verified_at must be independently sampled from a trusted runtime clock after their corresponding acquisition and receipt-verification events, remain distinct from the historical block timestamp where runtime time differs, and stay bound to the signed evidence payload.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/evidence.py",
+          "src/hunter/execution/clock.py",
+          "tests/test_onchain_capital_flow_acquisition.py"
+        ],
+        "rationale": "These paths create the evidence rows, sign and verify their provenance fields, supply the injectable clock, and pin distinct/tampered timestamp behavior. Assigning the historical block timestamp to acquisition and receipt verification fields makes signed provenance indistinguishable from chain-history metadata and defeats deterministic temporal validation."
+      },
+      "prevention": {
+        "mechanism": "CapitalFlowEngine accepts an injectable Clock, samples acquisition_timestamp after native/log acquisition and receipt_verified_at only after successful independent receipt corroboration, and signs those sampled values. Canonical verification rejects tampering with either field and tests use FixedClock/SequenceClock for deterministic contracts.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/engine.py::CapitalFlowEngine::sync"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_capital_flow_acquisition.py::test_engine_records_distinct_acquisition_and_verification_timestamps",
+        "tests/test_onchain_capital_flow_acquisition.py::test_capital_flow_evidence_hostile_cases",
+        "tests/test_engineering_context_authority.py::test_onchain_range_and_provenance_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 independent review at head 4d9e0a1fb351bd28655db3d97c2ff76dca833305: CapitalFlowEngine._observations set both acquisition_timestamp and receipt_verified_at to the historical block timestamp."
+      ]
+    },
+    {
+      "id": "DFF-062",
+      "title": "signed-observation-pair-is-immutable-across-reacquisition",
+      "invariant": "An unchanged signed on-chain observation must keep its original raw payload, acquisition_timestamp, receipt_verified_at, and signature across repeated acquisition, and a conflicting signature for an existing signature ID must fail before any raw observation is overwritten.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/repository.py",
+          "src/hunter/onchain/evidence.py",
+          "tests/test_onchain_capital_flow_acquisition.py"
+        ],
+        "rationale": "These paths acquire raw observations, persist raw rows and signatures, and verify canonical evidence. Advancing runtime clocks must not re-sign immutable evidence, and a write-before-verify order can silently replace the raw payload behind an existing signature ID."
+      },
+      "prevention": {
+        "mechanism": "Resolve and verify all signatures before raw persistence, detect an unchanged observation by stable signed fields, preserve its original timestamps, and persist the raw/signature pair through one repository operation that fails closed on conflict.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/repository.py::OnChainRepository::save_acquired_evidence"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_capital_flow_acquisition.py::test_repeated_sync_preserves_immutable_signed_pair_with_advancing_clock",
+        "tests/test_onchain_capital_flow_acquisition.py::test_repository_conflicting_signature_never_overwrites_raw_observation",
+        "tests/test_engineering_context_authority.py::test_issue_587_review_remediation_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: repeated sync re-signed an unchanged transfer with advancing acquisition and verification timestamps after save_raw had already overwritten the raw row."
+      ]
+    },
+    {
+      "id": "DFF-063",
+      "title": "finalized-block-selection-is-per-surface",
+      "invariant": "A caller's requested end block is immutable, and each active on-chain surface binds its own finalized height to its log window, observation, snapshot, and checkpoint.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/adapters.py",
+          "tests/test_onchain_capital_flow_acquisition.py"
+        ],
+        "rationale": "These paths select finalized heights and construct per-surface acquisition windows. Mutating the shared requested height leaks one chain's finality to later chains and produces snapshots that do not describe the blocks they claim."
+      },
+      "prevention": {
+        "mechanism": "Select each surface's finalized height into a local variable, validate it against that surface's adapter, and use it consistently for start/end blocks, snapshots, and checkpoints without assigning back to the caller's requested end_block.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/engine.py::CapitalFlowEngine::sync"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_capital_flow_acquisition.py::test_sync_keeps_each_chain_on_its_own_finalized_height",
+        "tests/test_engineering_context_authority.py::test_issue_587_review_remediation_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: engine.sync mutated end_block to the first chain's finalized height and reused it for a second chain."
+      ]
+    },
+    {
+      "id": "DFF-064",
+      "title": "bounded-discovery-must-advance-and-share-its-request-budget",
+      "invariant": "Bounded discovery enrichment must persist a mode-specific cursor across restarts, preserve case-sensitive contract identifiers verbatim, rotate through identifiers including empty-result cohorts, advance only after processed assets are persisted, meter every helper request against the same ScanBudget used by primary discovery, and schedule chain batches in the caller's rotated order so a constrained allowance still advances across every represented chain. Budget exhaustion, provider unavailable errors, malformed JSON, unexpected batch payload shapes and duplicate capacity reservations on a later batch must preserve completed rows and processed assets in a partial result so they are persisted before the failed batch is retried; a failed dedup reservation must not block that immediate retry.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/discovery/engine.py",
+          "src/hunter/discovery/providers.py",
+          "src/hunter/discovery/repository.py",
+          "tests/test_global_discovery_candidate_registry.py"
+        ],
+        "rationale": "These paths schedule enrichment, issue DexScreener/CoinGecko/GeckoTerminal requests, and persist discovery checkpoints. Restarting from the same identifiers defeats bounded backfill, and helper requests outside the budget defeat the request cap."
+      },
+      "prevention": {
+        "mechanism": "Persist the last processed identifier with wrap-around, preserve non-EVM identifier case, advance only after processed assets are persisted, pass the constructed ScanBudget through every helper, iterate chain groups in the rotated input order instead of sorting them so budget truncation advances the cursor across chains, validate response shape before completing a capacity reservation, convert malformed batch JSON and unexpected HTTP-200 payload shapes into provider failures, catch budget exhaustion, provider unavailability and duplicate capacity reservations without discarding accumulated rows, let failed dedup reservations retry immediately, and regress cursor rotation, case fidelity, persistence ordering, shared request count, sibling-failure durability, payload-shape durability and retryability.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/engine.py::CandidateDiscoveryEngine::enrich_dex_contracts"
+      },
+      "regression_evidence": [
+        "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_cursor_rotates_past_empty_results_and_survives_restarts",
+        "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_preserves_rotated_chain_order_under_one_request_budget",
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_processed_assets_preserve_case_sensitive_identifiers",
+        "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_cursor_is_not_advanced_when_candidate_persistence_fails",
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_batch_truncation_preserves_completed_rows",
+        "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_persists_completed_batches_before_sibling_failure",
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_malformed_json_preserves_completed_rows",
+        "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_error_payload_preserves_completed_rows_and_is_retryable",
+        "tests/test_global_discovery_candidate_registry.py::test_failed_dedup_reservation_does_not_block_immediate_retry",
+        "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_retries_failed_dedup_batch_in_incremental_mode",
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_sync_provider_shares_one_scan_budget_across_helpers",
+        "tests/test_engineering_context_authority.py::test_issue_587_review_remediation_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: enrichment restarted from the same first identifiers and token-pairs/corroboration helpers bypassed the constructed scan budget.",
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868g_Lv comment 4712110962 at exact head 386b0319f597cf8068c569ec24859705231258eb: sorting regrouped chain batches undid cursor rotation, starving cross-chain progress under a one-request allowance.",
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868jZnX comment PRRC_kwDOTRDHr88AAAABGO06hw at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: only scan-budget exhaustion was caught inside the batch loop, so provider unavailability and duplicate capacity errors discarded completed rows and cursor progress.",
+        "Focused adversarial review at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: malformed JSON on a later batch escaped the loop, and a failed dedup reservation blocked immediate retry inside the 300-second window; both reproduced RED before the family-level guard.",
+        "Second focused adversarial review at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: an HTTP-200 JSON error object was accepted as an empty successful batch, advanced the cursor and blocked retry inside the dedupe window; reproduced RED before the payload-shape guard."
+      ]
+    },
+    {
+      "id": "DFF-065",
+      "title": "coverage-denominator-must-come-from-persisted-catalogue",
+      "invariant": "Global network coverage must use the persisted network catalogue as its denominator and persisted pool observations as scanned coverage, never the network IDs present on one current scan page.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/discovery/engine.py",
+          "src/hunter/discovery/repository.py",
+          "tests/test_global_discovery_candidate_registry.py"
+        ],
+        "rationale": "These paths persist catalogues/pools and compute reported coverage. A current-page denominator can make one scanned network appear to be the whole catalogue and inflate coverage."
+      },
+      "prevention": {
+        "mechanism": "Read catalogued_networks from repository.network_observations, read scanned networks from repository.pool_observations, compute their intersection divided by the catalogue size, and keep coverage unmeasured only when no catalogue is persisted.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/engine.py::CandidateDiscoveryEngine::global_coverage"
+      },
+      "regression_evidence": [
+        "tests/test_global_discovery_candidate_registry.py::test_global_network_coverage_uses_persisted_catalogue_not_current_page",
+        "tests/test_engineering_context_authority.py::test_issue_587_review_remediation_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: global_coverage used scan_state network_ids from the current page instead of the persisted network catalogue."
+      ]
+    },
+    {
+      "id": "DFF-066",
+      "title": "replay-evidence-is-defensive-and-strictly-pre-cutoff",
+      "invariant": "Historical replay must convert each evidence row defensively, reject malformed rows individually without evicting valid rows, and admit a signed row only when its acquisition and receipt-verification timestamps are at or before the replay cutoff.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/evidence.py",
+          "tests/test_onchain_capital_flow_acquisition.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "These paths convert, verify, compare, and replay signed transfer and swap evidence. Unhandled conversion errors can abort a whole replay or repeated acquisition, and tolerance applied to post-cutoff provenance admits knowledge that did not exist at the decision time."
+      },
+      "prevention": {
+        "mechanism": "Include conversion in the per-row verification guard and preserved-row comparison, reject only the malformed row, reserve conflict-based rejection for verified duplicate evidence IDs, require acquisition_timestamp <= as_of and receipt_verified_at <= as_of in both the transfer and swap validators, and limit chain-skew tolerance to block_timestamp.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/evidence.py::verified_capital_flow_rows"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_capital_flow_acquisition.py::test_verified_rows_reject_malformed_context_rows_individually",
+        "tests/test_onchain_capital_flow_acquisition.py::test_corrupt_stored_amount_is_rejected_without_aborting_signed_row_preservation",
+        "tests/test_onchain_capital_flow_acquisition.py::test_capital_flow_evidence_hostile_cases",
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_evidence_rejects_post_cutoff_provenance",
+        "tests/test_engineering_context_authority.py::test_issue_587_review_remediation_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: as_observation ran outside the row guard and post-cutoff acquisition/receipt timestamps were admitted by FUTURE_TOLERANCE.",
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868g_L6 comment 4712110979 at exact head 386b0319f597cf8068c569ec24859705231258eb: the swap validator still admitted post-cutoff acquisition and verification timestamps through FUTURE_TOLERANCE."
+      ]
+    },
+    {
+      "id": "DFF-067",
+      "title": "acquired-amount-normalization-is-exact",
+      "invariant": "Signed on-chain amount normalization must preserve the exact raw integer scaled by token decimals even when the digit count exceeds the ambient Decimal context precision.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "tests/test_onchain_capital_flow_acquisition.py"
+        ],
+        "rationale": "These paths turn raw transfer amounts into the signed normalized_amount field. Default Decimal precision can round acquisition while exact validation later rejects the same value, creating internally inconsistent evidence."
+      },
+      "prevention": {
+        "mechanism": "Use a local Decimal context with precision derived from the raw digit count plus decimals plus headroom and exact scaling, then regress high-precision and zero-decimal values through the engine acquisition path.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/engine.py::_amount"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_capital_flow_acquisition.py::test_engine_acquires_high_precision_zero_decimal_amount_without_rounding",
+        "tests/test_engineering_context_authority.py::test_issue_587_review_remediation_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: _amount used Decimal(raw)/(10**decimals) under 28-digit precision and rounded a high-precision zero-decimal amount that exact validation rejected."
+      ]
+    },
+    {
+      "id": "DFF-068",
+      "title": "automation-must-not-start-with-partial-discovery-job-set",
+      "invariant": "Automated discovery start must fail closed before the scheduler loop when any configured discovery job is missing or disabled, and may be a no-op only when discovery automation is entirely absent.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/cli.py",
+          "src/hunter/discovery/automation.py",
+          "src/hunter/discovery/__init__.py",
+          "tests/test_discovery_identity_handoff.py",
+          "src/hunter/data_ops.py",
+          "tests/test_data_ops.py",
+          "configs/automation.yaml"
+        ],
+        "rationale": "These paths assemble and start automated jobs. A partial job set can run indefinitely while silently skipping identity resolution and leaving unresolved candidates without primary chain identity."
+      },
+      "prevention": {
+        "mechanism": "Validate the required discovery job set before scheduler.run_loop, return no-op only for a completely empty discovery job set, and regress missing/disabled identity resolution at the CLI automation boundary. Share discovery job definitions across installers, preserve scalar metadata and read-only operation routing, and verify installer output at startup.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/automation.py::require_discovery_automation"
+      },
+      "regression_evidence": [
+        "tests/test_discovery_identity_handoff.py::test_V_partial_discovery_automation_fails_closed",
+        "tests/test_engineering_context_authority.py::test_issue_587_identity_and_usd_evidence_families_reach_spm_context",
+        "tests/test_data_ops.py::test_data_ops_installer_satisfies_discovery_startup_guard"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 live scheduler evidence at deployed head 87f87d6a3ab845c9428984a4c893cb5667883d09: the deployed automation and discovery configs omitted discovery-identity-resolution, leaving zero identity_results while unresolved candidates accumulated.",
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868ZcTy at 01d78d3ee8ec9c4c85527c56a5119bea418ce35e; reproduced RED then verified GREEN locally."
+      ]
+    },
+    {
+      "id": "DFF-069",
+      "title": "historical-usd-evidence-must-be-causal-exact-and-non-inferential",
+      "invariant": "Historical USD context must use exact chain/contract provider mapping, at-or-before causal price availability, a freshness ceiling, exact Decimal multiplication, and persisted source provenance, and must never be represented as canonical valuation, wallet attribution, or wallet performance.",
+      "applicability": {
+        "changed_paths": [
+          "configs/onchain.yaml",
+          "src/hunter/historical_acquisition/usd_valuation.py",
+          "src/hunter/historical_acquisition/providers.py",
+          "src/hunter/market_validation/acquisition_sources.py",
+          "src/hunter/onchain/configuration.py",
+          "src/hunter/onchain/models.py",
+          "tests/test_historical_acquisition.py",
+          "tests/test_market_validation_input_authority.py"
+        ],
+        "rationale": "These paths map assets, select historical prices, compute economic values, and expose market-validation context. Future prices, fuzzy identifiers, rounded arithmetic, or wallet inference would fabricate point-in-time economic evidence."
+      },
+      "prevention": {
+        "mechanism": "Match exact chain/contract to one coingecko_id, select only at-or-before availability points, enforce freshness and positive exact amounts, multiply under bounded Decimal precision, record source and retrieval provenance, and expose metrics as non-inferential economic context only.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/historical_acquisition/usd_valuation.py::HistoricalUsdValuator::value"
+      },
+      "regression_evidence": [
+        "tests/test_historical_acquisition.py::test_closest_market_point_never_selects_a_future_point",
+        "tests/test_historical_acquisition.py::test_historical_usd_valuation_is_exact_and_evidence_bound",
+        "tests/test_historical_acquisition.py::test_historical_usd_valuation_fails_closed_for_wrong_chain_stale_and_future_points",
+        "tests/test_market_validation_input_authority.py::test_capital_flow_usd_metrics_preserve_evidence_and_never_infer_wallet_performance",
+        "tests/test_engineering_context_authority.py::test_issue_587_identity_and_usd_evidence_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 market-validation checkpoint at head a1a81a106396992e05b275ae77512231ad9e696a: point-in-time USD value was unavailable and the existing closest-point behavior was mischaracterized as future-selecting; live CoinGecko history supplied an at-or-before point with source provenance."
+      ]
+    },
+    {
+      "id": "DFF-070",
+      "title": "swap-evidence-must-be-pool-receipt-and-budget-bound",
+      "invariant": "Swap evidence must decode only explicitly supported schemas from an active verified pool, bind exact token contracts and decimals to a finalized successful transaction receipt and independent corroboration, never attribute routers or pools as traders, fail closed for ambiguous multi-hop events, and remain within a declared per-chain RPC budget.",
+      "applicability": {
+        "changed_paths": [
+          "configs/onchain.yaml",
+          "src/hunter/onchain/adapters.py",
+          "src/hunter/onchain/configuration.py",
+          "src/hunter/onchain/dex.py",
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/evidence.py",
+          "src/hunter/onchain/models.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "These paths add DEX pool configuration, event decoding, RPC acquisition, signing, and replay verification. Unverified pools, unsupported event shapes, failed receipts, router attribution, or unbounded calls would create fabricated trading evidence."
+      },
+      "prevention": {
+        "mechanism": "Register only verified pool surfaces, verify onchain token contracts and decimals, decode explicit V2/V3 schemas with exact normalized token amounts, bind receipt and independent corroboration, separate trader from router/pool, mark ambiguous multi-hop swaps unavailable, and enforce the configured swap RPC budget.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/evidence.py::verified_swap_rows"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_v2_and_v3_logs_decode_exact_direction_and_amounts",
+        "tests/test_onchain_swap_wallet_evidence.py::test_unsupported_failed_and_unknown_pool_logs_are_rejected",
+        "tests/test_onchain_swap_wallet_evidence.py::test_router_and_pool_addresses_are_not_attributed_wallets",
+        "tests/test_onchain_swap_wallet_evidence.py::test_multi_hop_same_asset_direction_is_ambiguous_not_double_counted",
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_evidence_replay_and_tamper_rejection",
+        "tests/test_onchain_swap_wallet_evidence.py::test_adapter_enforces_bounded_swap_rpc_budget",
+        "tests/test_engineering_context_authority.py::test_issue_587_swap_wallet_evidence_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 owner criterion comment 7172851514: bounded Swap Detection must verify chain, pool identity, token contracts, decimals, finalized successful receipt, exact transaction and log, provenance, and wallet attribution without parallel architecture."
+      ]
+    },
+    {
+      "id": "DFF-071",
+      "title": "wallet-performance-must-use-verified-fifo-and-separate-fees",
+      "invariant": "Wallet performance must consume only verified attributed swaps with exact chain and asset identity, use deterministic FIFO only when inventory history is sufficient, compute exact Decimal realized P&L from causal valuations, keep fees and net P&L unavailable when evidence is absent, and expose gross context without ranking insufficient evidence.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/market_validation/acquisition_sources.py",
+          "src/hunter/onchain/wallet_performance.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "These paths aggregate verified swaps into wallet performance and market-validation context. Unattributed transfers, cross-chain mixing, partial inventory, missing fees, or fabricated win rates would manufacture a false performance signal."
+      },
+      "prevention": {
+        "mechanism": "Group only by exact chain and attributed wallet, require verified swap status, reject ambiguous attribution or incomplete inventory, apply deterministic FIFO with exact Decimal arithmetic, keep net P&L unavailable without fee evidence, and expose evidence-bound metrics through the existing whale/market-validation seam.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/wallet_performance.py::wallet_performance_from_swaps"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_partial_inventory_fees_and_cross_chain_are_unavailable",
+        "tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_fifo_profitable_and_losing_cases",
+        "tests/test_onchain_swap_wallet_evidence.py::test_market_validation_swap_wallet_context_uses_identity_and_usd_integration",
+        "tests/test_engineering_context_authority.py::test_issue_587_swap_wallet_evidence_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #587 owner criterion comment 7172851514: bounded Wallet Performance must consume only verified attributed swaps, separate gross/net and realized/unrealized, require sufficient inventory for FIFO, and avoid ranking insufficient evidence."
+      ]
+    },
+    {
+      "id": "DFF-072",
+      "title": "per-log-canonical-block-evidence-must-be-binding",
+      "invariant": "Canonical onchain swap evidence must use each log's own block hash, block number, and block timestamp after verifying that block from the trusted RPC adapter, never a range endpoint's hash or timestamp.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/adapters.py",
+          "src/hunter/onchain/engine.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "These paths turn raw EVM logs into signed evidence. Reusing the final block's identity for earlier logs breaks replay, freshness, and causal timestamp verification."
+      },
+      "prevention": {
+        "mechanism": "Fetch each accepted log's block, verify hash and number against the log, and bind the returned timestamp into the signed observation.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/engine.py::CapitalFlowEngine::_collect_swap_observations"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_observations_use_each_logs_own_block_hash_and_timestamp",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQb comment PRRC_kwDOTRDHr8678AAAABF-oRt: per-log canonical block hash and timestamp are required across multiple blocks."
+      ]
+    },
+    {
+      "id": "DFF-073",
+      "title": "rpc-attempt-budget-must-count-every-dispatch",
+      "invariant": "Every RPC attempt must be charged to one bounded total acquisition allowance before each endpoint dispatch, including provider checks, finalized-block lookups, chainId, log, receipt, corroboration, every retry attempt and failed attempts, across both transfer and swap paths; nested swap budgets may not reset or exceed the total, exhaustion must preserve explicit partial coverage, each signed swap must record only its own RPC work, and checkpoints must not advance past unprocessed work.",
+      "applicability": {
+        "changed_paths": [
+          "configs/onchain.yaml",
+          "src/hunter/onchain/adapters.py",
+          "src/hunter/onchain/configuration.py",
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/models.py",
+          "tests/test_onchain_capital_flow_acquisition.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "These paths configure and perform live network acquisition. Counting only successful swap evidence RPCs lets transfer, corroboration, retry and failure work exceed the configured budget and hide real costs."
+      },
+      "prevention": {
+        "mechanism": "Install one request meter around all live acquisition for a surface before provider checks and transfer work, let nested swap budgets inherit and charge the same total allowance, charge every endpoint attempt inside the retry loop including failures, return explicit partial coverage when exhausted, skip checkpoint advancement past unprocessed work, and record per-path and per-swap actual usage in signed evidence.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/adapters.py::EVMJsonRpcAdapter::request_budget"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_rpc_meter_charges_each_attempt_before_dispatch_including_failures",
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_observations_record_actual_rpc_attempt_count",
+        "tests/test_onchain_swap_wallet_evidence.py::test_nested_swap_budget_cannot_reset_total_acquisition_budget",
+        "tests/test_onchain_swap_wallet_evidence.py::test_sync_total_acquisition_budget_bounds_transfers_and_preserves_partial_coverage",
+        "tests/test_onchain_swap_wallet_evidence.py::test_retry_attempts_are_charged_to_the_total_acquisition_budget",
+        "tests/test_onchain_swap_wallet_evidence.py::test_each_swap_records_its_own_rpc_attempt_count",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQe comment PRRC_kwDOTRDHr8678AAAABF-oRu: every RPC attempt must consume budget, including failures.",
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868jZnb comment PRRC_kwDOTRDHr88AAAABGO06jQ at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: 100 transfers and three endpoints produced 612 unmetered RPC attempts because the request meter was installed only around swap acquisition.",
+        "Focused adversarial review at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: per-endpoint retries were charged once for three dispatches, and a single per-pool baseline signed the second swap with cumulative RPC cost; both reproduced RED before the family-level guard."
+      ]
+    },
+    {
+      "id": "DFF-074",
+      "title": "wallet-fifo-must-be-exact-per-target-asset",
+      "invariant": "FIFO inventory must be isolated by exact chain, attributed wallet, and target asset contract; a buy in one asset cannot close a sell in a different asset.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/market_validation/acquisition_sources.py",
+          "src/hunter/onchain/wallet_performance.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "These paths aggregate swap fills into wallet performance. Mixing target assets manufactures realized P&L from unrelated inventory."
+      },
+      "prevention": {
+        "mechanism": "Group by exact target asset contract, normalize each group independently, keep incomplete groups unavailable, and aggregate metrics only from fully available groups.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/wallet_performance.py::wallet_performance_from_swaps"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_wallet_performance_isolates_fifo_by_exact_target_asset",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQf comment PRRC_kwDOTRDHr8678AAAABF-oRv: USDC buys must not offset WETH sells."
+      ]
+    },
+    {
+      "id": "DFF-075",
+      "title": "volatile-discovery-metadata-refresh-must-not-conflict",
+      "invariant": "Volatile observation timestamps, market measurements and selected market evidence provenance (provider, pair address and side) must refresh in place without creating identity conflicts or stale pair attachment; stale pair provenance is cleared only by a fresh provider observation, last-known provenance survives unavailable or unrelated observations, and genuine identity disagreements still fail closed.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/discovery/identity.py",
+          "src/hunter/discovery/models.py",
+          "src/hunter/discovery/providers.py",
+          "src/hunter/discovery/repository.py",
+          "tests/test_global_discovery_candidate_registry.py",
+          "tests/test_engineering_context_authority.py"
+        ],
+        "rationale": "These paths merge repeated provider syncs into candidate registry identity evidence. Treating refreshable market observations as disagreements blocks handoff after normal acquisition updates."
+      },
+      "prevention": {
+        "mechanism": "Define shared volatile and refreshable metadata keys, overwrite those keys during merge, exclude only volatile keys from fingerprints, and preserve provider disagreement recording for all other metadata. Treat discovery mode as volatile observation provenance, not identity evidence. Treat selected market evidence provider, pair address and side as refreshable market provenance, clear stale pair provenance only when a fresh provider observation is present, preserve last-known provenance on unavailable or unrelated observations, normalize historical pair-selection disagreements while preserving genuine identity conflicts. Normalize historical volatile provider disagreements at merge, identity conflict evaluation and fingerprint boundaries; preserve genuine disagreements.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/repository.py::_merge_metadata"
+      },
+      "regression_evidence": [
+        "tests/test_global_discovery_candidate_registry.py::test_volatile_discovery_metadata_refreshes_without_identity_conflict",
+        "tests/test_global_discovery_candidate_registry.py::test_market_pair_selection_refreshes_without_identity_conflict",
+        "tests/test_global_discovery_candidate_registry.py::test_market_evidence_provider_refreshes_without_identity_conflict",
+        "tests/test_global_discovery_candidate_registry.py::test_market_provenance_survives_unavailable_and_unrelated_observations",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context",
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_batch_provenance_is_not_identity_evidence"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQi comment PRRC_kwDOTRDHr8678AAAABF-oR4: volatile market evidence refresh must not create identity conflicts.",
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868ZcTb at 01d78d3ee8ec9c4c85527c56a5119bea418ce35e; reproduced RED then verified GREEN locally. Historical false conflicts reproduced RED in Gateway job job_01M8CCZH5P008KPYJ2D7VRHK4H; extended regression verifies historical normalization, fingerprint stability and mixed genuine conflicts; 99 focused tests passed locally on 2026-11-26. Published exact-head verification pending.",
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868jZnS comment PRRC_kwDOTRDHr88AAAABGO06fQ at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: selected market pair address and side changed without token identity change and were treated as permanent provider disagreements.",
+        "Focused adversarial review at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: a sibling `market_evidence_provider` key still caused permanent conflict and fingerprint churn, and stale pair provenance survived a provider fallback; reproduced RED before the family-level guard.",
+        "Second focused adversarial review at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: clearing every absent provenance key also erased last-known pair/provider data on a transient unavailable status or unrelated provider sync; reproduced RED before the fresh-provider-only guard."
+      ]
+    },
+    {
+      "id": "DFF-076",
+      "title": "complete-receipt-and-recipient-ownership-gate-attribution",
+      "invariant": "Attribution decisions must inspect the complete receipt for all swap-topic logs, mark multi-hop swaps ambiguous, and prove wallet ownership through decoded recipient equality with the receipt sender.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/adapters.py",
+          "src/hunter/onchain/engine.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "These paths convert a matched log into wallet evidence. A single matched log, the final block hash, or a router sender does not prove that the wallet executed the exact swap."
+      },
+      "prevention": {
+        "mechanism": "Count all V2/V3 swap-topic logs in the full receipt, fail closed when more than one exists, require decoded recipient to equal receipt sender, and reject routers, pools, and contracts as attributed wallets.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/engine.py::_receipt_swap_count"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_full_receipt_multihop_leg_is_not_wallet_attributed",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQq comment PRRC_kwDOTRDHr8678AAAABF-oR8: full receipt and proven recipient ownership are required for wallet attribution."
+      ]
+    },
+    {
+      "id": "DFF-077",
+      "title": "normalized-freshness-must-be-monotonic-and-bounded",
+      "invariant": "Freshness scores consumed by evidence engines must be normalized from 1.0 for current evidence down to 0.0 at the evidence horizon, with future and stale evidence clamped and boundary tested.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/market_validation/acquisition_sources.py",
+          "tests/test_onchain_swap_wallet_evidence.py",
+          "tests/test_engineering_context_authority.py"
+        ],
+        "rationale": "These paths expose swap freshness to market-validation context. Raw elapsed seconds invert ranking and make newer evidence appear less fresh than older evidence."
+      },
+      "prevention": {
+        "mechanism": "Compute normalized freshness from elapsed time against an explicit horizon, clamp future evidence to 1.0 and horizon-or-older evidence to 0.0, and cover current, midpoint, horizon, stale, and future boundaries.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/market_validation/acquisition_sources.py::normalized_freshness"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_freshness_is_decreasing_and_normalized",
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_context_uses_normalized_freshness",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQv comment PRRC_kwDOTRDHr8678AAAABF-oSD: freshness must be decreasing and normalized with boundary tests."
+      ]
+    },
+    {
+      "id": "DFF-078",
+      "title": "replay-preserves-all-row-derived-signed-metadata",
+      "invariant": "Replayed onchain evidence must preserve original signed metadata only when every row-derived signed field is unchanged; differences in event type, provider, source reference, or finality status are new signed evidence and must fail replay preservation.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/evidence.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "Overlapping acquisition windows re-sign the same observation. Ignoring any signed row field lets the same signature ID carry different signed bytes and aborts persistence with a signature conflict."
+      },
+      "prevention": {
+        "mechanism": "Derive replay comparison from the signed observation payload's row-backed fields, exclude only the volatile request count and timestamps, and restore original metadata solely on full equality.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/evidence.py::observation_comparison_value"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_overlapping_swap_replay_preserves_original_signed_metadata",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQD comment 4704219796 (KF-6c65bf6231ff)."
+      ]
+    },
+    {
+      "id": "DFF-079",
+      "title": "coingecko-cursor-advances-only-through-completed-pages",
+      "invariant": "A persisted CoinGecko batch cursor must identify only the last fully completed page, with failed or budget-exhausted pages leaving the prior cursor intact.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/discovery/providers.py",
+          "tests/test_global_discovery_candidate_registry.py"
+        ],
+        "rationale": "Advancing to a requested page that was never fetched silently drops candidates on resume and breaks bounded acquisition determinism."
+      },
+      "prevention": {
+        "mechanism": "Track the completed page locally, assign it only after a successful page fetch, and return that value as the batch cursor and resume checkpoint.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/providers.py::CoinGeckoDiscoveryProvider::discover_batch"
+      },
+      "regression_evidence": [
+        "tests/test_global_discovery_candidate_registry.py::test_coingecko_batch_resume_advances_only_through_completed_pages",
+        "tests/test_global_discovery_candidate_registry.py::test_coingecko_batch_budget_exhaustion_before_first_page_keeps_cursor",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQG comment 4704219802 (KF-f6980616124a)."
+      ]
+    },
+    {
+      "id": "DFF-080",
+      "title": "discovery-budget-charges-every-retry-attempt",
+      "invariant": "Every DexScreener batch enrichment HTTP retry attempt must consume the active scan budget exactly once through the shared dispatcher, including failed attempts.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/discovery/providers.py",
+          "tests/test_global_discovery_candidate_registry.py"
+        ],
+        "rationale": "Charging once outside the retry loop hides real network work and lets bounded batches exceed their declared request budget."
+      },
+      "prevention": {
+        "mechanism": "Compute the request path before acquisition, pass the batch meter into the shared HTTP getter, and catch dispatch-level budget exhaustion without pre-consuming capacity.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/providers.py::DexScreenerDiscoveryProvider::enrich_contracts"
+      },
+      "regression_evidence": [
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_retry_attempts_consume_batch_budget",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQL comment 4704219814 (KF-8aaa66db4647)."
+      ]
+    },
+    {
+      "id": "DFF-081",
+      "title": "canonical-chain-alias-identity-and-resume",
+      "invariant": "Equivalent registry chain aliases must resolve to one canonical chain identity and cursor, while provider-native aliases remain limited to transport URLs and evidence metadata.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/discovery/engine.py",
+          "src/hunter/discovery/providers.py",
+          "tests/test_global_discovery_candidate_registry.py"
+        ],
+        "rationale": "Alias duplication splits one contract into several identities, duplicates bounded enrichment work, and invalidates durable cursors written under legacy alias names."
+      },
+      "prevention": {
+        "mechanism": "Canonicalize registry identities, alias namespaces, and loaded cursors; aggregate candidate IDs by canonical chain and contract; retain raw chain for provider-native HTTP paths and evidence.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/engine.py::CandidateDiscoveryEngine::enrich_dex_contracts"
+      },
+      "regression_evidence": [
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_profile_canonicalizes_chain_aliases",
+        "tests/test_global_discovery_candidate_registry.py::test_dex_batch_enrichment_matches_legacy_chain_alias_candidate",
+        "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_legacy_alias_cursor_resumes_at_canonical_identifier",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQQ comment 4704219819 (KF-e9211e2d4ae)."
+      ]
+    },
+    {
+      "id": "DFF-082",
+      "title": "consideration-side-causal-usd-valuation",
+      "invariant": "Wallet performance FIFO must value the signed buy input or sell output consideration from configured tracked assets, never substitute target notional, and remain unavailable when consideration valuation cannot be proven.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/market_validation/acquisition_sources.py",
+          "src/hunter/onchain/wallet_performance.py",
+          "tests/test_market_validation.py",
+          "tests/test_onchain_swap_wallet_evidence.py",
+          "tests/test_market_validation_input_authority.py"
+        ],
+        "rationale": "Cost basis is paid or received in the consideration asset. Using target notional manufactures realized P&L and breaks causal valuation."
+      },
+      "prevention": {
+        "mechanism": "Separate target USD metrics from wallet-performance valuations, resolve signed consideration contracts to configured assets with price IDs in the onchain boundary, and fail closed when no matching valuation exists.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/wallet_performance.py::signed_consideration_valuation"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_market_validation_swap_wallet_context_uses_identity_and_usd_integration",
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_context_does_not_substitute_target_notional_for_consideration",
+        "tests/test_market_validation.py::test_market_validation_boundaries",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQZ comment 4704219828 (KF-f0962d81e187)."
+      ]
+    },
+    {
+      "id": "DFF-083",
+      "title": "provider-wide-quota-must-be-one-shared-bucket",
+      "invariant": "Where one provider-wide quota governs several endpoint families, every reservation for those endpoints must consume one rolling bucket regardless of scan, helper or process, while endpoint-specific telemetry and genuinely independent limits remain distinct.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/discovery/capacity.py",
+          "src/hunter/discovery/repository.py",
+          "configs/discovery_capacity.yaml",
+          "tests/test_global_discovery_candidate_registry.py"
+        ],
+        "rationale": "A per-endpoint count silently multiplies a documented provider-wide ceiling when discovery mixes catalogue, pool and token requests. Only a shared, config-declared partition enforces the real quota across processes."
+      },
+      "prevention": {
+        "mechanism": "Declare a rate_limit_group for endpoints under one ceiling, derive a quota key from that group for both reservation counting and remaining-quota telemetry, keep dedupe/cooldown and per-endpoint telemetry endpoint-scoped, and migrate legacy reservation rows into the shared key.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/capacity.py::CapacityLedger::reserve"
+      },
+      "regression_evidence": [
+        "tests/test_global_discovery_candidate_registry.py::test_geckoterminal_public_api_rate_limit_is_shared_across_network_pool_and_token_requests",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868g_MD comment 4712110994 at exact head 386b0319f597cf8068c569ec24859705231258eb."
       ]
     }
   ]

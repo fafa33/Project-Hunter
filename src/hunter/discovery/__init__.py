@@ -1,4 +1,9 @@
-from hunter.discovery.automation import DISCOVERY_JOB_IDS, discovery_automation_status, install_discovery_jobs
+from hunter.discovery.automation import (
+    DISCOVERY_JOB_IDS,
+    discovery_automation_status,
+    install_discovery_jobs,
+    require_discovery_automation,
+)
 from hunter.discovery.configuration import DiscoveryConfig, DiscoveryProviderConfig, load_discovery_config
 from hunter.discovery.engine import CandidateDiscoveryEngine, candidate_for_report
 from hunter.discovery.identity import CandidateIdentityResolutionEngine, IdentityResolutionSummary
@@ -55,4 +60,5 @@ __all__ = [
     "discovery_automation_status",
     "install_discovery_jobs",
     "load_discovery_config",
+    "require_discovery_automation",
 ]

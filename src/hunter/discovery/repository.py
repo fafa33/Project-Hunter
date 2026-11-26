@@ -10,6 +10,12 @@ from typing import Any
 
 from hunter.discovery.canonical_history import CanonicalEntityRecord, digest_payload, replay_canonical_entities
 from hunter.discovery.models import (
+    MARKET_SELECTION_METADATA_KEYS,
+    QUEUE_STATUS_ELIGIBLE,
+    QUEUE_STATUS_NOT_QUEUED,
+    QUEUE_STATUS_QUEUED,
+    REFRESHABLE_DISCOVERY_METADATA_KEYS,
+    SCREENING_STATUS_NOT_SCREENED,
     CandidateAlias,
     CandidateIdentifier,
     CandidateIdentity,
@@ -21,7 +27,9 @@ from hunter.discovery.models import (
     CandidateSource,
     DiscoveryConflict,
     DiscoveryRun,
+    normalize_identity_disagreements,
 )
+from hunter.execution.identity import identity
 
 DEFAULT_DISCOVERY_DB = Path("data/discovery/runtime/candidates.sqlite")
 
@@ -199,6 +207,65 @@ class CandidateRegistryRepository:
             yield batch
             offset += len(batch)
 
+    def candidates_by_ids(self, candidate_ids: tuple[str, ...]) -> tuple[CandidateRecord, ...]:
+        unique = tuple(dict.fromkeys(candidate_ids))
+        if not unique:
+            return ()
+        records: list[CandidateRecord] = []
+        with self._connect() as conn:
+            for start in range(0, len(unique), 500):
+                chunk = unique[start : start + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                rows = conn.execute(
+                    f"SELECT * FROM candidates WHERE candidate_id IN ({placeholders}) ORDER BY candidate_id",
+                    chunk,
+                ).fetchall()
+                records.extend(self._record_from_row(conn, row) for row in rows)
+        return tuple(records)
+
+    def fair_candidates(self, purpose: str, limit: int = 500) -> tuple[CandidateRecord, ...]:
+        """Bounded round-robin batch driven by a durable candidate_id cursor.
+
+        Candidate slugs are mutable and can share long prefixes, so slug ordering
+        lets one cohort starve every later candidate. The immutable candidate_id
+        cursor rotates through the full registry and survives restarts.
+        """
+        size = max(1, min(limit, 10_000))
+        key = f"processing:{purpose}"
+        with self._connect() as conn:
+            row = conn.execute("SELECT cursor FROM checkpoints WHERE provider = ?", (key,)).fetchone()
+            raw_cursor = str(row["cursor"]) if row else ""
+            after = raw_cursor.removeprefix("id:") if raw_cursor.startswith("id:") else ""
+            rows = list(
+                conn.execute(
+                    "SELECT * FROM candidates WHERE candidate_id > ? ORDER BY candidate_id LIMIT ?",
+                    (after, size),
+                ).fetchall()
+            )
+            seen = {str(item["candidate_id"]) for item in rows}
+            if len(rows) < size:
+                for wrap in conn.execute("SELECT * FROM candidates ORDER BY candidate_id LIMIT ?", (size,)).fetchall():
+                    candidate_id = str(wrap["candidate_id"])
+                    if candidate_id in seen:
+                        continue
+                    rows.append(wrap)
+                    seen.add(candidate_id)
+                    if len(rows) == size:
+                        break
+            if rows:
+                conn.execute(
+                    """
+                    INSERT INTO checkpoints (provider, cursor, updated_at, status)
+                    VALUES (?, ?, ?, 'active')
+                    ON CONFLICT(provider) DO UPDATE SET
+                        cursor=excluded.cursor,
+                        updated_at=excluded.updated_at,
+                        status=excluded.status
+                    """,
+                    (key, f"id:{rows[-1]['candidate_id']}", _dt(datetime.now(tz=UTC))),
+                )
+            return tuple(self._record_from_row(conn, item) for item in rows)
+
     def stats(self) -> CandidateRegistryStats:
         with self._connect() as conn:
             total = int(conn.execute("SELECT COUNT(*) FROM candidates").fetchone()[0])
@@ -346,9 +413,10 @@ class CandidateRegistryRepository:
                     """
                     INSERT INTO identity_results (
                         candidate_id, outcome, confidence, evidence_ids, source_candidate_ids,
-                        source_ids, reason, missing_evidence, conflicts, related_candidate_ids, evaluated_at
+                        source_ids, reason, missing_evidence, conflicts, related_candidate_ids,
+                        evaluated_at, policy_version, evidence_fingerprint
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(candidate_id) DO UPDATE SET
                         outcome=excluded.outcome,
                         confidence=excluded.confidence,
@@ -359,7 +427,9 @@ class CandidateRegistryRepository:
                         missing_evidence=excluded.missing_evidence,
                         conflicts=excluded.conflicts,
                         related_candidate_ids=excluded.related_candidate_ids,
-                        evaluated_at=excluded.evaluated_at
+                        evaluated_at=excluded.evaluated_at,
+                        policy_version=excluded.policy_version,
+                        evidence_fingerprint=excluded.evidence_fingerprint
                     """,
                     (
                         result.candidate_id,
@@ -373,6 +443,8 @@ class CandidateRegistryRepository:
                         _json(result.conflicts),
                         _json(result.related_candidate_ids),
                         _dt(result.evaluated_at),
+                        result.policy_version,
+                        result.evidence_fingerprint,
                     ),
                 )
                 conn.execute(
@@ -380,14 +452,51 @@ class CandidateRegistryRepository:
                     (result.outcome, result.candidate_id),
                 )
                 if result.outcome in {"exact", "probable"}:
-                    conn.execute(
-                        """
-                        UPDATE candidates SET lifecycle_status = 'identified'
-                        WHERE candidate_id = ?
-                        AND lifecycle_status IN ('discovered', 'screenable', 'evidence_pending')
-                        """,
+                    current = conn.execute(
+                        "SELECT lifecycle_status FROM candidates WHERE candidate_id = ?",
                         (result.candidate_id,),
-                    )
+                    ).fetchone()
+                    previous = str(current["lifecycle_status"]) if current else ""
+                    if previous in {"discovered", "screenable", "evidence_pending"} and _valid_transition(
+                        previous, "identified"
+                    ):
+                        transition_id = identity(
+                            "candidate-lifecycle-transition",
+                            {
+                                "candidate": result.candidate_id,
+                                "from": previous,
+                                "to": "identified",
+                                "reason": result.reason,
+                            },
+                        )
+                        conn.execute(
+                            """
+                            INSERT OR REPLACE INTO lifecycle_transitions (
+                                transition_id, candidate_id, previous_state, new_state, transitioned_at,
+                                reason, supporting_evidence_ids, discovery_run_id
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                transition_id,
+                                result.candidate_id,
+                                previous,
+                                "identified",
+                                _dt(result.evaluated_at),
+                                f"identity accepted: {result.reason}",
+                                _json(result.evidence_ids),
+                                "identity-resolution",
+                            ),
+                        )
+                        conn.execute(
+                            "UPDATE candidates SET lifecycle_status = 'identified' WHERE candidate_id = ?",
+                            (result.candidate_id,),
+                        )
+
+    def identity_result_for(self, candidate_id: str) -> CandidateIdentity | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT * FROM identity_results WHERE candidate_id = ?", (candidate_id,)).fetchone()
+            return _identity_from_row(row) if row else None
 
     def identity_results(self) -> tuple[CandidateIdentity, ...]:
         with self._connect() as conn:
@@ -496,19 +605,27 @@ class CandidateRegistryRepository:
                     result.coverage,
                 ),
             )
+            conn.execute(
+                "UPDATE candidates SET screening_status = ? WHERE candidate_id = ?",
+                (result.status, result.candidate_id),
+            )
 
     def latest_screening_results(self) -> tuple[CandidateScreeningResult, ...]:
         with self._connect() as conn:
             rows = conn.execute("""
                 SELECT sr.* FROM screening_results sr
-                JOIN (
-                    SELECT candidate_id, MAX(screened_at) AS screened_at
-                    FROM screening_results GROUP BY candidate_id
-                ) latest
-                ON sr.candidate_id = latest.candidate_id AND sr.screened_at = latest.screened_at
+                WHERE sr.screening_id = (
+                    SELECT latest.screening_id FROM screening_results latest
+                    WHERE latest.candidate_id = sr.candidate_id
+                    ORDER BY latest.screened_at DESC, latest.screening_id DESC
+                    LIMIT 1
+                )
                 ORDER BY sr.score DESC, sr.candidate_id
                 """).fetchall()
             return tuple(_screening_from_row(row) for row in rows)
+
+    def latest_screening_by_candidate(self) -> dict[str, CandidateScreeningResult]:
+        return {result.candidate_id: result for result in self.latest_screening_results()}
 
     def save_queue_entries(self, entries: tuple[CandidateQueueEntry, ...]) -> None:
         with self._connect() as conn:
@@ -536,6 +653,13 @@ class CandidateRegistryRepository:
                         int(entry.eligible_for_deep_analysis),
                     ),
                 )
+                conn.execute(
+                    "UPDATE candidates SET queue_status = ? WHERE candidate_id = ?",
+                    (
+                        QUEUE_STATUS_ELIGIBLE if entry.eligible_for_deep_analysis else QUEUE_STATUS_QUEUED,
+                        entry.candidate_id,
+                    ),
+                )
 
     def queue_entries(self, limit: int = 25) -> tuple[CandidateQueueEntry, ...]:
         with self._connect() as conn:
@@ -544,6 +668,108 @@ class CandidateRegistryRepository:
                 (max(1, min(limit, 1000)),),
             ).fetchall()
             return tuple(_queue_entry_from_row(row) for row in rows)
+
+    def all_queue_entries(self) -> tuple[CandidateQueueEntry, ...]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM queue_entries ORDER BY candidate_id").fetchall()
+            return tuple(_queue_entry_from_row(row) for row in rows)
+
+    def candidate_lifecycle_states(self) -> dict[str, str]:
+        with self._connect() as conn:
+            return {
+                str(row["candidate_id"]): str(row["lifecycle_status"])
+                for row in conn.execute("SELECT candidate_id, lifecycle_status FROM candidates").fetchall()
+            }
+
+    def set_queue_eligibility(self, updates: tuple[tuple[str, bool], ...]) -> int:
+        if not updates:
+            return 0
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            conn.executemany(
+                "UPDATE queue_entries SET eligible_for_deep_analysis = ? WHERE candidate_id = ?",
+                tuple((int(eligible), candidate_id) for candidate_id, eligible in updates),
+            )
+            for candidate_id, eligible in updates:
+                conn.execute(
+                    "UPDATE candidates SET queue_status = ? WHERE candidate_id = ?",
+                    (QUEUE_STATUS_ELIGIBLE if eligible else QUEUE_STATUS_QUEUED, candidate_id),
+                )
+            return len(updates)
+
+    def reconcile_candidate_status(self) -> dict[str, int]:
+        """Make candidate status columns agree with authoritative result tables."""
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            changes: dict[str, int] = {}
+            changes["identity_resolution_status"] = conn.execute("""
+                UPDATE candidates SET identity_resolution_status = 'not_resolved'
+                WHERE identity_resolution_status != 'not_resolved'
+                AND NOT EXISTS (
+                    SELECT 1 FROM identity_results ir WHERE ir.candidate_id = candidates.candidate_id
+                )
+                """).rowcount
+            changes["identity_resolution_status"] += conn.execute("""
+                UPDATE candidates SET identity_resolution_status = (
+                    SELECT ir.outcome FROM identity_results ir
+                    WHERE ir.candidate_id = candidates.candidate_id
+                )
+                WHERE EXISTS (
+                    SELECT 1 FROM identity_results ir
+                    WHERE ir.candidate_id = candidates.candidate_id
+                    AND ir.outcome != candidates.identity_resolution_status
+                )
+                """).rowcount
+            changes["screening_status"] = conn.execute(f"""
+                UPDATE candidates SET screening_status = '{SCREENING_STATUS_NOT_SCREENED}'
+                WHERE screening_status != '{SCREENING_STATUS_NOT_SCREENED}'
+                AND NOT EXISTS (
+                    SELECT 1 FROM screening_results sr WHERE sr.candidate_id = candidates.candidate_id
+                )
+                """).rowcount
+            changes["screening_status"] += conn.execute("""
+                UPDATE candidates SET screening_status = (
+                    SELECT sr.status FROM screening_results sr
+                    WHERE sr.candidate_id = candidates.candidate_id
+                    ORDER BY sr.screened_at DESC, sr.screening_id DESC LIMIT 1
+                )
+                WHERE EXISTS (
+                    SELECT 1 FROM screening_results sr
+                    WHERE sr.candidate_id = candidates.candidate_id
+                    AND sr.status != candidates.screening_status
+                )
+                """).rowcount
+            changes[QUEUE_STATUS_NOT_QUEUED] = conn.execute(f"""
+                UPDATE candidates SET queue_status = '{QUEUE_STATUS_NOT_QUEUED}'
+                WHERE queue_status != '{QUEUE_STATUS_NOT_QUEUED}'
+                AND NOT EXISTS (
+                    SELECT 1 FROM queue_entries qe WHERE qe.candidate_id = candidates.candidate_id
+                )
+                """).rowcount
+            changes[QUEUE_STATUS_QUEUED] = conn.execute(f"""
+                UPDATE candidates SET queue_status = '{QUEUE_STATUS_QUEUED}'
+                WHERE queue_status != '{QUEUE_STATUS_QUEUED}'
+                AND NOT EXISTS (
+                    SELECT 1 FROM queue_entries qe
+                    WHERE qe.candidate_id = candidates.candidate_id AND qe.eligible_for_deep_analysis = 1
+                )
+                AND EXISTS (SELECT 1 FROM queue_entries qe WHERE qe.candidate_id = candidates.candidate_id)
+                """).rowcount
+            changes[QUEUE_STATUS_ELIGIBLE] = conn.execute(f"""
+                UPDATE candidates SET queue_status = '{QUEUE_STATUS_ELIGIBLE}'
+                WHERE queue_status != '{QUEUE_STATUS_ELIGIBLE}'
+                AND EXISTS (
+                    SELECT 1 FROM queue_entries qe
+                    WHERE qe.candidate_id = candidates.candidate_id AND qe.eligible_for_deep_analysis = 1
+                )
+                """).rowcount
+            return changes
+
+    def discovery_page_cursor(self, provider: str) -> int:
+        with self._connect() as conn:
+            row = conn.execute("SELECT cursor FROM checkpoints WHERE provider = ?", (provider,)).fetchone()
+        value = str(row["cursor"]) if row else ""
+        return int(value[5:]) if value.startswith("page:") and value[5:].isdigit() else 0
 
     def save_checkpoint(self, provider: str, cursor: str, status: str) -> None:
         with self._connect() as conn:
@@ -554,6 +780,321 @@ class CandidateRegistryRepository:
                 """,
                 (provider, cursor, _dt(datetime.now(tz=UTC)), status),
             )
+
+    def save_scan_state(self, provider: str, state: dict[str, Any], status: str) -> None:
+        cursor = "scan:" + json.dumps(state, sort_keys=True, separators=(",", ":"))
+        self.save_checkpoint(provider, cursor, status)
+
+    def scan_state(self, provider: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT cursor FROM checkpoints WHERE provider = ?", (provider,)).fetchone()
+        value = str(row["cursor"]) if row else ""
+        if not value.startswith("scan:"):
+            return None
+        try:
+            state = json.loads(value[5:])
+        except json.JSONDecodeError:
+            return None
+        return state if isinstance(state, dict) else None
+
+    def identifier_cursor(self, provider: str) -> tuple[str, str] | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT cursor FROM checkpoints WHERE provider = ?", (provider,)).fetchone()
+        value = str(row["cursor"]) if row else ""
+        if not value.startswith("identifier:"):
+            return None
+        try:
+            parsed = json.loads(value[len("identifier:") :])
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, list) and len(parsed) == 2 and all(isinstance(item, str) for item in parsed):
+            return str(parsed[0]), str(parsed[1])
+        return None
+
+    def save_identifier_cursor(self, provider: str, namespace: str, value: str) -> None:
+        cursor = "identifier:" + json.dumps([namespace, value], sort_keys=True, separators=(",", ":"))
+        self.save_checkpoint(provider, cursor, "cursor")
+
+    def save_universe_assets(self, provider: str, asset_ids: tuple[str, ...] | list[str], observed_at: str) -> None:
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            conn.execute("DELETE FROM universe_assets WHERE provider = ?", (provider,))
+            conn.executemany(
+                "INSERT INTO universe_assets (provider, asset_id, observed_at) VALUES (?, ?, ?)",
+                ((provider, str(asset_id), observed_at) for asset_id in dict.fromkeys(asset_ids)),
+            )
+
+    def universe_assets(self, provider: str) -> tuple[str, ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT asset_id FROM universe_assets WHERE provider = ? ORDER BY asset_id", (provider,)
+            ).fetchall()
+        return tuple(str(row["asset_id"]) for row in rows)
+
+    def universe_observed_at(self, provider: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT MAX(observed_at) AS observed_at FROM universe_assets WHERE provider = ?", (provider,)
+            ).fetchone()
+        return str(row["observed_at"]) if row and row["observed_at"] else None
+
+    def identifier_values(self, namespace: str) -> tuple[str, ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                "SELECT DISTINCT value FROM identifiers WHERE namespace = ? ORDER BY value", (namespace,)
+            ).fetchall()
+        return tuple(str(row["value"]) for row in rows)
+
+    def has_identifier(self, namespace: str, value: str) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM identifiers WHERE namespace = ? AND value = ? LIMIT 1", (namespace, value)
+            ).fetchone()
+        return row is not None
+
+    def save_network_observations(self, observations: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> int:
+        created = 0
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            for item in observations:
+                network_id = str(item.get("network_id") or "").strip()
+                if not network_id:
+                    continue
+                observed_at = str(item.get("observed_at") or _dt(datetime.now(tz=UTC)))
+                existing = conn.execute(
+                    "SELECT 1 FROM network_observations WHERE network_id = ?", (network_id,)
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        "UPDATE network_observations SET name = ?, source_url = ?, last_seen_at = ? WHERE network_id = ?",
+                        (item.get("name"), item.get("source_url"), observed_at, network_id),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO network_observations
+                            (network_id, name, source_url, first_seen_at, last_seen_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        """,
+                        (network_id, item.get("name"), item.get("source_url"), observed_at, observed_at),
+                    )
+                    created += 1
+        return created
+
+    def network_observations(self) -> tuple[dict[str, Any], ...]:
+        with self._connect() as conn:
+            rows = conn.execute("SELECT * FROM network_observations ORDER BY network_id").fetchall()
+        return tuple(dict(row) for row in rows)
+
+    def save_pool_observations(self, observations: tuple[dict[str, Any], ...] | list[dict[str, Any]]) -> int:
+        created = 0
+        with self._connect() as conn:
+            conn.execute("BEGIN")
+            for item in observations:
+                network = str(item.get("network") or "").strip()
+                address = str(item.get("pool_address") or "").strip()
+                if not network or not address:
+                    continue
+                observed_at = str(item.get("observed_at") or _dt(datetime.now(tz=UTC)))
+                contracts = json.dumps(sorted({str(value) for value in item.get("contract_addresses", ())}))
+                existing = conn.execute(
+                    "SELECT 1 FROM pool_observations WHERE network = ? AND pool_address = ?", (network, address)
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        """
+                        UPDATE pool_observations
+                        SET contract_addresses = ?, source_url = ?, last_seen_at = ?
+                        WHERE network = ? AND pool_address = ?
+                        """,
+                        (contracts, item.get("source_url"), observed_at, network, address),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO pool_observations
+                            (network, pool_address, contract_addresses, source_url, first_seen_at, last_seen_at)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                        """,
+                        (network, address, contracts, item.get("source_url"), observed_at, observed_at),
+                    )
+                    created += 1
+        return created
+
+    def pool_observations(self, *, network: str | None = None) -> tuple[dict[str, Any], ...]:
+        with self._connect() as conn:
+            if network:
+                rows = conn.execute(
+                    "SELECT * FROM pool_observations WHERE network = ? ORDER BY network, pool_address", (network,)
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM pool_observations ORDER BY network, pool_address").fetchall()
+        return tuple(dict(row) for row in rows)
+
+    def try_reserve_capacity(
+        self,
+        *,
+        provider: str,
+        endpoint: str,
+        quota_key: str,
+        fingerprint: str,
+        dedup_key: str | None,
+        attempted_at: str,
+        window_start: str,
+        dedupe_until: str,
+        rate_limit_per_minute: int | None,
+        retry: bool,
+        batch_size: int | None,
+        reservation_id: str,
+    ) -> tuple[str | None, float, bool]:
+        """Atomically reserve one request slot; returns (id, wait_seconds, duplicate)."""
+        effective_quota = quota_key.strip().lower() or f"{provider}:{endpoint}"
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if dedup_key is not None and not retry:
+                duplicate = conn.execute(
+                    """
+                    SELECT 1 FROM capacity_requests
+                    WHERE provider = ? AND endpoint = ? AND dedup_key = ? AND dedupe_until > ?
+                      AND (state <> 'completed' OR outcome = 'success')
+                    LIMIT 1
+                    """,
+                    (provider, endpoint, dedup_key, attempted_at),
+                ).fetchone()
+                if duplicate is not None:
+                    return None, 0.0, True
+            if rate_limit_per_minute is not None and rate_limit_per_minute > 0:
+                rows = conn.execute(
+                    """
+                    SELECT attempted_at FROM capacity_requests
+                    WHERE quota_key = ? AND attempted_at > ?
+                    ORDER BY attempted_at
+                    LIMIT ?
+                    """,
+                    (effective_quota, window_start, rate_limit_per_minute),
+                ).fetchall()
+                if len(rows) >= rate_limit_per_minute:
+                    oldest = _parse_dt(str(rows[0]["attempted_at"]))
+                    wait = (oldest - _parse_dt(window_start)).total_seconds()
+                    return None, max(0.0, wait), False
+            conn.execute(
+                """
+                INSERT INTO capacity_requests (
+                    reservation_id, provider, endpoint, quota_key, fingerprint, dedup_key, attempted_at,
+                    window_start, dedupe_until, state, retry, batch_size
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'in_flight', ?, ?)
+                """,
+                (
+                    reservation_id,
+                    provider,
+                    endpoint,
+                    effective_quota,
+                    fingerprint,
+                    dedup_key,
+                    attempted_at,
+                    window_start,
+                    dedupe_until,
+                    int(retry),
+                    batch_size,
+                ),
+            )
+            return reservation_id, 0.0, False
+
+    def complete_capacity_request(
+        self,
+        reservation_id: str,
+        *,
+        completed_at: str,
+        status_code: int | None,
+        outcome: str,
+        retry_after_seconds: float | None = None,
+        error: str | None = None,
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE capacity_requests
+                SET state = ?, completed_at = ?, status_code = ?, outcome = ?,
+                    retry_after_seconds = ?, error = ?
+                WHERE reservation_id = ?
+                """,
+                ("completed", completed_at, status_code, outcome, retry_after_seconds, error, reservation_id),
+            )
+
+    def capacity_cooldown_until(self, provider: str, endpoint: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT cooldown_until FROM capacity_cooldowns WHERE provider = ? AND endpoint = ?",
+                (provider, endpoint),
+            ).fetchone()
+        return str(row["cooldown_until"]) if row and row["cooldown_until"] else None
+
+    def set_capacity_cooldown(self, provider: str, endpoint: str, *, until: str, reason: str) -> None:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute(
+                """
+                INSERT INTO capacity_cooldowns (provider, endpoint, cooldown_until, reason, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(provider, endpoint) DO UPDATE SET
+                    cooldown_until = excluded.cooldown_until,
+                    reason = excluded.reason,
+                    updated_at = excluded.updated_at
+                """,
+                (provider, endpoint, until, reason, _dt(datetime.now(tz=UTC))),
+            )
+            conn.execute(
+                """
+                INSERT INTO capacity_cooldown_events (provider, endpoint, cooldown_until, reason, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (provider, endpoint, until, reason, _dt(datetime.now(tz=UTC))),
+            )
+
+    def capacity_quota_recent(self, *, window_start: str) -> dict[str, int]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT quota_key, COUNT(*) AS recent
+                FROM capacity_requests
+                WHERE attempted_at > ?
+                GROUP BY quota_key
+                """,
+                (window_start,),
+            ).fetchall()
+        return {str(row["quota_key"]): int(row["recent"]) for row in rows}
+
+    def capacity_summary(self, *, window_start: str) -> tuple[dict[str, Any], ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    requests.provider AS provider,
+                    requests.endpoint AS endpoint,
+                    COUNT(*) AS attempts,
+                    COALESCE(SUM(CASE WHEN requests.retry = 1 THEN 1 ELSE 0 END), 0) AS retries,
+                    COALESCE(SUM(CASE WHEN requests.outcome = 'throttled' THEN 1 ELSE 0 END), 0) AS throttles,
+                    COALESCE(SUM(CASE WHEN requests.outcome = 'failure' THEN 1 ELSE 0 END), 0) AS failures,
+                    COALESCE(SUM(CASE WHEN requests.outcome = 'success' THEN 1 ELSE 0 END), 0) AS successes,
+                    COALESCE(SUM(CASE WHEN requests.attempted_at > ? THEN 1 ELSE 0 END), 0) AS recent_attempts,
+                    MIN(requests.attempted_at) AS first_attempt_at,
+                    MAX(requests.attempted_at) AS last_attempt_at,
+                    MAX(requests.batch_size) AS max_batch_size,
+                    COALESCE(cooldowns.cooldowns, 0) AS cooldowns,
+                    MAX(COALESCE(cooldowns.cooldown_until, '')) AS cooldown_until
+                FROM capacity_requests AS requests
+                LEFT JOIN (
+                    SELECT provider, endpoint, COUNT(*) AS cooldowns, MAX(cooldown_until) AS cooldown_until
+                    FROM capacity_cooldown_events GROUP BY provider, endpoint
+                ) AS cooldowns
+                    ON cooldowns.provider = requests.provider AND cooldowns.endpoint = requests.endpoint
+                GROUP BY requests.provider, requests.endpoint
+                ORDER BY requests.provider, requests.endpoint
+                """,
+                (window_start,),
+            ).fetchall()
+        return tuple(dict(row) for row in rows)
 
     def _initialize(self) -> None:
         with self._connect() as conn:
@@ -679,6 +1220,71 @@ class CandidateRegistryRepository:
                     updated_at TEXT NOT NULL,
                     status TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS universe_assets (
+                    provider TEXT NOT NULL,
+                    asset_id TEXT NOT NULL,
+                    observed_at TEXT NOT NULL,
+                    PRIMARY KEY (provider, asset_id)
+                );
+                CREATE TABLE IF NOT EXISTS network_observations (
+                    network_id TEXT NOT NULL,
+                    name TEXT,
+                    source_url TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    PRIMARY KEY (network_id)
+                );
+                CREATE TABLE IF NOT EXISTS pool_observations (
+                    network TEXT NOT NULL,
+                    pool_address TEXT NOT NULL,
+                    contract_addresses TEXT NOT NULL,
+                    source_url TEXT,
+                    first_seen_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    PRIMARY KEY (network, pool_address)
+                );
+                CREATE INDEX IF NOT EXISTS universe_assets_provider_idx
+                    ON universe_assets (provider);
+                CREATE INDEX IF NOT EXISTS pool_observations_network_idx
+                    ON pool_observations (network);
+                CREATE TABLE IF NOT EXISTS capacity_requests (
+                    reservation_id TEXT PRIMARY KEY,
+                    provider TEXT NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    quota_key TEXT NOT NULL DEFAULT '',
+                    fingerprint TEXT NOT NULL,
+                    dedup_key TEXT,
+                    attempted_at TEXT NOT NULL,
+                    window_start TEXT NOT NULL,
+                    dedupe_until TEXT NOT NULL,
+                    state TEXT NOT NULL,
+                    retry INTEGER NOT NULL,
+                    batch_size INTEGER,
+                    status_code INTEGER,
+                    outcome TEXT,
+                    retry_after_seconds REAL,
+                    error TEXT,
+                    completed_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS capacity_requests_window_idx
+                    ON capacity_requests (provider, endpoint, attempted_at);
+                CREATE INDEX IF NOT EXISTS capacity_requests_dedupe_idx
+                    ON capacity_requests (provider, endpoint, dedup_key, dedupe_until);
+                CREATE TABLE IF NOT EXISTS capacity_cooldowns (
+                    provider TEXT NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    cooldown_until TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (provider, endpoint)
+                );
+                CREATE TABLE IF NOT EXISTS capacity_cooldown_events (
+                    provider TEXT NOT NULL,
+                    endpoint TEXT NOT NULL,
+                    cooldown_until TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS canonical_entity_history (
                     sequence INTEGER PRIMARY KEY AUTOINCREMENT,
                     digest TEXT NOT NULL UNIQUE,
@@ -700,6 +1306,8 @@ class CandidateRegistryRepository:
                     conflicts TEXT NOT NULL,
                     related_candidate_ids TEXT NOT NULL,
                     evaluated_at TEXT NOT NULL,
+                    policy_version TEXT NOT NULL DEFAULT 'identity-policy-v1',
+                    evidence_fingerprint TEXT NOT NULL DEFAULT '',
                     FOREIGN KEY(candidate_id) REFERENCES candidates(candidate_id)
                 );
                 CREATE INDEX IF NOT EXISTS candidates_status_idx ON candidates(lifecycle_status);
@@ -714,6 +1322,24 @@ class CandidateRegistryRepository:
                 CREATE INDEX IF NOT EXISTS conflicts_candidate_idx ON conflicts(candidate_id);
                 CREATE INDEX IF NOT EXISTS identity_outcome_idx ON identity_results(outcome);
                 """)
+            columns = {str(row["name"]) for row in conn.execute("PRAGMA table_info(identity_results)").fetchall()}
+            if "policy_version" not in columns:
+                conn.execute(
+                    "ALTER TABLE identity_results ADD COLUMN policy_version TEXT NOT NULL DEFAULT 'identity-policy-v1'"
+                )
+            if "evidence_fingerprint" not in columns:
+                conn.execute("ALTER TABLE identity_results ADD COLUMN evidence_fingerprint TEXT NOT NULL DEFAULT ''")
+            capacity_columns = {
+                str(row["name"]) for row in conn.execute("PRAGMA table_info(capacity_requests)").fetchall()
+            }
+            if "quota_key" not in capacity_columns:
+                conn.execute("ALTER TABLE capacity_requests ADD COLUMN quota_key TEXT NOT NULL DEFAULT ''")
+                conn.execute(
+                    "UPDATE capacity_requests SET quota_key = provider || ':' || endpoint WHERE quota_key = ''"
+                )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS capacity_requests_quota_idx ON capacity_requests (quota_key, attempted_at)"
+            )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -793,9 +1419,23 @@ class CandidateRegistryRepository:
                 source_ids=excluded.source_ids,
                 alias_count=excluded.alias_count,
                 identifier_count=excluded.identifier_count,
-                identity_resolution_status=excluded.identity_resolution_status,
-                queue_status=excluded.queue_status,
-                screening_status=excluded.screening_status,
+                identity_resolution_status=CASE
+                    WHEN excluded.identity_resolution_status = 'not_resolved'
+                    AND candidates.identity_resolution_status != 'not_resolved'
+                    THEN candidates.identity_resolution_status
+                    ELSE excluded.identity_resolution_status
+                END,
+                queue_status=CASE
+                    WHEN excluded.queue_status = 'not_queued' AND candidates.queue_status != 'not_queued'
+                    THEN candidates.queue_status
+                    ELSE excluded.queue_status
+                END,
+                screening_status=CASE
+                    WHEN excluded.screening_status = 'not_screened'
+                    AND candidates.screening_status != 'not_screened'
+                    THEN candidates.screening_status
+                    ELSE excluded.screening_status
+                END,
                 intrinsic_value_status=excluded.intrinsic_value_status,
                 competition_status=excluded.competition_status,
                 network_effect_status=excluded.network_effect_status,
@@ -997,9 +1637,17 @@ def _with_candidate_id(candidate: CandidateRecord, candidate_id: str) -> Candida
 
 
 def _merge_metadata(previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(previous)
-    for key, value in current.items():
+    merged = normalize_identity_disagreements(previous)
+    refreshed = normalize_identity_disagreements(current)
+    if "market_evidence_provider" in refreshed:
+        for key in MARKET_SELECTION_METADATA_KEYS:
+            if key not in refreshed:
+                merged.pop(key, None)
+    for key, value in refreshed.items():
         if value in (None, "", (), []):
+            continue
+        if key in REFRESHABLE_DISCOVERY_METADATA_KEYS:
+            merged[key] = value
             continue
         if key not in merged or merged[key] in (None, "", (), []):
             merged[key] = value
@@ -1062,6 +1710,7 @@ def _queue_entry_from_row(row: sqlite3.Row) -> CandidateQueueEntry:
 
 
 def _identity_from_row(row: sqlite3.Row) -> CandidateIdentity:
+    columns = dict(zip(row.keys(), tuple(row), strict=True))
     return CandidateIdentity(
         candidate_id=str(row["candidate_id"]),
         outcome=str(row["outcome"]),  # type: ignore[arg-type]
@@ -1074,6 +1723,8 @@ def _identity_from_row(row: sqlite3.Row) -> CandidateIdentity:
         conflicts=tuple(_loads(row["conflicts"])),
         related_candidate_ids=tuple(_loads(row["related_candidate_ids"])),
         evaluated_at=_parse_dt(str(row["evaluated_at"])),
+        policy_version=str(columns.get("policy_version", "identity-policy-v1")),
+        evidence_fingerprint=str(columns.get("evidence_fingerprint", "")),
     )
 
 

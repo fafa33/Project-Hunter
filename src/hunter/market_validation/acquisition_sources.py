@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal, localcontext
+from pathlib import Path
+from typing import Any
 
 from hunter.acquisition.models import EvidenceValidation, NormalizedEvidence
 from hunter.acquisition.repositories import InMemoryAcquisitionRepository
@@ -11,15 +14,27 @@ from hunter.economic.models import EconomicEdge, EconomicGraphMetrics
 from hunter.economic.repository import EconomicGraphRepository
 from hunter.graph.models import TechnologyEdge, TechnologyGraphMetrics
 from hunter.graph.repository import TechnologyGraphRepository
+from hunter.historical_acquisition.repository import HistoricalEvidenceRepository
+from hunter.historical_acquisition.usd_valuation import HistoricalUsdValuator, UsdValuation
 from hunter.jsonl_contract import JsonlRecord
 from hunter.macro import MacroRepository, MacroSnapshot
 from hunter.market_validation.models import EngineValidationSource, Scalar
 from hunter.narrative.provider import NARRATIVE_ENGINES, NARRATIVE_METRIC
+from hunter.onchain.configuration import OnChainConfig, load_onchain_config
+from hunter.onchain.evidence import EvidenceTrust, verified_capital_flow_rows, verified_swap_rows
+from hunter.onchain.models import RawOnChainObservation
+from hunter.onchain.repository import OnChainRepository
+from hunter.onchain.wallet_performance import (
+    FIFO_POLICY,
+    WalletPerformance,
+    signed_consideration_valuation,
+    wallet_performance_from_swaps,
+)
 from hunter.scenario import SCENARIO_ENGINES, ScenarioRepository
 from hunter.scenario.models import ScenarioImpact
 from hunter.timing.models import TimingAssessment
 from hunter.timing.repository import TIMING_JSONL_SCHEMA, TimingRepository, timing_assessment_from_payload
-from hunter.whale import WHALE_ENGINE_TARGETS, WhaleRepository, WhaleSnapshot
+from hunter.whale import WhaleRepository, WhaleSnapshot
 
 GRAPH_ENGINES: tuple[str, ...] = (
     "technology_necessity",
@@ -64,7 +79,9 @@ def acquisition_engine_sources(
     repository: InMemoryAcquisitionRepository,
     *,
     as_of: datetime | None = None,
+    usd_valuator: Callable[[RawOnChainObservation], UsdValuation] | None = None,
 ) -> dict[str, tuple[EngineValidationSource, ...]]:
+    resolved_usd_valuator = usd_valuator or _default_usd_valuator()
     evidence_by_project = _latest_valid_evidence(repository)
     sources: dict[str, list[EngineValidationSource]] = defaultdict(list)
     for project_id, evidence_by_key in evidence_by_project.items():
@@ -88,10 +105,20 @@ def acquisition_engine_sources(
     if hasattr(repository, "root"):
         timing_repository = TimingRepository()
         macro_sources = _macro_engine_sources(as_of=as_of)
-        whale_sources = _whale_engine_sources(as_of=as_of)
+        capital_rows = OnChainRepository().raw()
         for project_id in evidence_by_project:
             sources[project_id].extend(macro_sources)
-            sources[project_id].extend(whale_sources)
+            sources[project_id].extend(_whale_engine_sources(as_of=as_of, project_id=project_id))
+            contextual = _capital_whale_context(
+                project_id, capital_rows, as_of=as_of, usd_valuator=resolved_usd_valuator
+            )
+            if contextual is not None:
+                sources[project_id].append(contextual)
+            swap_context = _swap_wallet_context(
+                project_id, capital_rows, as_of=as_of, usd_valuator=resolved_usd_valuator
+            )
+            if swap_context is not None:
+                sources[project_id].append(swap_context)
         for project_id, graph_sources in _graph_engine_sources(as_of=as_of).items():
             sources[project_id].extend(graph_sources)
         for project_id, economic_sources in _economic_graph_engine_sources(as_of=as_of).items():
@@ -159,11 +186,257 @@ def _macro_score(engine: str, snapshot: MacroSnapshot) -> float:
     )
 
 
-def _whale_engine_sources(*, as_of: datetime | None) -> tuple[EngineValidationSource, ...]:
+def _whale_engine_sources(*, as_of: datetime | None, project_id: str | None = None) -> Sequence[EngineValidationSource]:
+    # Aggregate derivatives evidence is market context, not project wallet attribution.
+    # Until an authoritative project-wallet mapping exists, do not score it as whale evidence.
     snapshot = WhaleRepository().latest_snapshot()
-    if snapshot is None or not snapshot.evidence:
-        return ()
-    return tuple(_whale_source(engine, snapshot, snapshot.generated_at) for engine in WHALE_ENGINE_TARGETS)
+    cutoff = as_of or datetime.now(UTC)
+    if snapshot is None or not snapshot.evidence or not cutoff - timedelta(hours=24) <= snapshot.generated_at <= cutoff:
+        return []
+    if any(
+        item.validation_status != "VALID"
+        or not cutoff - timedelta(hours=24) <= item.metric.timestamp <= cutoff
+        or item.metric.retrieval_time > cutoff
+        for item in snapshot.evidence
+    ):
+        return []
+    # Preserve market context for explainability without contributing a project score.
+    return [
+        EngineValidationSource(
+            engine="whale_intelligence",
+            score=0.0,
+            confidence=0.0,
+            timestamp=snapshot.generated_at,
+            freshness=snapshot.freshness,
+            source_record_ids=tuple(
+                f"{item.metric.provider}:{item.metric.asset}:{item.metric.name}" for item in snapshot.evidence
+            ),
+            evidence_ids=tuple(item.evidence_id for item in snapshot.evidence),
+            repository_ids=tuple(item.repository_id for item in snapshot.evidence),
+            source="whale-market-context",
+            collector="whale-repository",
+            validation_status="PARTIAL",
+            status="UNAVAILABLE",
+            missing_fields=("project_wallet_attribution",),
+            warnings=("market_context_not_project_whale_signal",),
+            raw_input_metrics=dict(snapshot.raw_metrics),
+        ),
+    ]
+
+
+def _capital_whale_context(
+    project_id: str,
+    rows: tuple[dict[str, object], ...],
+    *,
+    as_of: datetime | None,
+    config: OnChainConfig | None = None,
+    repository: Any | None = None,
+    trust: EvidenceTrust | None = None,
+    usd_valuator: Callable[[RawOnChainObservation], UsdValuation] | None = None,
+) -> EngineValidationSource | None:
+    cutoff = as_of or datetime.now(UTC)
+    verified = verified_capital_flow_rows(
+        project_id,
+        rows,
+        config=config,
+        repository=repository,
+        trust=trust,
+        as_of=cutoff,
+    )
+    accepted = {row.evidence_id: row.block_timestamp for row in verified}
+    if not accepted:
+        return None
+    ids = tuple(sorted(accepted))
+    valuations = tuple(usd_valuator(row) for row in verified) if usd_valuator is not None else ()
+    usd_metrics = capital_flow_usd_metrics(valuations)
+    missing_fields = ["wallet_attribution", "trade_direction"]
+    if not usd_metrics:
+        missing_fields.append("economic_value")
+    warnings = ["unattributed_transfer_not_whale_signal"]
+    if usd_metrics:
+        warnings.append("usd_valuation_context_not_whale_signal")
+    return EngineValidationSource(
+        engine="whale_intelligence",
+        score=0.0,
+        confidence=0.0,
+        timestamp=max(accepted.values()),
+        freshness=0.0,
+        source_record_ids=ids,
+        evidence_ids=ids,
+        repository_ids=ids,
+        source="capital-flow-context",
+        collector="onchain-repository",
+        validation_status="PARTIAL",
+        status="UNAVAILABLE",
+        missing_fields=tuple(missing_fields),
+        warnings=tuple(warnings),
+        raw_input_metrics={"context_transfer_count": len(ids), **usd_metrics},
+    )
+
+
+def normalized_freshness(
+    timestamp: datetime,
+    cutoff: datetime,
+    horizon: timedelta = timedelta(hours=24),
+) -> float:
+    horizon_seconds = horizon.total_seconds()
+    if horizon_seconds <= 0:
+        return 0.0
+    age_seconds = (cutoff - timestamp).total_seconds()
+    if age_seconds <= 0:
+        return 1.0
+    return max(0.0, 1.0 - age_seconds / horizon_seconds)
+
+
+def _performance_metrics(performance: tuple[WalletPerformance, ...]) -> dict[str, Scalar]:
+    fields: dict[str, Scalar] = {
+        "coverage": None,
+        "sample_size": 0,
+        "win_rate": None,
+        "cost_basis_usd": None,
+        "realized_pnl_usd": None,
+        "realized_return": None,
+    }
+    if not performance or any(item.status != "AVAILABLE" for item in performance):
+        return fields
+    with localcontext() as context:
+        context.prec = 28
+        sample_size = sum(item.sample_size for item in performance)
+        total_cost = sum((item.cost_basis_usd for item in performance if item.cost_basis_usd is not None), Decimal(0))
+        total_realized = sum(
+            (item.realized_pnl_usd for item in performance if item.realized_pnl_usd is not None), Decimal(0)
+        )
+        weighted_win_rate = sum(
+            (
+                item.win_rate * item.sample_size
+                for item in performance
+                if item.win_rate is not None and item.sample_size
+            ),
+            Decimal(0),
+        )
+        coverages = tuple(item.coverage for item in performance if item.coverage is not None)
+        fields.update(
+            {
+                "coverage": _scalar_decimal(min(coverages)) if len(coverages) == len(performance) else None,
+                "sample_size": sample_size,
+                "win_rate": _scalar_decimal(weighted_win_rate / sample_size) if sample_size else None,
+                "cost_basis_usd": _scalar_decimal(total_cost),
+                "realized_pnl_usd": _scalar_decimal(total_realized),
+                "realized_return": _scalar_decimal(total_realized / total_cost) if total_cost else None,
+                "target_asset_contracts": ",".join(
+                    sorted(item.target_asset_contract for item in performance if item.target_asset_contract)
+                ),
+            }
+        )
+    return fields
+
+
+def _swap_wallet_context(
+    project_id: str,
+    rows: Sequence[Mapping[str, object] | RawOnChainObservation],
+    *,
+    as_of: datetime | None,
+    config: OnChainConfig | None = None,
+    repository: Any | None = None,
+    trust: EvidenceTrust | None = None,
+    usd_valuator: Callable[[RawOnChainObservation], UsdValuation] | None = None,
+) -> EngineValidationSource | None:
+    cutoff = as_of or datetime.now(UTC)
+    verified = verified_swap_rows(
+        project_id,
+        rows,
+        config=config,
+        repository=repository,
+        trust=trust,
+        as_of=cutoff,
+    )
+    if not verified:
+        return None
+    valuations = tuple(usd_valuator(row) for row in verified) if usd_valuator is not None else ()
+    consideration_by_id = (
+        {
+            row.evidence_id: signed_consideration_valuation(row, usd_valuator, config or load_onchain_config())
+            for row in verified
+        }
+        if usd_valuator is not None
+        else {}
+    )
+    performance = wallet_performance_from_swaps(verified, consideration_by_id, as_of=cutoff)
+    usd_metrics = capital_flow_usd_metrics(valuations)
+    ids = tuple(sorted(row.evidence_id for row in verified))
+    evidence_timestamps = tuple(row.block_timestamp for row in verified)
+    available = bool(performance) and all(item.status == "AVAILABLE" for item in performance) and bool(usd_metrics)
+    metrics: dict[str, Scalar] = {
+        "verified_swap_count": len(ids),
+        "fifo_policy": FIFO_POLICY,
+        "net_pnl_usd": "UNAVAILABLE",
+        **_performance_metrics(performance),
+        **usd_metrics,
+    }
+    missing_fields = ("fees", "unrealized_pnl", "net_pnl_usd")
+    if not usd_metrics:
+        missing_fields = (*missing_fields, "economic_value")
+    warnings = ("net_pnl_unavailable_fees_not_evidenced", "gross_realized_performance_only")
+    return EngineValidationSource(
+        engine="whale_intelligence",
+        score=0.0,
+        confidence=0.5 if available else 0.0,
+        timestamp=max(evidence_timestamps),
+        freshness=normalized_freshness(max(evidence_timestamps), cutoff),
+        source_record_ids=ids,
+        evidence_ids=ids,
+        repository_ids=ids,
+        source="swap-wallet-context",
+        collector="onchain-repository",
+        validation_status="PARTIAL",
+        status="AVAILABLE" if available else "UNAVAILABLE",
+        missing_fields=missing_fields,
+        warnings=warnings,
+        raw_input_metrics=metrics,
+    )
+
+
+def _scalar_decimal(value: Decimal | None) -> str | None:
+    return None if value is None else str(value)
+
+
+def capital_flow_usd_metrics(valuations: tuple[UsdValuation, ...]) -> dict[str, Scalar]:
+    available = tuple(
+        item
+        for item in valuations
+        if item.status == "AVAILABLE" and item.value_usd is not None and item.price_usd is not None
+    )
+    if not available:
+        return {}
+    with localcontext() as context:
+        context.prec = max(
+            28,
+            *(len(item.value_usd.as_tuple().digits) for item in available),
+            *(len(item.price_usd.as_tuple().digits) for item in available),
+        )
+        total = sum((item.value_usd for item in available), Decimal(0))
+    effective_values = tuple(item.effective_at for item in available if item.effective_at is not None)
+    retrieval_values = tuple(item.retrieval_at for item in available if item.retrieval_at is not None)
+    source_ids = tuple(sorted({item.source_record_id for item in available if item.source_record_id}))
+    return {
+        "economic_value_usd": str(total),
+        "usd_price": str(available[-1].price_usd),
+        "usd_effective_at": max(effective_values).isoformat() if effective_values else "",
+        "usd_retrieval_at": max(retrieval_values).isoformat() if retrieval_values else "",
+        "usd_source_record_ids": ",".join(source_ids),
+        "usd_freshness_seconds": max(
+            (item.freshness_seconds or 0 for item in available),
+            default=0,
+        ),
+        "usd_provenance": "coingecko-historical-market-chart",
+    }
+
+
+def _default_usd_valuator() -> Callable[[RawOnChainObservation], UsdValuation] | None:
+    path = Path("data/historical_acquisition/raw.jsonl")
+    if not path.exists():
+        return None
+    return HistoricalUsdValuator(load_onchain_config(), HistoricalEvidenceRepository(path.parent)).value
 
 
 def _whale_source(engine: str, snapshot: WhaleSnapshot, timestamp: datetime) -> EngineValidationSource:

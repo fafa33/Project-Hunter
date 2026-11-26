@@ -328,7 +328,8 @@ jobs:
   enabled: true
   job_kind: ingest_project_data
   schedule:
-    type: every_6_hours
+    type: cron
+    expression: '*/15 * * * *'
   timezone: UTC
   target:
     type: operation
@@ -349,12 +350,49 @@ jobs:
   metadata:
     operation: discovery_market_run
     records_metrics: true
+    free_capacity_observation_window_hours: 24
+    discovery_mode: incremental
+    budget_aware_resumable: true
+    fair_network_rotation: true
+    no_parallel_daemon: true
+    indefinite_operation: true
+- job_id: discovery-identity-resolution
+  name: Bounded candidate identity resolution
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: cron
+    expression: 5 */6 * * *
+  timezone: UTC
+  target:
+    type: operation
+    id: discovery_identity_resolve
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 3600
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: discovery_identity_resolve
+    records_metrics: true
+    evidence_gated: true
+    bounded_fair_batch: true
+    no_parallel_daemon: true
 - job_id: discovery-candidate-screening
   name: Discovery candidate screening
   enabled: true
   job_kind: ingest_project_data
   schedule:
-    type: every_6_hours
+    type: cron
+    expression: 10 */6 * * *
   timezone: UTC
   target:
     type: operation
@@ -380,7 +418,8 @@ jobs:
   enabled: true
   job_kind: ingest_project_data
   schedule:
-    type: every_6_hours
+    type: cron
+    expression: 15 */6 * * *
   timezone: UTC
   target:
     type: operation
@@ -453,3 +492,33 @@ jobs:
   metadata:
     operation: real_market_validation_monitor
     records_metrics: true
+- job_id: discovery-market-run-backfill
+  name: Bounded discovery market backfill
+  enabled: true
+  job_kind: ingest_project_data
+  schedule:
+    type: cron
+    expression: 0 * * * *
+  timezone: UTC
+  target:
+    type: operation
+    id: discovery_market_run_backfill
+  run_type: scheduled
+  pipeline_options:
+    run_intelligence: false
+    run_fusion: false
+    run_opportunity_timing: false
+    run_investment_committee: false
+  persistence_policy: atomic
+  as_of_policy:
+    mode: current
+  timeout_seconds: 3600
+  concurrency_policy:
+    prevent_overlapping: true
+    scope: job_target
+  metadata:
+    operation: discovery_market_run_backfill
+    records_metrics: true
+    discovery_mode: backfill
+    bounded_contracts_per_cycle: 5
+    does_not_starve_incremental: true

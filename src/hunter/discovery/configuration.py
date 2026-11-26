@@ -16,6 +16,8 @@ class DiscoveryProviderConfig:
     timeout_seconds: int = 30
     max_attempts: int = 3
     backoff_seconds: float = 0.5
+    max_requests_per_cycle: int = 8
+    min_interval_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -23,9 +25,14 @@ class DiscoveryConfig:
     registry_path: str = "data/discovery/runtime/candidates.sqlite"
     market_validation_config: str = "configs/market_validation.yaml"
     project_identifiers_config: str = "configs/project_identifiers.yaml"
+    capacity_inventory_path: str = "configs/discovery_capacity.yaml"
+    discovery_mode: str = "incremental"
     seed_market_validation_universe: bool = True
     minimum_screening_identifiers: int = 1
     providers: dict[str, DiscoveryProviderConfig] | None = None
+
+    def normalized_mode(self) -> str:
+        return "backfill" if self.discovery_mode.strip().lower() == "backfill" else "incremental"
 
     def provider(self, name: str) -> DiscoveryProviderConfig:
         return (self.providers or {}).get(name, DiscoveryProviderConfig(enabled=False))
@@ -48,6 +55,8 @@ def load_discovery_config(path: str | Path = "configs/discovery.yaml") -> Discov
         registry_path=str(payload.get("registry_path", "data/discovery/runtime/candidates.sqlite")),
         market_validation_config=str(payload.get("market_validation_config", "configs/market_validation.yaml")),
         project_identifiers_config=str(payload.get("project_identifiers_config", "configs/project_identifiers.yaml")),
+        capacity_inventory_path=str(payload.get("capacity_inventory_path", "configs/discovery_capacity.yaml")),
+        discovery_mode=str(payload.get("discovery_mode", "incremental")),
         seed_market_validation_universe=bool(payload.get("seed_market_validation_universe", True)),
         minimum_screening_identifiers=int(payload.get("minimum_screening_identifiers", 1)),
         providers=providers,
@@ -64,6 +73,8 @@ def discovery_config_from_mapping(payload: dict[str, Any]) -> DiscoveryConfig:
         registry_path=str(payload.get("registry_path", "data/discovery/runtime/candidates.sqlite")),
         market_validation_config=str(payload.get("market_validation_config", "configs/market_validation.yaml")),
         project_identifiers_config=str(payload.get("project_identifiers_config", "configs/project_identifiers.yaml")),
+        capacity_inventory_path=str(payload.get("capacity_inventory_path", "configs/discovery_capacity.yaml")),
+        discovery_mode=str(payload.get("discovery_mode", "incremental")),
         seed_market_validation_universe=bool(payload.get("seed_market_validation_universe", True)),
         minimum_screening_identifiers=int(payload.get("minimum_screening_identifiers", 1)),
         providers=providers,
@@ -79,6 +90,12 @@ def _provider_config(name: str, raw: dict[str, Any]) -> DiscoveryProviderConfig:
         timeout_seconds=int(os.getenv(f"{env_prefix}_TIMEOUT_SECONDS", str(raw.get("timeout_seconds", 30)))),
         max_attempts=int(os.getenv(f"{env_prefix}_MAX_ATTEMPTS", str(raw.get("max_attempts", 3)))),
         backoff_seconds=float(os.getenv(f"{env_prefix}_BACKOFF_SECONDS", str(raw.get("backoff_seconds", 0.5)))),
+        max_requests_per_cycle=int(
+            os.getenv(f"{env_prefix}_MAX_REQUESTS_PER_CYCLE", str(raw.get("max_requests_per_cycle", 8)))
+        ),
+        min_interval_seconds=float(
+            os.getenv(f"{env_prefix}_MIN_INTERVAL_SECONDS", str(raw.get("min_interval_seconds", 0.0)))
+        ),
     )
 
 

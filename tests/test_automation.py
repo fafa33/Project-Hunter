@@ -357,7 +357,7 @@ jobs:
     assert main(["--config", str(config), "automation", "list-jobs"]) == 0
     assert main(["--config", str(config), "automation", "show-job", "job-cli"]) == 0
     assert main(["--config", str(config), "automation", "status"]) == 0
-    assert main(["--config", str(config), "automation", "start"]) == 0
+    assert main(["--config", str(config), "automation", "start", "--max-iterations", "1"]) == 0
     assert main(["--config", str(config), "automation", "cancel", "run-1"]) == 2
     assert main(["--config", str(config), "automation", "run-once", "job-cli"]) == 0
 

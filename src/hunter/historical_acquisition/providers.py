@@ -5,7 +5,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
@@ -925,9 +925,9 @@ def _market_chart_points(payload: dict[str, object]) -> dict[datetime, dict[str,
 
 
 def _closest_market_point(
-    points: dict[datetime, dict[str, float]],
+    points: Mapping[datetime, dict[str, Any]],
     target: datetime,
-) -> tuple[datetime, dict[str, float]] | None:
+) -> tuple[datetime, dict[str, Any]] | None:
     candidates = tuple((timestamp, values) for timestamp, values in points.items() if timestamp <= target)
     if not candidates:
         return None
