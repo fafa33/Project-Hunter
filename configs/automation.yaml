@@ -351,8 +351,7 @@ jobs:
     operation: discovery_market_run
     records_metrics: true
     free_capacity_observation_window_hours: 24
-    discovery_modes:
-    - incremental
+    discovery_mode: incremental
     budget_aware_resumable: true
     fair_network_rotation: true
     no_parallel_daemon: true
@@ -520,7 +519,6 @@ jobs:
   metadata:
     operation: discovery_market_run_backfill
     records_metrics: true
-    discovery_modes:
-    - backfill
+    discovery_mode: backfill
     bounded_contracts_per_cycle: 5
     does_not_starve_incremental: true

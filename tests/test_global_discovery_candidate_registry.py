@@ -434,12 +434,14 @@ def test_dexscreener_batch_provenance_is_not_identity_evidence() -> None:
         "provider_disagreements": {},
         "market_evidence_url": "https://api.dexscreener.test/tokens/v1/1/aaa",
         "batch_size": 1,
+        "discovery_mode": "network_pool_enumeration",
         "batch_index": 0,
         "market_evidence_observed_at": "2026-11-26T00:00:00+00:00",
     }
     current = {
         "market_evidence_url": "https://api.dexscreener.test/tokens/v1/1/aaa,bbb",
         "batch_size": 2,
+        "discovery_mode": "global_market_enumeration",
         "batch_index": 1,
         "market_evidence_observed_at": "2026-11-26T01:00:00+00:00",
     }
@@ -464,10 +466,30 @@ def test_dexscreener_batch_provenance_is_not_identity_evidence() -> None:
     refreshed_candidate = replace(previous_candidate, metadata=refreshed)
 
     assert refreshed["market_evidence_url"] == current["market_evidence_url"]
+    assert refreshed["discovery_mode"] == "global_market_enumeration"
     assert refreshed["batch_size"] == 2
     assert refreshed["batch_index"] == 1
     assert refreshed.get("provider_disagreements", {}) == {}
     assert identity_evidence_fingerprint(previous_candidate) == identity_evidence_fingerprint(refreshed_candidate)
+
+    from hunter.discovery.identity import _identity_conflicts
+
+    legacy = replace(
+        previous_candidate,
+        metadata={**previous, "provider_disagreements": {"discovery_mode": ("network", "global")}},
+    )
+    assert _identity_conflicts(legacy, ()) == ()
+    assert identity_evidence_fingerprint(legacy) == identity_evidence_fingerprint(previous_candidate)
+    assert _merge_metadata(legacy.metadata, current).get("provider_disagreements", {}) == {}
+    mixed = replace(
+        legacy,
+        metadata={
+            **legacy.metadata,
+            "provider_disagreements": {"discovery_mode": ("network", "global"), "symbol": ("A", "B")},
+        },
+    )
+    assert _identity_conflicts(mixed, ()) == ("provider_metadata_disagreement",)
+    assert _merge_metadata(mixed.metadata, current)["provider_disagreements"] == {"symbol": ("A", "B")}
 
 
 def test_identity_resolution_rejected_and_unresolved_outcomes(tmp_path) -> None:
@@ -1777,7 +1799,7 @@ def test_canonical_automation_config_carries_free_capacity_observation_metadata(
     assert job is not None and backfill is not None
     metadata = job.get("metadata") or {}
     assert metadata.get("free_capacity_observation_window_hours") == 24
-    assert metadata.get("discovery_modes") == ["incremental"]
+    assert metadata.get("discovery_mode") == "incremental"
     assert metadata.get("no_parallel_daemon") is True
     assert metadata.get("indefinite_operation") is True
     assert (job.get("schedule") or {}).get("expression") == "*/15 * * * *"
@@ -2018,6 +2040,7 @@ def test_read_only_discovery_executor_isolated_from_privileged_operations(monkey
         ("discovery", "discovery_market_run_backfill"),
         ("discovery", "discovery_queue_refresh"),
         ("discovery", "discovery_screen"),
+        ("discovery", "discovery_source_health"),
         ("pipeline", "coingecko_market_sync"),
     ]
 

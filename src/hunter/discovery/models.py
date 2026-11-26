@@ -40,8 +40,22 @@ VOLATILE_IDENTITY_METADATA_KEYS = frozenset(
         "batch_endpoint",
         "batch_size",
         "batch_index",
+        "discovery_mode",
     }
 )
+
+
+def normalize_identity_disagreements(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Exclude historical observation-only disagreements, preserving genuine conflicts."""
+    normalized = dict(metadata)
+    conflicts = normalized.get("provider_disagreements")
+    if isinstance(conflicts, dict):
+        normalized["provider_disagreements"] = {
+            key: value for key, value in conflicts.items() if key not in VOLATILE_IDENTITY_METADATA_KEYS
+        }
+    return normalized
+
+
 REFRESHABLE_DISCOVERY_METADATA_KEYS = VOLATILE_IDENTITY_METADATA_KEYS | frozenset(
     {
         "liquidity_usd",

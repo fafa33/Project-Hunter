@@ -1502,6 +1502,26 @@
       "guard": "Keep target USD metrics separate from wallet performance, resolve buy input and sell output consideration contracts from signed evidence to configured tracked assets in the onchain boundary, and fail closed when consideration valuation is unavailable.",
       "test": "tests/test_onchain_swap_wallet_evidence.py::test_market_validation_swap_wallet_context_uses_identity_and_usd_integration; tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_context_does_not_substitute_target_notional_for_consideration",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-166",
+      "class": "cross-provider-discovery-mode-provenance",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868ZcTb at 01d78d3ee8ec9c4c85527c56a5119bea418ce35e; reproduced RED then verified GREEN locally. Historical false conflicts reproduced RED in Gateway job job_01M8CCZH5P008KPYJ2D7VRHK4H; extended regression verifies historical normalization, fingerprint stability and mixed genuine conflicts; 99 focused tests passed locally on 2026-11-26. Published exact-head verification pending.",
+      "classification": "systemic",
+      "guard_boundary": "src/hunter/discovery/repository.py::_merge_metadata",
+      "guard": "Treat discovery mode as volatile observation provenance, not identity evidence. Normalize historical volatile provider disagreements at merge, identity conflict evaluation and fingerprint boundaries; preserve genuine disagreements.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_dexscreener_batch_provenance_is_not_identity_evidence",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-167",
+      "class": "discovery-installer-startup-parity",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868ZcTy at 01d78d3ee8ec9c4c85527c56a5119bea418ce35e; reproduced RED then verified GREEN locally.",
+      "classification": "systemic",
+      "guard_boundary": "src/hunter/discovery/automation.py::require_discovery_automation",
+      "guard": "Share discovery job definitions across installers, preserve scalar metadata and read-only operation routing, and verify installer output at startup.",
+      "test": "tests/test_data_ops.py::test_data_ops_installer_satisfies_discovery_startup_guard",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -3561,22 +3581,27 @@
           "src/hunter/cli.py",
           "src/hunter/discovery/automation.py",
           "src/hunter/discovery/__init__.py",
-          "tests/test_discovery_identity_handoff.py"
+          "tests/test_discovery_identity_handoff.py",
+          "src/hunter/data_ops.py",
+          "tests/test_data_ops.py",
+          "configs/automation.yaml"
         ],
         "rationale": "These paths assemble and start automated jobs. A partial job set can run indefinitely while silently skipping identity resolution and leaving unresolved candidates without primary chain identity."
       },
       "prevention": {
-        "mechanism": "Validate the required discovery job set before scheduler.run_loop, return no-op only for a completely empty discovery job set, and regress missing/disabled identity resolution at the CLI automation boundary.",
+        "mechanism": "Validate the required discovery job set before scheduler.run_loop, return no-op only for a completely empty discovery job set, and regress missing/disabled identity resolution at the CLI automation boundary. Share discovery job definitions across installers, preserve scalar metadata and read-only operation routing, and verify installer output at startup.",
         "boundary": "hosted-gate",
         "guard_reference": "src/hunter/discovery/automation.py::require_discovery_automation"
       },
       "regression_evidence": [
         "tests/test_discovery_identity_handoff.py::test_V_partial_discovery_automation_fails_closed",
-        "tests/test_engineering_context_authority.py::test_issue_587_identity_and_usd_evidence_families_reach_spm_context"
+        "tests/test_engineering_context_authority.py::test_issue_587_identity_and_usd_evidence_families_reach_spm_context",
+        "tests/test_data_ops.py::test_data_ops_installer_satisfies_discovery_startup_guard"
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "Issue #587 live scheduler evidence at deployed head 87f87d6a3ab845c9428984a4c893cb5667883d09: the deployed automation and discovery configs omitted discovery-identity-resolution, leaving zero identity_results while unresolved candidates accumulated."
+        "Issue #587 live scheduler evidence at deployed head 87f87d6a3ab845c9428984a4c893cb5667883d09: the deployed automation and discovery configs omitted discovery-identity-resolution, leaving zero identity_results while unresolved candidates accumulated.",
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868ZcTy at 01d78d3ee8ec9c4c85527c56a5119bea418ce35e; reproduced RED then verified GREEN locally."
       ]
     },
     {
@@ -3772,17 +3797,19 @@
         "rationale": "These paths merge repeated provider syncs into candidate registry identity evidence. Treating refreshable market observations as disagreements blocks handoff after normal acquisition updates."
       },
       "prevention": {
-        "mechanism": "Define shared volatile and refreshable metadata keys, overwrite those keys during merge, exclude only volatile keys from fingerprints, and preserve provider disagreement recording for all other metadata.",
+        "mechanism": "Define shared volatile and refreshable metadata keys, overwrite those keys during merge, exclude only volatile keys from fingerprints, and preserve provider disagreement recording for all other metadata. Treat discovery mode as volatile observation provenance, not identity evidence. Normalize historical volatile provider disagreements at merge, identity conflict evaluation and fingerprint boundaries; preserve genuine disagreements.",
         "boundary": "hosted-gate",
         "guard_reference": "src/hunter/discovery/repository.py::_merge_metadata"
       },
       "regression_evidence": [
         "tests/test_global_discovery_candidate_registry.py::test_volatile_discovery_metadata_refreshes_without_identity_conflict",
-        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context",
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_batch_provenance_is_not_identity_evidence"
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQi comment PRRC_kwDOTRDHr8678AAAABF-oR4: volatile market evidence refresh must not create identity conflicts."
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQi comment PRRC_kwDOTRDHr8678AAAABF-oR4: volatile market evidence refresh must not create identity conflicts.",
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868ZcTb at 01d78d3ee8ec9c4c85527c56a5119bea418ce35e; reproduced RED then verified GREEN locally. Historical false conflicts reproduced RED in Gateway job job_01M8CCZH5P008KPYJ2D7VRHK4H; extended regression verifies historical normalization, fingerprint stability and mixed genuine conflicts; 99 focused tests passed locally on 2026-11-26. Published exact-head verification pending."
       ]
     },
     {

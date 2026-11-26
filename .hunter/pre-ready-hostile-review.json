@@ -2,309 +2,269 @@
   "claims": {
     "acceptance_criteria": [
       {
-        "criterion": "Free-provider capacity is inventoried with explicit provenance and observed consumption is persisted without paid API use.",
-        "evidence": "The current staged remediation changes no provider authorization or billing path, adds no paid API, and uses no credentialed network access. Local RPC budget exhaustion is now a distinct local failure that is not misreported as a provider rate limit or converted into provider cooldown. Focused discovery and onchain regression files pass on the staged tree; hosted exact-head observation remains authoritative and pending.",
+        "criterion": "P0 operational market ingestion and discovery uses real sources with verified freshness, coverage, deduplication and evidence provenance; no fabricated or stale signals.",
+        "evidence": "Issue #587 active product plan line 077 defines this P0. Exact staged tree normalizes cross-provider discovery_mode observation provenance at merge, identity-conflict and fingerprint boundaries while preserving genuine symbol disagreements; tests/test_global_discovery_candidate_registry.py::test_dexscreener_batch_provenance_is_not_identity_evidence passed at the staged tree. Exact target digest 0a13718414521535b72820b9900bd88df379b9c92c41a909a75ae3d51fe242dd.",
         "id": "AC-587-01",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Global discovery uses bounded, resumable free capacity and truthful DexScreener batching without a parallel daemon.",
-        "evidence": "GeckoTerminal scan state is now persisted only after candidate upsert succeeds; the failure-injection regression proves a failed candidate write leaves no scan checkpoint and the retry recovers with candidates persisted. Bounded shared request budgeting and batch provenance guards remain in force and no parallel daemon is introduced.",
+        "criterion": "P0 bounded, resumable and read-only global discovery runs on free capacity with truthful DexScreener batching and without a parallel daemon.",
+        "evidence": "Issue #587 active product plan lines 076-077 define this P0. Scalar discovery_mode metadata in configs/automation.yaml and shared discovery_job_definitions() keep incremental/backfill provenance while installer output satisfies require_discovery_automation(); tests/test_data_ops.py::test_data_ops_installer_satisfies_discovery_startup_guard, test_canonical_automation_config_carries_free_capacity_observation_metadata and test_read_only_discovery_executor_isolated_from_privileged_operations passed at the staged tree.",
         "id": "AC-587-02",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
-        "evidence": "Exact-Decimal FIFO context is derived from the staged amounts and valuations, so buy 1e30 followed by sell 1 then sell 1e30 remains insufficient while selling the exact remaining quantity stays available. Distinct RPC budget exhaustion propagates through all nearby catches without cooldown, and advisory Qwen review of the current diff reported no significant findings but is non-canonical. Hosted exact-head gates remain authoritative.",
+        "criterion": "P1 hidden-opportunity and capital-flow candidates are evidence-bound, with explicit inaccessible or unknown scope and real invalidation conditions.",
+        "evidence": "Issue #587 active product plan line 078 defines this P1. Staged normalization removes only observation-only historical disagreements from identity evaluation and fingerprints, keeping genuine conflicts fail-closed; ECA compile at the exact staged tree includes DFF-075 and DFF-068 with their fail-closed invariants and focused regressions passed.",
         "id": "AC-587-03",
         "verdict": "satisfied"
       },
       {
-        "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "Fresh writer judgement is derived only from the exact staged tree on base a4a9b9e173bb15afaed2c162bda9708e93eb2411, including the seven remediated source/test files and the regenerated review artifact; no prior request claims, findings, reviewer authority, or reviewer verdict are reused. DPM/SPM context compiled from docs/DEFECT_REGISTRY.json through EngineeringContextAuthority for engineering.implement covers 39 staged paths and 44 applicable families with selected_prevention_rules_sha256 05ef145749690d152bcf16712f20a0aa089621b483794da3a644a17316485886. Three new regressions failed RED before the fix and pass GREEN after; 248 affected-file tests pass with Ruff, Black, Mypy, and git diff --check clean. This judgement requests a local signed commit only: no push, no Ready action, no thread resolution, no merge, no deployment, and hosted exact-head gates remain authoritative; Gateway auth 401 blocks publication.",
+        "criterion": "Governed review and publication remain exact-head-bound, fully evidenced and non-merging until explicit owner approval.",
+        "evidence": "Issue #587 non-negotiable rules 1 and 4 and owner checkpoint require exact-head proof and no merge. PR #788 remains Draft at base a4a9b9e173bb15afaed2c162bda9708e93eb2411; this request is regenerated from the exact staged tree with digest 0a13718414521535b72820b9900bd88df379b9c92c41a909a75ae3d51fe242dd, signed by the approved writer channel, and publication is only through scripts/hunter_push.py. No merge, deploy, scheduler or production mutation was performed.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
-      "asset-contract-isolation",
-      "atomic-write",
       "authorization",
-      "batch-provenance",
-      "block-identity",
-      "boundary-token-scan",
       "caller-controlled-time-state",
-      "canonical-chain-alias",
-      "capped-registry-absence",
-      "causal-price-conflict",
-      "causal-price-selection",
-      "checkpoint-ordering",
-      "consideration-valuation",
-      "coverage-denominator",
+      "cross-provider-provenance",
       "cutoff-history",
-      "decimal-precision",
-      "discovery-budget",
-      "discovery-cursor",
-      "execution-budget",
       "fail-closed",
-      "fifo-decimal-context",
-      "fifo-inventory",
-      "freshness-ceiling",
-      "freshness-normalization",
-      "identity-handoff",
-      "inclusive-range-boundary",
-      "independent-advisory-review-noncanonical",
-      "local-budget-exception",
+      "historical-normalization",
+      "identity-fingerprint-stability",
       "malformed-unknown-authority",
-      "market-validation-boundary",
       "monotonicity",
-      "multi-hop-ambiguity",
-      "noncanonical-local-review-evidence",
-      "numeric-precision",
-      "per-log-timestamp",
-      "persistence-failure-injection",
       "persistence-restrictions",
-      "pool-identity",
-      "price-provenance",
-      "provider-cooldown",
-      "receipt-corroboration",
-      "recipient-ownership",
+      "read-only-routing",
       "replay",
       "restart-crash-retry",
-      "router-attribution",
-      "rpc-attempt-accounting",
-      "rpc-budget",
-      "rpc-budget-exhaustion",
-      "shared-execution-budget",
-      "signed-evidence-replay",
-      "staged-tree-freshness",
-      "static-analysis-findings",
+      "scalar-metadata-parity",
+      "scheduler-startup-parity",
       "tamper-resistance",
-      "transaction-snapshot-consistency",
-      "unchanged-identity-refresh",
-      "volatile-metadata-refresh",
-      "wallet-inference"
+      "transaction-snapshot-consistency"
     ],
     "base_ref": "main",
     "base_sha": "a4a9b9e173bb15afaed2c162bda9708e93eb2411",
     "defect_families": [
       {
-        "evidence": "Fresh staged review adds no admission-time authority and trusted temporal checks are unchanged.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-001 with invariant \"Time that decides admission, ordering or cutoff is sampled from trusted repository/runtime authority, never accepted from the caller or sampled before the transaction that it orders.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Atomic signed-pair persistence is untouched by the current staged changes.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-002 with invariant \"A read that validates history and the write that depends on it observe one explicit snapshot; no decision is made across two independently-taken views.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Signed evidence binding and replay guards are untouched by the current staged changes.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-003 with invariant \"A caller-supplied payload cannot select, override or reuse a repository-assigned logical identity, and an authorization bound to one identity is not reusable for another.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "No trust-document schema, signer, or signing-domain authority is changed.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-004 with invariant \"An unknown, absent or partially-declared authority value fails closed; absence is never read as permission and a schema is never satisfied by an incomplete declaration.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Conflict fail-closed persistence remains intact in the staged tree.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-005 with invariant \"A restriction that excludes content from durable persistence cannot be bypassed by nesting that content inside metadata, a prepared artifact, or any other secondary surface.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "GeckoTerminal checkpoint no longer advances when candidate persistence fails, and the fresh retry regression proves restart resumes from the unadvanced state.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-006 with invariant \"Ordering guarantees survive a frozen clock, a process restart and a crash-retry; a repeated or non-advancing external clock never produces a non-monotonic admitted order.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-006",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "No authorization path is changed; this writer judgement mints no reviewer authority.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-007 with invariant \"An authorization binds the exact operation and content it was minted for; it cannot be replayed onto a different operation, a different path, or different resulting content.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "The regenerated request carries only writer claims and no reviewer signature or authority record.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-008 with invariant \"Repository-owned evidence is bound to its own content, so a hand-edited or forged artifact is detectable rather than merely implausible.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Connector provenance behavior is unchanged by the seven staged remediated files.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-009 with invariant \"A channel that is authorized to write is granted a proof it can actually produce, and the proof authenticates the writer rather than restating caller-chosen metadata.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Existing signed writer configuration is used locally and no push is performed.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-010 with invariant \"Every authorized human/writer is one canonical principal. Mutable GitHub login, Git name and explicitly policy-bound emails are aliases of that principal; author and committer independently resolve to the same principal. No consumer may invent its own owner-email equality rule.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "The remediation remains one local layer on the existing branch with no new PR.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-011 with invariant \"A valid multi-commit candidate cannot strand an intermediate commit without admissible evidence, and no manual rewind or force-push is ever required solely to manufacture per-commit evidence.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "This request is regenerated from the fresh staged tree after the three new findings; prior request claims and findings are not reused.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-012 with invariant \"A receipt is the final mutation of the candidate that writes it: any later content change invalidates it, a stale receipt never reaches the remote, and a receipt inherited unchanged from the base branch is never read as a claim about a later candidate.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-012",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "PR #788 remains Draft and no Ready, merge, deployment, or thread resolution is asserted.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-013 with invariant \"A candidate is admitted for review only when exact-head-bound repository-owned state proves the complete base->HEAD range was hostile-reviewed against the governing Issue acceptance criteria and every applicable recurring-defect family, with no unresolved blocking finding.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted publisher and readiness paths are unchanged and no hosted result is asserted.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-014 with invariant \"A hosted prerequisite that is still running publishes pending; only an invalid, absent, untrusted or wrongly-bound proof publishes failure. 'Still running' is decided from observable run state for the exact candidate head, never from the presence of a published status, because a proof that publishes its status last has no status for the whole time it is being produced. A head left pending is re-evaluated when the proof lands, and pending never satisfies admission, readiness or merge. Every trusted proof completion that can move admission from pending to eligible must wake the privileged orchestrator; a status-only refresh is not sufficient. Within a trusted proof publisher, dependency success is not terminal API evidence: bounded observation must obtain a unique terminal job for the exact run and attempt before publication; stale, ambiguous or contradictory evidence never authorizes success.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh EngineeringContextAuthority compile covers 39 staged paths, 44 applicable families, and rules digest 05ef145749690d152bcf16712f20a0aa089621b483794da3a644a17316485886.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-015 with invariant \"A defect family may claim an enforcement stage only when the evidence for that stage exists: a resolvable regression test above 'recorded', a resolvable machine guard above 'regression-tested', and a merge-gate boundary with explicit lifecycle enforcement evidence for 'prevented'.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-015",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Reviewer pool configuration is unchanged and advisory Qwen output carries no authority.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-022 with invariant \"The final Merge Readiness controller must itself fail closed unless a complete exact-head review exists at the current PR head and verifies against trusted PR evidence -- a missing, stale, incomplete, or still-contested review is a hard merge blocker, never a warning. The review authority is an ordered reviewer pool declared by the trusted default branch, and that declaration is what names its members: authority-eligible reviewers are attempted in strict priority order, a reviewer the pool marks triage-only (authority_eligible false) is never review authority however substantive its output, and the deterministic hostile-review guard the pool declares as its last_resort is the last resort. Any reviewer below the primary is admissible only when it records, in machine-checkable fields (reviewer_attempts), that every higher-priority authority-eligible reviewer was actually attempted and exhausted with a recorded reason and recorded budgets within the bounded timeout policy -- acknowledgement and review are separately budgeted, so an attempt proves exhaustion only when both recorded budgets are within policy and the review budget was actually spent; the guard is admissible only when the whole enabled pool is exhausted AND it records why the pool reviewers could not review and that Governance, trusted Preflight, a zero unresolved-thread count, and complete structured evidence were all green at review time. A review that silently skips an enabled reviewer while it is available, a guard review whose exhaustion cannot be proven (missing, skipped, duplicated, malformed, unknown-agent, or out-of-bounds attempts), a review whose recorded exact head differs from the candidate head, or a new commit after the review all invalidate the review and force reviewer selection to restart. A resolved review finding counts as satisfied only when its structured evidence names the exact-head correction commit and a regression test committed in the change set. The pool declaration must also be executable by the collector that consumes it: a reviewer may not be enabled with a trigger method the trusted collector cannot actually perform, because ordered collection fails closed -- an unperformable trigger does not skip its own reviewer, it aborts the walk before every lower-priority reviewer behind it is attempted -- and the budgets recorded on an attempt must be exactly the budgets the pool declares for that reviewer, so a retired budget field can never remain the one the collector or the receipt verifier reads. No other controller's earlier word, and no resolved review thread without that evidence, can stand in for this prerequisite; failover is a deterministic machine decision, never a human-noticed skip.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Focused checks are diagnostic only; hosted exact-head gates remain authoritative.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-029 with invariant \"A candidate may be pushed only through the repository pre-push safety boundary; the full canonical pytest proof runs exactly once in the hosted exact-HEAD Pre-PR stage, and a Draft PR may be opened only after that hosted proof succeeds. Focused tests are diagnostic evidence and never substitute for the hosted canonical proof.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Canonical governed artifact paths are retained for this staged refresh.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-033 with invariant \"Every tracked governance asset resolves to a path its declared consumer can actually load, and no tracked path carries characters that the consumer's own path grammar rejects. A tracked asset its consumer cannot load contributes no enforcement, and its absence must be a machine-detected condition rather than a silent one.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Three new RED-first regressions pin local RPC budget propagation, exact FIFO scale precision, and candidate-before-checkpoint persistence.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-035 with invariant \"The deterministic validation lane asserts only on repository-owned state. A precondition owned outside the repository -- an Issue body, a remote API response, a live network endpoint -- is validated on the runtime path that actually consumes it and reported as its own attributable signal, never as a deterministic-lane assertion whose failure is indistinguishable from a defect in the change under test.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-035",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "PRH and DFF families remain compiled into the fresh SPM context for the staged path set.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-045 with invariant \"Canonical knowledge growth (docs/DEFECT_REGISTRY.json) must not produce linear per-task prompt growth. Smart Prompt Machine must retrieve, deduplicate, compact, and bound trusted prevention context by task relevance before compilation, rather than inlining the full prose of every registry family whose applicability merely intersects a broad authorized-path root. Applicability (whether a family may ever be selected) stays a pure, unweakened structural path match; only the *rendering* of an applicable family -- full detail, compact summary, or omission -- may be bounded, and only by deterministic, offline, reproducible structural signals already present in canonical registry metadata and the owner-authored TaskScopeContract, never by caller-controlled task prose (preserving the PR #507 trust boundary) and never by an external LLM/API/network call. When even the most compact rendering of every genuinely applicable family cannot fit the governed budget, the compiler fails closed with a precise, structured reason naming the overflow and its largest contributors; it never silently truncates arbitrary JSON or text.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-045",
         "outcome": "clear"
       },
       {
-        "evidence": "No new live RPC run or reused old-head E2E claim is introduced.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-059 with invariant \"Any live on-chain acquisition or E2E run, including one continued from an earlier session, must carry a machine-checkable execution budget before any RPC request is issued: REQUEST_LIMIT total RPC requests counted at the transport, TIMEOUT_SECONDS per request, retry_limit=0 automatic retries, DEADLINE_SECONDS overall wall clock, and max_block_range as an inclusive block count per eth_getLogs query. An owner abort, CI timeout, or best-effort harness is never evidence of a bounded run; a missing or weakened bound fails closed as BLOCKED before network work, and a bound breach terminates the run without claiming success. This invariant must be present in the canonical defect registry so EngineeringContextAuthority/SPM compiles it into the engineering.implement context for any change touching onchain acquisition, configuration, or its Whale/Market Validation consumers.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-059",
         "outcome": "clear"
       },
       {
-        "evidence": "Inclusive block-range guards are unchanged on the staged tree.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-060 with invariant \"A configured maximum block range is an inclusive block count: every constructed window and adapter RPC request must satisfy end - start + 1 <= max_block_range, including one-block, exact-limit, and limit-plus-one boundaries.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-060",
         "outcome": "clear"
       },
       {
-        "evidence": "Trusted provenance timestamp handling is unchanged on the staged tree.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-061 with invariant \"block_timestamp is chain history; acquisition_timestamp and receipt_verified_at must be independently sampled from a trusted runtime clock after their corresponding acquisition and receipt-verification events, remain distinct from the historical block timestamp where runtime time differs, and stay bound to the signed evidence payload.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-061",
         "outcome": "clear"
       },
       {
-        "evidence": "Immutable signed-pair guards remain unchanged in the current remediation.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-062 with invariant \"An unchanged signed on-chain observation must keep its original raw payload, acquisition_timestamp, receipt_verified_at, and signature across repeated acquisition, and a conflicting signature for an existing signature ID must fail before any raw observation is overwritten.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-062",
         "outcome": "clear"
       },
       {
-        "evidence": "Per-surface finality guards remain unchanged in the current remediation.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-063 with invariant \"A caller's requested end block is immutable, and each active on-chain surface binds its own finalized height to its log window, observation, snapshot, and checkpoint.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-063",
         "outcome": "clear"
       },
       {
-        "evidence": "Candidate upsert now precedes scan-state persistence and the injected failure/retry regression passes.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-064 with invariant \"Bounded discovery enrichment must persist a mode-specific cursor across restarts, preserve case-sensitive contract identifiers verbatim, rotate through identifiers including empty-result cohorts, advance only after processed assets are persisted, and meter every helper request against the same ScanBudget used by primary discovery.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-064",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Catalogue-derived coverage guards remain unchanged on the staged tree.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-065 with invariant \"Global network coverage must use the persisted network catalogue as its denominator and persisted pool observations as scanned coverage, never the network IDs present on one current scan page.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-065",
         "outcome": "clear"
       },
       {
-        "evidence": "Strict replay and malformed-row guards remain unchanged on the staged tree.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-066 with invariant \"Historical replay must convert each evidence row defensively, reject malformed rows individually without evicting valid rows, and admit a signed row only when its acquisition and receipt-verification timestamps are at or before the replay cutoff.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-066",
         "outcome": "clear"
       },
       {
-        "evidence": "Exact amount normalization remains unchanged; the new FIFO regression adds derived exact Decimal context.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-067 with invariant \"Signed on-chain amount normalization must preserve the exact raw integer scaled by token decimals even when the digit count exceeds the ambient Decimal context precision.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-067",
         "outcome": "clear"
       },
       {
-        "evidence": "Partial discovery automation still fails closed before the scheduler loop.",
+        "evidence": "Exact staged tree exports discovery_job_definitions()/DISCOVERY_JOB_IDS from src/hunter/discovery/automation.py, consumes them in src/hunter/data_ops.py, adds discovery_source_health read-only routing, aligns configs/automation.yaml to scalar discovery_mode, and adds tests/test_data_ops.py::test_data_ops_installer_satisfies_discovery_startup_guard; require_discovery_automation() returns the full DISCOVERY_JOB_IDS and the focused pytest run passed 7/7.",
         "family": "DFF-068",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
-        "evidence": "Causal USD conflict handling remains unchanged in this remediation.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-069 with invariant \"Historical USD context must use exact chain/contract provider mapping, at-or-before causal price availability, a freshness ceiling, exact Decimal multiplication, and persisted source provenance, and must never be represented as canonical valuation, wallet attribution, or wallet performance.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-069",
         "outcome": "clear"
       },
       {
-        "evidence": "Verified pool identity, decode, receipt, router, multi-hop, and bounded RPC guards remain unchanged except the distinct local budget exception.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-070 with invariant \"Swap evidence must decode only explicitly supported schemas from an active verified pool, bind exact token contracts and decimals to a finalized successful transaction receipt and independent corroboration, never attribute routers or pools as traders, fail closed for ambiguous multi-hop events, and remain within a declared per-chain RPC budget.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-070",
         "outcome": "clear"
       },
       {
-        "evidence": "FIFO lot quantity and cost arithmetic now run under precision derived from staged amounts and valuations; exact-remaining and insufficient-scale regressions pass.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-071 with invariant \"Wallet performance must consume only verified attributed swaps with exact chain and asset identity, use deterministic FIFO only when inventory history is sufficient, compute exact Decimal realized P&L from causal valuations, keep fees and net P&L unavailable when evidence is absent, and expose gross context without ranking insufficient evidence.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-071",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Per-log block timestamp binding remains unchanged on the staged tree.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-072 with invariant \"Canonical onchain swap evidence must use each log's own block hash, block number, and block timestamp after verifying that block from the trusted RPC adapter, never a range endpoint's hash or timestamp.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-072",
         "outcome": "clear"
       },
       {
-        "evidence": "RpcAttemptBudgetExhausted is a distinct local failure propagated through adapters, dex, and engine catches without cooldown; the regression asserts no cooldown state.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-073 with invariant \"Every RPC attempt must be charged to the active bounded budget before endpoint dispatch, including chainId, log, receipt, corroboration, and failed attempts.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-073",
-        "outcome": "repaired"
-      },
-      {
-        "evidence": "Exact target-asset FIFO grouping is retained and the large-scale regression keeps partial inventory unavailable rather than rounding it away.",
-        "family": "DFF-074",
-        "outcome": "repaired"
-      },
-      {
-        "evidence": "Volatile metadata refresh behavior is unchanged in the current staged remediation.",
-        "family": "DFF-075",
         "outcome": "clear"
       },
       {
-        "evidence": "Full-receipt topic counting and recipient ownership guards remain unchanged.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-074 with invariant \"FIFO inventory must be isolated by exact chain, attributed wallet, and target asset contract; a buy in one asset cannot close a sell in a different asset.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
+        "family": "DFF-074",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Exact staged tree adds normalize_identity_disagreements() in src/hunter/discovery/models.py, applies it in repository._merge_metadata, identity._identity_conflicts and identity_evidence_fingerprint, adds discovery_mode to VOLATILE_IDENTITY_METADATA_KEYS, and extends tests/test_global_discovery_candidate_registry.py::test_dexscreener_batch_provenance_is_not_identity_evidence with historical, fingerprint and mixed-genuine-disagreement assertions; focused pytest run passed 7/7.",
+        "family": "DFF-075",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-076 with invariant \"Attribution decisions must inspect the complete receipt for all swap-topic logs, mark multi-hop swaps ambiguous, and prove wallet ownership through decoded recipient equality with the receipt sender.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-076",
         "outcome": "clear"
       },
       {
-        "evidence": "Swap freshness normalization remains unchanged on the staged tree.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-077 with invariant \"Freshness scores consumed by evidence engines must be normalized from 1.0 for current evidence down to 0.0 at the evidence horizon, with future and stale evidence clamped and boundary tested.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-077",
         "outcome": "clear"
       },
       {
-        "evidence": "Replay preservation of signed row fields remains unchanged on the staged tree.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-078 with invariant \"Replayed onchain evidence must preserve original signed metadata only when every row-derived signed field is unchanged; differences in event type, provider, source reference, or finality status are new signed evidence and must fail replay preservation.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-078",
         "outcome": "clear"
       },
       {
-        "evidence": "CoinGecko cursor completion guards remain unchanged on the staged tree.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-079 with invariant \"A persisted CoinGecko batch cursor must identify only the last fully completed page, with failed or budget-exhausted pages leaving the prior cursor intact.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-079",
         "outcome": "clear"
       },
       {
-        "evidence": "Discovery budget retry accounting remains unchanged; local RPC budget exhaustion is now distinctly classified.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-080 with invariant \"Every DexScreener batch enrichment HTTP retry attempt must consume the active scan budget exactly once through the shared dispatcher, including failed attempts.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-080",
         "outcome": "clear"
       },
       {
-        "evidence": "Canonical chain identity and alias deduplication guards remain unchanged.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-081 with invariant \"Equivalent registry chain aliases must resolve to one canonical chain identity and cursor, while provider-native aliases remain limited to transport URLs and evidence metadata.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-081",
         "outcome": "clear"
       },
       {
-        "evidence": "Consideration-side causal USD valuation and market-validation boundary remain unchanged.",
+        "evidence": "Canonical ECA compile at the exact staged tree includes DFF-082 with invariant \"Wallet performance FIFO must value the signed buy input or sell output consideration from configured tracked assets, never substitute target notional, and remain unavailable when consideration valuation cannot be proven.\". The staged delta introduces no violation of that invariant; the base->HEAD range retains the registry's committed regression evidence (registry evidence).",
         "family": "DFF-082",
         "outcome": "clear"
       }
@@ -361,7 +321,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "0d1e022142bf539d4045222ff9652d861d4ae8a8",
+        "blob_sha": "02410793bb1257bbf3ce195380c3fa6b7b7bf124",
         "path": "configs/automation.yaml",
         "previous_path": "",
         "status": "modified"
@@ -373,7 +333,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "faf28bda7700a9a97cdd929a8d2e4dbf78d6eadd",
+        "blob_sha": "e636b68a1512bb1e5d7ade275881694a4aca773c",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -391,7 +351,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "355bfa2e3ed95bf0de1d6b1916b95b67b455ac30",
+        "blob_sha": "75513c9c6d9a8b4bc0cc6f65c8e567d0c1fe7242",
         "path": "src/hunter/data_ops.py",
         "previous_path": "",
         "status": "modified"
@@ -403,7 +363,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "b532062cf528ad736dcaf56aafc5d354ddd37274",
+        "blob_sha": "258ee4898259f67b25e781f5b99c6ce3a8ec2024",
         "path": "src/hunter/discovery/automation.py",
         "previous_path": "",
         "status": "modified"
@@ -421,13 +381,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "f3c20a548182866ef25a338984be4224f7290df2",
+        "blob_sha": "2af8faba359dbb092bf06f2a87d51f81183347f2",
         "path": "src/hunter/discovery/identity.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "0f6010532dc80165d214f46db80497fd66090e2c",
+        "blob_sha": "a6395b42845cc60ff04231c9edff281d23127c18",
         "path": "src/hunter/discovery/models.py",
         "previous_path": "",
         "status": "modified"
@@ -439,7 +399,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "990b362e9a464d3c98ed8fd4f40ed0029ea7f9f7",
+        "blob_sha": "f076a3b2bd05f57c0b3b640a1af462e11fdbfae3",
         "path": "src/hunter/discovery/repository.py",
         "previous_path": "",
         "status": "modified"
@@ -499,13 +459,19 @@
         "status": "modified"
       },
       {
+        "blob_sha": "a96ca23dac4665d01225429c9790dc3bda246071",
+        "path": "tests/test_data_ops.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "99c2976d7ffab39723cdeb7d839606dfa1718238",
         "path": "tests/test_engineering_context_authority.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "0ae9902c7980ff488b09a8ad1ee3f1db7e62f2d4",
+        "blob_sha": "e9ea561f81ed2e2b50b904114e4f30cdf0dfabbf",
         "path": "tests/test_global_discovery_candidate_registry.py",
         "previous_path": "",
         "status": "modified"
@@ -541,16 +507,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "21fea1b771148ec81e0adbf452f88f76c9d60a048c032fe074d7125dd98aa0db"
+    "review_target_digest": "0a13718414521535b72820b9900bd88df379b9c92c41a909a75ae3d51fe242dd"
   },
-  "review_eligibility": {
-    "mode": "pre_deployment",
-    "pr_number": 788,
-    "repository": "fafa33/Project-Hunter"
-  },
-  "review_id": "408adf74175cef8cb149dc3b4ad8ac7cd2594588ff007c649d5b9f13407095f0",
+  "review_id": "061decaa903a7d7979ac9959cb9a23b08fc38f2d4829382626165ded13a236c2",
   "review_request": {
-    "claims_id": "408adf74175cef8cb149dc3b4ad8ac7cd2594588ff007c649d5b9f13407095f0",
+    "claims_id": "061decaa903a7d7979ac9959cb9a23b08fc38f2d4829382626165ded13a236c2",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

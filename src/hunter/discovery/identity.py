@@ -10,6 +10,7 @@ from hunter.discovery.models import (
     CandidateIdentity,
     CandidateRecord,
     DiscoveryConflict,
+    normalize_identity_disagreements,
 )
 from hunter.discovery.repository import CandidateRegistryRepository
 from hunter.execution.identity import identity
@@ -21,7 +22,7 @@ def identity_evidence_fingerprint(candidate: CandidateRecord, *, related_candida
     """Stable digest of the persisted evidence that may change an identity outcome."""
     metadata = {
         str(key): value
-        for key, value in sorted(candidate.metadata.items())
+        for key, value in sorted(normalize_identity_disagreements(candidate.metadata).items())
         if str(key) not in VOLATILE_IDENTITY_METADATA_KEYS
     }
     payload = {
@@ -372,7 +373,7 @@ def _missing_identity_evidence(candidate: CandidateRecord) -> tuple[str, ...]:
 
 def _identity_conflicts(candidate: CandidateRecord, related_ticker_candidates: tuple[str, ...]) -> tuple[str, ...]:
     conflicts: set[str] = set()
-    if candidate.metadata.get("provider_disagreements"):
+    if normalize_identity_disagreements(candidate.metadata).get("provider_disagreements"):
         conflicts.add("provider_metadata_disagreement")
     if related_ticker_candidates:
         conflicts.add("ticker_collision")

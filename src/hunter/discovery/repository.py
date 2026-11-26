@@ -26,6 +26,7 @@ from hunter.discovery.models import (
     CandidateSource,
     DiscoveryConflict,
     DiscoveryRun,
+    normalize_identity_disagreements,
 )
 from hunter.execution.identity import identity
 
@@ -1606,8 +1607,8 @@ def _with_candidate_id(candidate: CandidateRecord, candidate_id: str) -> Candida
 
 
 def _merge_metadata(previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
-    merged = dict(previous)
-    for key, value in current.items():
+    merged = normalize_identity_disagreements(previous)
+    for key, value in normalize_identity_disagreements(current).items():
         if value in (None, "", (), []):
             continue
         if key in REFRESHABLE_DISCOVERY_METADATA_KEYS:

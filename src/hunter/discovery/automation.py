@@ -18,7 +18,7 @@ DISCOVERY_JOB_IDS = (
 def install_discovery_jobs(path: Path = Path("configs/automation.yaml")) -> tuple[str, ...]:
     payload = _load_yaml(path)
     existing_jobs = {str(job.get("job_id")): job for job in payload.get("jobs", ()) if isinstance(job, dict)}
-    for job in _discovery_jobs():
+    for job in discovery_job_definitions():
         existing_jobs[str(job["job_id"])] = job
     payload["enabled"] = True
     payload["timezone"] = str(payload.get("timezone", "UTC"))
@@ -59,7 +59,7 @@ def require_discovery_automation(path: Path = Path("configs/automation.yaml")) -
     return DISCOVERY_JOB_IDS
 
 
-def _discovery_jobs() -> tuple[dict[str, Any], ...]:
+def discovery_job_definitions() -> tuple[dict[str, Any], ...]:
     return (
         _job("discovery-source-health", "Discovery source health check", "hourly", "discovery_source_health"),
         _job(
@@ -69,7 +69,7 @@ def _discovery_jobs() -> tuple[dict[str, Any], ...]:
             "discovery_market_run",
             {
                 "free_capacity_observation_window_hours": 24,
-                "discovery_modes": ["incremental"],
+                "discovery_mode": "incremental",
                 "budget_aware_resumable": True,
                 "fair_network_rotation": True,
                 "no_parallel_daemon": True,
@@ -83,7 +83,7 @@ def _discovery_jobs() -> tuple[dict[str, Any], ...]:
             "cron",
             "discovery_market_run_backfill",
             {
-                "discovery_modes": ["backfill"],
+                "discovery_mode": "backfill",
                 "bounded_contracts_per_cycle": 5,
                 "does_not_starve_incremental": True,
             },
