@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal, InvalidOperation, localcontext
+from decimal import Decimal, localcontext
 from pathlib import Path
 from typing import Any
 
@@ -24,7 +24,12 @@ from hunter.onchain.configuration import OnChainConfig, load_onchain_config
 from hunter.onchain.evidence import EvidenceTrust, verified_capital_flow_rows, verified_swap_rows
 from hunter.onchain.models import RawOnChainObservation
 from hunter.onchain.repository import OnChainRepository
-from hunter.onchain.wallet_performance import FIFO_POLICY, WalletPerformance, wallet_performance_from_swaps
+from hunter.onchain.wallet_performance import (
+    FIFO_POLICY,
+    WalletPerformance,
+    signed_consideration_valuation,
+    wallet_performance_from_swaps,
+)
 from hunter.scenario import SCENARIO_ENGINES, ScenarioRepository
 from hunter.scenario.models import ScenarioImpact
 from hunter.timing.models import TimingAssessment
@@ -350,7 +355,7 @@ def _swap_wallet_context(
     valuations = tuple(usd_valuator(row) for row in verified) if usd_valuator is not None else ()
     consideration_by_id = (
         {
-            row.evidence_id: _consideration_valuation(row, usd_valuator, config or load_onchain_config())
+            row.evidence_id: signed_consideration_valuation(row, usd_valuator, config or load_onchain_config())
             for row in verified
         }
         if usd_valuator is not None
@@ -389,58 +394,6 @@ def _swap_wallet_context(
         warnings=warnings,
         raw_input_metrics=metrics,
     )
-
-
-def _consideration_valuation(
-    row: RawOnChainObservation,
-    usd_valuator: Callable[[RawOnChainObservation], UsdValuation],
-    config: OnChainConfig,
-) -> UsdValuation:
-    unavailable = UsdValuation(
-        status="UNAVAILABLE",
-        reason="signed consideration USD valuation unavailable",
-        chain_id=row.chain_id,
-        target_at=row.block_timestamp,
-    )
-    if row.trade_direction == "buy":
-        contract = row.token_in_contract
-        amount = row.token_in_amount
-        raw_amount = row.token_in_raw_amount
-    elif row.trade_direction == "sell":
-        contract = row.token_out_contract
-        amount = row.token_out_amount
-        raw_amount = row.token_out_raw_amount
-    else:
-        return unavailable
-    if not contract or amount is None or raw_amount is None:
-        return unavailable
-    try:
-        if not amount.is_finite() or amount <= 0:
-            return unavailable
-    except InvalidOperation:
-        return unavailable
-    asset = next(
-        (
-            item
-            for item in config.tracked_assets
-            if item.chain_id == row.chain_id
-            and item.contract_address
-            and item.contract_address.lower() == contract.lower()
-            and item.coingecko_id
-        ),
-        None,
-    )
-    if asset is None or not asset.coingecko_id:
-        return unavailable
-    synthetic = replace(
-        row,
-        asset_contract=contract.lower(),
-        asset_symbol=asset.symbol,
-        decimals=asset.decimals,
-        raw_amount=str(raw_amount),
-        normalized_amount=amount,
-    )
-    return usd_valuator(synthetic)
 
 
 def _scalar_decimal(value: Decimal | None) -> str | None:

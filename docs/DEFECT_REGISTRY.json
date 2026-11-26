@@ -1498,8 +1498,8 @@
       "class": "consideration-side-causal-usd",
       "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQZ comment 4704219828 (KF-f0962d81e187): wallet FIFO must value the signed input or output consideration causally rather than substituting target notional.",
       "classification": "systemic",
-      "guard_boundary": "market-validation swap context and wallet performance FIFO valuation",
-      "guard": "Keep target USD metrics separate from wallet performance, map buy input and sell output contracts from signed evidence to configured tracked assets, and fail closed when consideration valuation is unavailable.",
+      "guard_boundary": "onchain signed consideration valuation and wallet performance FIFO valuation",
+      "guard": "Keep target USD metrics separate from wallet performance, resolve buy input and sell output consideration contracts from signed evidence to configured tracked assets in the onchain boundary, and fail closed when consideration valuation is unavailable.",
       "test": "tests/test_onchain_swap_wallet_evidence.py::test_market_validation_swap_wallet_context_uses_identity_and_usd_integration; tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_context_does_not_substitute_target_notional_for_consideration",
       "status": "guarded"
     }
@@ -3950,19 +3950,22 @@
       "applicability": {
         "changed_paths": [
           "src/hunter/market_validation/acquisition_sources.py",
+          "src/hunter/onchain/wallet_performance.py",
+          "tests/test_market_validation.py",
           "tests/test_onchain_swap_wallet_evidence.py",
           "tests/test_market_validation_input_authority.py"
         ],
         "rationale": "Cost basis is paid or received in the consideration asset. Using target notional manufactures realized P&L and breaks causal valuation."
       },
       "prevention": {
-        "mechanism": "Separate target USD metrics from wallet-performance valuations, resolve signed consideration contracts to configured assets with price IDs, and fail closed when no matching valuation exists.",
+        "mechanism": "Separate target USD metrics from wallet-performance valuations, resolve signed consideration contracts to configured assets with price IDs in the onchain boundary, and fail closed when no matching valuation exists.",
         "boundary": "hosted-gate",
-        "guard_reference": "src/hunter/market_validation/acquisition_sources.py::_swap_wallet_context"
+        "guard_reference": "src/hunter/onchain/wallet_performance.py::signed_consideration_valuation"
       },
       "regression_evidence": [
         "tests/test_onchain_swap_wallet_evidence.py::test_market_validation_swap_wallet_context_uses_identity_and_usd_integration",
         "tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_context_does_not_substitute_target_notional_for_consideration",
+        "tests/test_market_validation.py::test_market_validation_boundaries",
         "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
       ],
       "lifecycle": "regression-tested",

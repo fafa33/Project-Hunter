@@ -15,13 +15,13 @@
       },
       {
         "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
-        "evidence": "Per-log block binding, exact target-asset FIFO, full-receipt ambiguity, recipient ownership, normalized freshness, all row-derived signed metadata, and consideration-side causal USD valuation fail closed with focused regressions.",
+        "evidence": "Per-log block binding, exact target-asset FIFO, full-receipt ambiguity, recipient ownership, normalized freshness, all row-derived signed metadata, and consideration-side causal USD valuation fail closed. Signed buy-input and sell-output valuation now lives in the onchain boundary so the market-validation boundary contains no buy/sell transaction-direction literals; focused boundary regression passes.",
         "id": "AC-587-03",
         "verdict": "satisfied"
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "Fresh writer judgement after five new Codex findings; 292 affected tests, scoped Ruff/Black/mypy, registry JSON validation, and independent adversarial re-review with no findings; PR #788 remains Draft and no merge or deployment is asserted.",
+        "evidence": "Fresh writer judgement after the hosted boundary failure on 538dc3dcca28f9b3848b920744c78b4617c6bcde; 63 focused tests, scoped Ruff/Black/mypy, registry JSON validation, no buy/sell token in src/hunter/market_validation, and no prior reviewer authority reused. Hosted exact-head gates remain authoritative and must re-verify the corrected head; PR #788 stays Draft with no merge or deployment asserted.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -31,6 +31,7 @@
       "atomic-write",
       "authorization",
       "block-identity",
+      "boundary-token-scan",
       "caller-controlled-time-state",
       "canonical-chain-alias",
       "causal-price-selection",
@@ -49,6 +50,7 @@
       "identity-handoff",
       "inclusive-range-boundary",
       "malformed-unknown-authority",
+      "market-validation-boundary",
       "monotonicity",
       "multi-hop-ambiguity",
       "numeric-precision",
@@ -130,7 +132,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Request regenerated from staged tree judgement.",
+        "evidence": "Request regenerated from fresh staged-tree judgement after hosted boundary failure; no prior request authority reused.",
         "family": "DFF-012",
         "outcome": "clear"
       },
@@ -145,7 +147,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "PRH-142 through PRH-151 and DFF-062 through DFF-069 remain compiled into SPM context; PRH-161 through PRH-165 and DFF-078 through DFF-082 now compile as well.",
+        "evidence": "PRH-142 through PRH-151 and DFF-062 through DFF-069 remain compiled into SPM context; PRH-161 through PRH-165 and DFF-078 through DFF-082 still compile as well.",
         "family": "DFF-015",
         "outcome": "clear"
       },
@@ -155,7 +157,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Local checks are diagnostic only and hosted gates remain authoritative.",
+        "evidence": "Local checks remain diagnostic only; hosted exact-head gates must re-verify the corrected head.",
         "family": "DFF-029",
         "outcome": "clear"
       },
@@ -200,7 +202,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Shared budget and cursor guards unchanged; CoinGecko completion and DexScreener retry budgets now regress-tested.",
+        "evidence": "Shared budget and cursor guards unchanged; CoinGecko completion and DexScreener retry budgets remain regress-tested.",
         "family": "DFF-064",
         "outcome": "clear"
       },
@@ -210,7 +212,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Strict replay guards unchanged; signed row comparison now covers every row-derived signed field.",
+        "evidence": "Strict replay guards unchanged; signed row comparison still covers every row-derived signed field.",
         "family": "DFF-066",
         "outcome": "clear"
       },
@@ -270,27 +272,27 @@
         "outcome": "repaired"
       },
       {
-        "evidence": "Replay preservation now includes event_type, provider, source_reference, and finality_status in comparison; differing signed fields fail closed and preserve no stale metadata.",
+        "evidence": "Replay preservation still includes event_type, provider, source_reference, and finality_status in comparison; differing signed fields fail closed and preserve no stale metadata.",
         "family": "DFF-078",
         "outcome": "repaired"
       },
       {
-        "evidence": "CoinGecko resume returns the last successful page, and exhaustion before the first completed page keeps the prior cursor.",
+        "evidence": "CoinGecko resume still returns the last successful page, and exhaustion before the first completed page keeps the prior cursor.",
         "family": "DFF-079",
         "outcome": "repaired"
       },
       {
-        "evidence": "DexScreener passes the active batch meter into the shared dispatcher, charging every retry attempt exactly once without pre-consumption.",
+        "evidence": "DexScreener still passes the active batch meter into the shared dispatcher, charging every retry attempt exactly once without pre-consumption.",
         "family": "DFF-080",
         "outcome": "repaired"
       },
       {
-        "evidence": "Canonical chain identity, alias deduplication, and legacy cursor canonicalization regress-tested while provider-native transport aliases remain intact.",
+        "evidence": "Canonical chain identity, alias deduplication, and legacy cursor canonicalization remain regress-tested while provider-native transport aliases stay intact.",
         "family": "DFF-081",
         "outcome": "repaired"
       },
       {
-        "evidence": "Wallet FIFO values signed buy inputs and sell outputs from configured tracked assets; target notional remains isolated to USD metrics and unavailable consideration fails closed.",
+        "evidence": "Signed buy-input and sell-output consideration valuation moved to src/hunter/onchain/wallet_performance.py::signed_consideration_valuation; market-validation has no buy/sell literal, target notional remains isolated to USD metrics, unavailable consideration fails closed, and test_market_validation_boundaries now covers the earliest practical boundary.",
         "family": "DFF-082",
         "outcome": "repaired"
       }
@@ -329,7 +331,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "b8176fde6ba764deef3bcab535b4d0992daf07dd",
+        "blob_sha": "c74e08dac7074050d4978074619b6f872b2dc0a7",
         "path": "src/hunter/onchain/wallet_performance.py",
         "previous_path": "",
         "status": "added"
@@ -359,7 +361,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "254640a2e73a7c5159587fe250b56569c96b60ba",
+        "blob_sha": "faf28bda7700a9a97cdd929a8d2e4dbf78d6eadd",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -443,7 +445,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "f0ad9f7177f420e3e26d611753d4b19554341511",
+        "blob_sha": "4cda08cc99625b54673d7ed7ee73d995172c2e0c",
         "path": "src/hunter/market_validation/acquisition_sources.py",
         "previous_path": "",
         "status": "modified"
@@ -527,11 +529,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "e163013e1f54a49c77479e992de5ae4e1956e891d31c134af007f69bfabe478e"
+    "review_target_digest": "99ea43d80183881ffc8f3b9dd606f39fa497799976e259aa6dcfa55f7cf46dbb"
   },
-  "review_id": "e58a7a9236caae80370e8bfb5c047eeab0243f61823560a2be73029507d54530",
+  "review_id": "d2a2f1727e9dd699dcb1bb07e13a1fd45fbe2a06cac355e97120e6b28231196d",
   "review_request": {
-    "claims_id": "e58a7a9236caae80370e8bfb5c047eeab0243f61823560a2be73029507d54530",
+    "claims_id": "d2a2f1727e9dd699dcb1bb07e13a1fd45fbe2a06cac355e97120e6b28231196d",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

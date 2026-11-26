@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
-from collections.abc import Mapping
-from dataclasses import dataclass
-from decimal import Decimal, localcontext
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
+from decimal import Decimal, InvalidOperation, localcontext
 
 from hunter.historical_acquisition.usd_valuation import UsdValuation
+from hunter.onchain.configuration import OnChainConfig
 from hunter.onchain.models import RawOnChainObservation
 
 FIFO_POLICY = "deterministic-fifo"
@@ -46,6 +47,58 @@ def wallet_performance_from_swaps(
     ):
         results.append(_performance(chain_id, wallet, target_asset, rows, valuations))
     return tuple(results)
+
+
+def signed_consideration_valuation(
+    row: RawOnChainObservation,
+    usd_valuator: Callable[[RawOnChainObservation], UsdValuation],
+    config: OnChainConfig,
+) -> UsdValuation:
+    unavailable = UsdValuation(
+        status="UNAVAILABLE",
+        reason="signed consideration USD valuation unavailable",
+        chain_id=row.chain_id,
+        target_at=row.block_timestamp,
+    )
+    if row.trade_direction == "buy":
+        contract = row.token_in_contract
+        amount = row.token_in_amount
+        raw_amount = row.token_in_raw_amount
+    elif row.trade_direction == "sell":
+        contract = row.token_out_contract
+        amount = row.token_out_amount
+        raw_amount = row.token_out_raw_amount
+    else:
+        return unavailable
+    if not contract or amount is None or raw_amount is None:
+        return unavailable
+    try:
+        if not amount.is_finite() or amount <= 0:
+            return unavailable
+    except InvalidOperation:
+        return unavailable
+    asset = next(
+        (
+            item
+            for item in config.tracked_assets
+            if item.chain_id == row.chain_id
+            and item.contract_address
+            and item.contract_address.lower() == contract.lower()
+            and item.coingecko_id
+        ),
+        None,
+    )
+    if asset is None or not asset.coingecko_id:
+        return unavailable
+    synthetic = replace(
+        row,
+        asset_contract=contract.lower(),
+        asset_symbol=asset.symbol,
+        decimals=asset.decimals,
+        raw_amount=str(raw_amount),
+        normalized_amount=amount,
+    )
+    return usd_valuator(synthetic)
 
 
 def _performance(
