@@ -609,6 +609,7 @@ def test_issue_587_current_head_codex_review_families_reach_spm_context() -> Non
     context = EngineeringContextAuthority().compile(
         ENGINEERING_IMPLEMENT_TASK_KEY,
         scope=_scope(
+            "src/hunter/discovery/engine.py",
             "src/hunter/discovery/identity.py",
             "src/hunter/discovery/models.py",
             "src/hunter/discovery/providers.py",
@@ -625,7 +626,19 @@ def test_issue_587_current_head_codex_review_families_reach_spm_context() -> Non
     )
     families = cast(list[dict[str, object]], context["applicable_defect_families"])
     by_id = {str(item.get("id")): item for item in families}
-    expected = ("DFF-072", "DFF-073", "DFF-074", "DFF-075", "DFF-076", "DFF-077")
+    expected = (
+        "DFF-072",
+        "DFF-073",
+        "DFF-074",
+        "DFF-075",
+        "DFF-076",
+        "DFF-077",
+        "DFF-078",
+        "DFF-079",
+        "DFF-080",
+        "DFF-081",
+        "DFF-082",
+    )
 
     for family_id in expected:
         assert family_id in by_id
@@ -635,3 +648,8 @@ def test_issue_587_current_head_codex_review_families_reach_spm_context() -> Non
     assert "refresh" in str(by_id["DFF-075"].get("invariant", "")).lower()
     assert "complete receipt" in str(by_id["DFF-076"].get("invariant", "")).lower()
     assert "normalized" in str(by_id["DFF-077"].get("invariant", "")).lower()
+    assert "signed metadata" in str(by_id["DFF-078"].get("invariant", "")).lower()
+    assert "completed page" in str(by_id["DFF-079"].get("invariant", "")).lower()
+    assert "retry attempt" in str(by_id["DFF-080"].get("invariant", "")).lower()
+    assert "canonical chain" in str(by_id["DFF-081"].get("invariant", "")).lower()
+    assert "consideration" in str(by_id["DFF-082"].get("invariant", "")).lower()

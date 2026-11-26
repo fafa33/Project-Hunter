@@ -1452,6 +1452,56 @@
       "guard": "Normalize swap freshness from elapsed time against an explicit horizon, clamp future evidence to 1.0 and horizon-or-older evidence to 0.0, and test current, midpoint, horizon, stale, and future boundaries.",
       "test": "tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_freshness_is_decreasing_and_normalized; tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_context_uses_normalized_freshness",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-161",
+      "class": "signed-swap-replay-metadata-preservation",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQD comment 4704219796 (KF-6c65bf6231ff): overlapping swap replay must preserve original signed acquisition metadata when only the request count changes.",
+      "classification": "systemic",
+      "guard_boundary": "onchain replay reconciliation and signed observation uniqueness",
+      "guard": "Treat every row-derived signed field as identity evidence; preserve acquisition timestamp, verification timestamp, and request count only when all other signed values match, and fail closed otherwise.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_overlapping_swap_replay_preserves_original_signed_metadata",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-162",
+      "class": "coingecko-completed-page-cursor",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQG comment 4704219802 (KF-f6980616124a): a resumed batch cursor must represent the last fully completed page, not the requested page range.",
+      "classification": "systemic",
+      "guard_boundary": "bounded CoinGecko batch acquisition and page checkpoint persistence",
+      "guard": "Advance the batch cursor only after a page fetch completes, preserve the previous cursor on exhaustion before the first page, and return the last completed page.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_coingecko_batch_resume_advances_only_through_completed_pages; tests/test_global_discovery_candidate_registry.py::test_coingecko_batch_budget_exhaustion_before_first_page_keeps_cursor",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-163",
+      "class": "discovery-retry-budget-accounting",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQL comment 4704219814 (KF-8aaa66db4647): every batch enrichment HTTP retry attempt must consume the supplied scan budget.",
+      "classification": "systemic",
+      "guard_boundary": "DexScreener enrichment HTTP retry dispatcher and capacity ledger",
+      "guard": "Pass the active batch meter into the shared HTTP dispatcher and charge every retry attempt exactly once there, without pre-consumption outside the retry loop.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_dexscreener_retry_attempts_consume_batch_budget",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-164",
+      "class": "canonical-chain-alias-identity-resume",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQQ comment 4704219819 (KF-e9211e2d4ae): equivalent chain aliases must resolve to one canonical identity and durable enrichment cursor.",
+      "classification": "systemic",
+      "guard_boundary": "provider chain normalization, candidate identity aliasing, and DexScreener cursor rotation",
+      "guard": "Use provider-native chain aliases only for transport and evidence, canonicalize registry identity and cursors, emit deduplicated alias identifiers, and aggregate candidate IDs per canonical contract.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_dexscreener_profile_canonicalizes_chain_aliases; tests/test_global_discovery_candidate_registry.py::test_dex_batch_enrichment_matches_legacy_chain_alias_candidate; tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_legacy_alias_cursor_resumes_at_canonical_identifier",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-165",
+      "class": "consideration-side-causal-usd",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQZ comment 4704219828 (KF-f0962d81e187): wallet FIFO must value the signed input or output consideration causally rather than substituting target notional.",
+      "classification": "systemic",
+      "guard_boundary": "market-validation swap context and wallet performance FIFO valuation",
+      "guard": "Keep target USD metrics separate from wallet performance, map buy input and sell output contracts from signed evidence to configured tracked assets, and fail closed when consideration valuation is unavailable.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_market_validation_swap_wallet_context_uses_identity_and_usd_integration; tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_context_does_not_substitute_target_notional_for_consideration",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -3786,6 +3836,138 @@
       "lifecycle": "regression-tested",
       "sources": [
         "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQv comment PRRC_kwDOTRDHr8678AAAABF-oSD: freshness must be decreasing and normalized with boundary tests."
+      ]
+    },
+    {
+      "id": "DFF-078",
+      "title": "replay-preserves-all-row-derived-signed-metadata",
+      "invariant": "Replayed onchain evidence must preserve original signed metadata only when every row-derived signed field is unchanged; differences in event type, provider, source reference, or finality status are new signed evidence and must fail replay preservation.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/evidence.py",
+          "tests/test_onchain_swap_wallet_evidence.py"
+        ],
+        "rationale": "Overlapping acquisition windows re-sign the same observation. Ignoring any signed row field lets the same signature ID carry different signed bytes and aborts persistence with a signature conflict."
+      },
+      "prevention": {
+        "mechanism": "Derive replay comparison from the signed observation payload's row-backed fields, exclude only the volatile request count and timestamps, and restore original metadata solely on full equality.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/onchain/evidence.py::observation_comparison_value"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_overlapping_swap_replay_preserves_original_signed_metadata",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQD comment 4704219796 (KF-6c65bf6231ff)."
+      ]
+    },
+    {
+      "id": "DFF-079",
+      "title": "coingecko-cursor-advances-only-through-completed-pages",
+      "invariant": "A persisted CoinGecko batch cursor must identify only the last fully completed page, with failed or budget-exhausted pages leaving the prior cursor intact.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/discovery/providers.py",
+          "tests/test_global_discovery_candidate_registry.py"
+        ],
+        "rationale": "Advancing to a requested page that was never fetched silently drops candidates on resume and breaks bounded acquisition determinism."
+      },
+      "prevention": {
+        "mechanism": "Track the completed page locally, assign it only after a successful page fetch, and return that value as the batch cursor and resume checkpoint.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/providers.py::CoinGeckoDiscoveryProvider::discover_batch"
+      },
+      "regression_evidence": [
+        "tests/test_global_discovery_candidate_registry.py::test_coingecko_batch_resume_advances_only_through_completed_pages",
+        "tests/test_global_discovery_candidate_registry.py::test_coingecko_batch_budget_exhaustion_before_first_page_keeps_cursor",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQG comment 4704219802 (KF-f6980616124a)."
+      ]
+    },
+    {
+      "id": "DFF-080",
+      "title": "discovery-budget-charges-every-retry-attempt",
+      "invariant": "Every DexScreener batch enrichment HTTP retry attempt must consume the active scan budget exactly once through the shared dispatcher, including failed attempts.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/discovery/providers.py",
+          "tests/test_global_discovery_candidate_registry.py"
+        ],
+        "rationale": "Charging once outside the retry loop hides real network work and lets bounded batches exceed their declared request budget."
+      },
+      "prevention": {
+        "mechanism": "Compute the request path before acquisition, pass the batch meter into the shared HTTP getter, and catch dispatch-level budget exhaustion without pre-consuming capacity.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/providers.py::DexScreenerDiscoveryProvider::enrich_contracts"
+      },
+      "regression_evidence": [
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_retry_attempts_consume_batch_budget",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQL comment 4704219814 (KF-8aaa66db4647)."
+      ]
+    },
+    {
+      "id": "DFF-081",
+      "title": "canonical-chain-alias-identity-and-resume",
+      "invariant": "Equivalent registry chain aliases must resolve to one canonical chain identity and cursor, while provider-native aliases remain limited to transport URLs and evidence metadata.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/discovery/engine.py",
+          "src/hunter/discovery/providers.py",
+          "tests/test_global_discovery_candidate_registry.py"
+        ],
+        "rationale": "Alias duplication splits one contract into several identities, duplicates bounded enrichment work, and invalidates durable cursors written under legacy alias names."
+      },
+      "prevention": {
+        "mechanism": "Canonicalize registry identities, alias namespaces, and loaded cursors; aggregate candidate IDs by canonical chain and contract; retain raw chain for provider-native HTTP paths and evidence.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/discovery/engine.py::CandidateDiscoveryEngine::enrich_dex_contracts"
+      },
+      "regression_evidence": [
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_profile_canonicalizes_chain_aliases",
+        "tests/test_global_discovery_candidate_registry.py::test_dex_batch_enrichment_matches_legacy_chain_alias_candidate",
+        "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_legacy_alias_cursor_resumes_at_canonical_identifier",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQQ comment 4704219819 (KF-e9211e2d4ae)."
+      ]
+    },
+    {
+      "id": "DFF-082",
+      "title": "consideration-side-causal-usd-valuation",
+      "invariant": "Wallet performance FIFO must value the signed buy input or sell output consideration from configured tracked assets, never substitute target notional, and remain unavailable when consideration valuation cannot be proven.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/market_validation/acquisition_sources.py",
+          "tests/test_onchain_swap_wallet_evidence.py",
+          "tests/test_market_validation_input_authority.py"
+        ],
+        "rationale": "Cost basis is paid or received in the consideration asset. Using target notional manufactures realized P&L and breaks causal valuation."
+      },
+      "prevention": {
+        "mechanism": "Separate target USD metrics from wallet-performance valuations, resolve signed consideration contracts to configured assets with price IDs, and fail closed when no matching valuation exists.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/market_validation/acquisition_sources.py::_swap_wallet_context"
+      },
+      "regression_evidence": [
+        "tests/test_onchain_swap_wallet_evidence.py::test_market_validation_swap_wallet_context_uses_identity_and_usd_integration",
+        "tests/test_onchain_swap_wallet_evidence.py::test_swap_wallet_context_does_not_substitute_target_notional_for_consideration",
+        "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868OoQZ comment 4704219828 (KF-f0962d81e187)."
       ]
     }
   ]

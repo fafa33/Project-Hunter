@@ -3,25 +3,25 @@
     "acceptance_criteria": [
       {
         "criterion": "Free-provider capacity is inventoried with explicit provenance and observed consumption is persisted without paid API use.",
-        "evidence": "No paid API path was added; the staged remediation only tightens already-bounded EVM RPC accounting and preserves the public-source evidence path.",
+        "evidence": "No paid API path was added; bounded EVM RPC, CoinGecko completed-page cursors, and DexScreener retry accounting remain provenance-bound and no full repository suite was used as a local gate.",
         "id": "AC-587-01",
-        "verdict": "pending-deployment"
+        "verdict": "satisfied"
       },
       {
         "criterion": "Global discovery uses bounded, resumable free capacity and truthful DexScreener batching without a parallel daemon.",
-        "evidence": "Bounded swap acquisition remains wired into the existing CapitalFlowEngine.sync seam; refreshable discovery metadata no longer creates false identity conflicts during repeated syncs.",
+        "evidence": "Legacy chain aliases canonicalize for registry identity and cursors, batch retry attempts consume the supplied budget exactly once, and duplicate contract aliases no longer split bounded enrichment work.",
         "id": "AC-587-02",
-        "verdict": "pending-deployment"
+        "verdict": "satisfied"
       },
       {
         "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
-        "evidence": "Per-log block binding, exact target-asset FIFO isolation, full-receipt ambiguity, recipient ownership proof, and normalized freshness all fail closed; 137 focused regressions and the Defect Prevention Guard pass.",
+        "evidence": "Per-log block binding, exact target-asset FIFO, full-receipt ambiguity, recipient ownership, normalized freshness, all row-derived signed metadata, and consideration-side causal USD valuation fail closed with focused regressions.",
         "id": "AC-587-03",
-        "verdict": "pending-deployment"
+        "verdict": "satisfied"
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "Fresh writer judgement after guard-reference correction; Ruff, Black, JSON validation, Defect Prevention Guard, and full Mypy pass; PR #788 remains Draft and no merge or deployment is asserted.",
+        "evidence": "Fresh writer judgement after five new Codex findings; 292 affected tests, scoped Ruff/Black/mypy, registry JSON validation, and independent adversarial re-review with no findings; PR #788 remains Draft and no merge or deployment is asserted.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -32,10 +32,14 @@
       "authorization",
       "block-identity",
       "caller-controlled-time-state",
+      "canonical-chain-alias",
       "causal-price-selection",
+      "completed-page-cursor",
+      "consideration-valuation",
       "coverage-denominator",
       "cutoff-history",
       "decimal-precision",
+      "discovery-budget",
       "discovery-cursor",
       "execution-budget",
       "fail-closed",
@@ -60,7 +64,7 @@
       "rpc-attempt-accounting",
       "rpc-budget",
       "shared-execution-budget",
-      "signed-swap-replay",
+      "signed-evidence-replay",
       "static-analysis-findings",
       "tamper-resistance",
       "transaction-snapshot-consistency",
@@ -141,7 +145,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "PRH-142 through PRH-151 and DFF-062 through DFF-069 remain compiled into SPM context.",
+        "evidence": "PRH-142 through PRH-151 and DFF-062 through DFF-069 remain compiled into SPM context; PRH-161 through PRH-165 and DFF-078 through DFF-082 now compile as well.",
         "family": "DFF-015",
         "outcome": "clear"
       },
@@ -161,7 +165,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "New identity/USD fail-closed regressions retained.",
+        "evidence": "New identity, cursor, budget, and USD fail-closed regressions retained.",
         "family": "DFF-035",
         "outcome": "clear"
       },
@@ -196,7 +200,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Shared budget and cursor guards unchanged.",
+        "evidence": "Shared budget and cursor guards unchanged; CoinGecko completion and DexScreener retry budgets now regress-tested.",
         "family": "DFF-064",
         "outcome": "clear"
       },
@@ -206,7 +210,7 @@
         "outcome": "clear"
       },
       {
-        "evidence": "Strict replay guards unchanged.",
+        "evidence": "Strict replay guards unchanged; signed row comparison now covers every row-derived signed field.",
         "family": "DFF-066",
         "outcome": "clear"
       },
@@ -264,6 +268,31 @@
         "evidence": "Swap freshness is normalized from current 1.0 to horizon 0.0 with future and stale clamping plus boundary regression coverage.",
         "family": "DFF-077",
         "outcome": "repaired"
+      },
+      {
+        "evidence": "Replay preservation now includes event_type, provider, source_reference, and finality_status in comparison; differing signed fields fail closed and preserve no stale metadata.",
+        "family": "DFF-078",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "CoinGecko resume returns the last successful page, and exhaustion before the first completed page keeps the prior cursor.",
+        "family": "DFF-079",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "DexScreener passes the active batch meter into the shared dispatcher, charging every retry attempt exactly once without pre-consumption.",
+        "family": "DFF-080",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "Canonical chain identity, alias deduplication, and legacy cursor canonicalization regress-tested while provider-native transport aliases remain intact.",
+        "family": "DFF-081",
+        "outcome": "repaired"
+      },
+      {
+        "evidence": "Wallet FIFO values signed buy inputs and sell outputs from configured tracked assets; target notional remains isolated to USD metrics and unavailable consideration fails closed.",
+        "family": "DFF-082",
+        "outcome": "repaired"
       }
     ],
     "findings": [],
@@ -294,7 +323,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "0c1776eebe5317ea871b445a0c47344c0154ca21",
+        "blob_sha": "e4619510fbacc7578bf2416c383387c63cb85be2",
         "path": "src/hunter/onchain/evidence.py",
         "previous_path": "",
         "status": "added"
@@ -312,7 +341,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "63e3cbfcefc870fe38b579598c0b2c5751da9289",
+        "blob_sha": "ac8d067f8e3bfdbf24ce77fe675d8400bb4bc008",
         "path": "tests/test_onchain_swap_wallet_evidence.py",
         "previous_path": "",
         "status": "added"
@@ -330,7 +359,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "af3faa94719ee4bb1ac52371acd34c652b83306a",
+        "blob_sha": "254640a2e73a7c5159587fe250b56569c96b60ba",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -372,7 +401,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "159a51e61a1cfb15e359c0e7f75fb33819d354b2",
+        "blob_sha": "72c410c7ff28e20445a0f0b767eca3ee9be0ebea",
         "path": "src/hunter/discovery/engine.py",
         "previous_path": "",
         "status": "modified"
@@ -390,7 +419,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "63b599a4275e7230d59b39c7afc6a2aec42342ea",
+        "blob_sha": "91332544b422a146c80dfe81b5bb8bf106df8c53",
         "path": "src/hunter/discovery/providers.py",
         "previous_path": "",
         "status": "modified"
@@ -414,7 +443,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "c785a28e9b4dce5306d2c908d39335fca191511a",
+        "blob_sha": "f0ad9f7177f420e3e26d611753d4b19554341511",
         "path": "src/hunter/market_validation/acquisition_sources.py",
         "previous_path": "",
         "status": "modified"
@@ -432,7 +461,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "444686ea10d49f066f2e955e3c50b1e8a9380193",
+        "blob_sha": "7f0228d131f7417d8d55fb97d32c5ae486d973c5",
         "path": "src/hunter/onchain/engine.py",
         "previous_path": "",
         "status": "modified"
@@ -456,13 +485,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "29540664b329da7fd4161ae36045e9a8eb37fdad",
+        "blob_sha": "99c2976d7ffab39723cdeb7d839606dfa1718238",
         "path": "tests/test_engineering_context_authority.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "413ac0bc5e6c6909bdb832ea2e0ab0651a20dc07",
+        "blob_sha": "cef42e81d51ef276f4a8ca82ae7170ce75a68659",
         "path": "tests/test_global_discovery_candidate_registry.py",
         "previous_path": "",
         "status": "modified"
@@ -498,16 +527,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "2fb2fb4fbf337e1ff2d1e86469312c9d48b267d183f23802ebe0420a76f79ada"
+    "review_target_digest": "e163013e1f54a49c77479e992de5ae4e1956e891d31c134af007f69bfabe478e"
   },
-  "review_eligibility": {
-    "mode": "pre_deployment",
-    "pr_number": 788,
-    "repository": "fafa33/Project-Hunter"
-  },
-  "review_id": "67afacd73ca683bfaa9e4146db630638773ae39deba511dc54d6c3d1ebc1609b",
+  "review_id": "e58a7a9236caae80370e8bfb5c047eeab0243f61823560a2be73029507d54530",
   "review_request": {
-    "claims_id": "67afacd73ca683bfaa9e4146db630638773ae39deba511dc54d6c3d1ebc1609b",
+    "claims_id": "e58a7a9236caae80370e8bfb5c047eeab0243f61823560a2be73029507d54530",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

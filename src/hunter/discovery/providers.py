@@ -120,6 +120,7 @@ class CoinGeckoDiscoveryProvider:
         rows: list[DiscoveredCandidate] = []
         meter = _RequestMeter(budget) if budget else None
         pages = max(1, (max(1, limit) + self.per_page - 1) // self.per_page)
+        completed = cursor
         for page in range(cursor + 1, cursor + pages + 1):
             try:
                 payload = self._get(
@@ -140,6 +141,7 @@ class CoinGeckoDiscoveryProvider:
                 raise ProviderUnavailableError("CoinGecko discovery response must be a list")
             if not payload:
                 return tuple(rows), 0
+            completed = page
             for item in payload:
                 if not isinstance(item, dict):
                     continue
@@ -167,7 +169,7 @@ class CoinGeckoDiscoveryProvider:
                 )
             if len(payload) < self.per_page:
                 return tuple(rows), 0
-        return tuple(rows), cursor + pages
+        return tuple(rows), completed
 
     def enumerate_universe(self) -> dict[str, Any]:
         """Enumerate the accessible CoinGecko asset universe for a real coverage denominator."""
@@ -603,8 +605,9 @@ class DexScreenerDiscoveryProvider:
             for item in payload:
                 if not isinstance(item, dict):
                     continue
-                chain = str(item.get("chainId") or "").strip()
-                address = normalize_contract_address(item.get("tokenAddress"), chain)
+                raw_chain = str(item.get("chainId") or "").strip()
+                chain = canonical_registry_chain(raw_chain) or raw_chain
+                address = normalize_contract_address(item.get("tokenAddress"), raw_chain)
                 if not chain or not address:
                     continue
                 key = (chain, address)
@@ -612,26 +615,27 @@ class DexScreenerDiscoveryProvider:
                     continue
                 seen.add(key)
                 links = item.get("links") if isinstance(item.get("links"), list) else []
-                market = self._market_evidence(chain, address, meter=meter)
+                market = self._market_evidence(raw_chain, address, meter=meter)
                 if market.get("market_evidence_status") != "observed" or market.get("market_pair_side") == "quote":
-                    fallback = self._gecko_evidence(chain, address, meter=meter)
+                    fallback = self._gecko_evidence(raw_chain, address, meter=meter)
                     if fallback:
                         market = fallback
                 claimed = tuple(_dexscreener_links(links))
-                verified = self._corroborated_links(chain, address, claimed, meter=meter) if claimed else {}
+                verified = self._corroborated_links(raw_chain, address, claimed, meter=meter) if claimed else {}
                 rows.append(
                     DiscoveredCandidate(
                         provider=self.name,
                         provider_id=f"{chain}:{address}",
                         slug=contract_slug(chain, address),
-                        name=market.pop("token_name", None) or _dexscreener_name(item, chain, address),
+                        name=market.pop("token_name", None) or _dexscreener_name(item, raw_chain, address),
                         symbol=market.pop("token_symbol", None),
                         sector="dex_market",
                         primary_chain=chain,
                         candidate_type="token",
-                        source_url=str(item.get("url") or "") or f"https://dexscreener.com/{chain}/{address}",
+                        source_url=str(item.get("url") or "") or f"https://dexscreener.com/{raw_chain}/{address}",
                         metadata={
                             "chain": chain,
+                            "dex_chain_id": _dex_chain_id(raw_chain) or raw_chain,
                             "contract_address": address,
                             "asset_scope": "dex_token",
                             "source_type": source_type,
@@ -826,21 +830,20 @@ class DexScreenerDiscoveryProvider:
             registry_chain, addresses = groups[chain_id]
             for start in range(0, len(addresses), batch_limit):
                 chunk = addresses[start : start + batch_limit]
-                try:
-                    if meter is not None:
-                        meter.consume(self.sleeper)
-                except _RequestBudgetExhausted:
-                    truncated = True
-                    break
                 path = f"/tokens/v1/{urllib.parse.quote(chain_id, safe='')}/" + ",".join(
                     urllib.parse.quote(address, safe="") for address in chunk
                 )
                 fingerprint = f"{chain_id}|{','.join(chunk)}"
-                payload = self._get(
-                    path,
-                    dedup_key=hashlib.sha256(fingerprint.encode()).hexdigest() if dedup else None,
-                    batch_size=len(chunk),
-                )
+                try:
+                    payload = self._get(
+                        path,
+                        meter=meter,
+                        dedup_key=hashlib.sha256(fingerprint.encode()).hexdigest() if dedup else None,
+                        batch_size=len(chunk),
+                    )
+                except _RequestBudgetExhausted:
+                    truncated = True
+                    break
                 processed += len(chunk)
                 processed_assets.extend(
                     originals.get((chain_id, address), (registry_chain, address)) for address in chunk
@@ -935,6 +938,22 @@ def _dex_chain_id(platform: str) -> str | None:
     if normalized.startswith("contract:"):
         normalized = normalized.split(":", 1)[1]
     return _DEX_CHAIN_BY_PLATFORM.get(normalized)
+
+
+def canonical_registry_chain(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized.startswith("contract:"):
+        normalized = normalized.split(":", 1)[1]
+    return _REGISTRY_CHAIN_BY_PLATFORM.get(normalized, normalized)
+
+
+def registry_chain_aliases(value: object) -> tuple[str, ...]:
+    canonical = canonical_registry_chain(value)
+    if not canonical:
+        return ()
+    aliases = {canonical}
+    aliases.update(name for name, registry in _REGISTRY_CHAIN_BY_PLATFORM.items() if registry == canonical)
+    return tuple(sorted(aliases))
 
 
 def _dexscreener_batch_rows(

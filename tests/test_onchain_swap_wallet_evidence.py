@@ -25,11 +25,12 @@ from hunter.onchain.dex import (
     v2_swap_data,
     v3_swap_data,
 )
-from hunter.onchain.engine import CapitalFlowEngine, evm_log_evidence_id
+from hunter.onchain.engine import CapitalFlowEngine, _preserved_signed_row, evm_log_evidence_id
 from hunter.onchain.evidence import (
     CORROBORATION_POLICY,
     signature_id,
     verified_swap_rows,
+    verify_observation,
     write_signing_key,
     write_trust_document,
 )
@@ -167,7 +168,7 @@ def config(*pools: DexPoolConfig, chains: tuple[ChainConfig, ...] | None = None)
         chains=chains or (chain(),),
         tracked_assets=(
             AssetConfig(1, "USDC", "stablecoin", 6, USDC, "usd-coin"),
-            AssetConfig(1, "WETH", "wrapped_native", 18, WETH),
+            AssetConfig(1, "WETH", "wrapped_native", 18, WETH, "ethereum"),
         ),
         surfaces=(),
         snapshot_windows=("24h",),
@@ -312,21 +313,27 @@ def signed_swap(
     return row, signed, cfg, repo, trust
 
 
-def price_evidence(*, effective: datetime = PRICE_AT, price: object = "1.000000000000000000") -> RawHistoricalEvidence:
+def price_evidence(
+    *,
+    effective: datetime = PRICE_AT,
+    price: object = "1.000000000000000000",
+    coingecko_id: str = "usd-coin",
+    asset: str = "usdc",
+) -> RawHistoricalEvidence:
     return RawHistoricalEvidence(
         provider="coingecko-historical",
         collector="coingecko-history",
-        raw_source_id=f"historical:usdc:{effective.isoformat()}",
-        case_id="usdc-point",
+        raw_source_id=f"historical:{asset}:{effective.isoformat()}",
+        case_id=f"{asset}-point",
         project_id="uniswap",
         metric="historical_market",
         event_timestamp=effective,
         publication_timestamp=effective,
         data_availability_timestamp=effective,
         retrieval_timestamp=effective + timedelta(minutes=1),
-        payload={"coingecko_id": "usd-coin", "price": price},
-        source_url="https://api.coingecko.com/api/v3/coins/usd-coin/market_chart/range",
-        repository_id=f"historical:usdc:{effective.isoformat()}",
+        payload={"coingecko_id": coingecko_id, "price": price},
+        source_url=f"https://api.coingecko.com/api/v3/coins/{coingecko_id}/market_chart/range",
+        repository_id=f"historical:{asset}:{effective.isoformat()}",
     )
 
 
@@ -537,7 +544,12 @@ def test_market_validation_swap_wallet_context_uses_identity_and_usd_integration
     combined.save_raw((buy, sell))
     combined.save_evidence_signatures((buy_signed, sell_signed))
     historical = HistoricalEvidenceRepository(tmp_path / "historical")
-    historical.save_raw((price_evidence(),))
+    historical.save_raw(
+        (
+            price_evidence(),
+            price_evidence(coingecko_id="ethereum", asset="weth", price="2500"),
+        )
+    )
 
     source = _swap_wallet_context(
         "uniswap",
@@ -555,6 +567,38 @@ def test_market_validation_swap_wallet_context_uses_identity_and_usd_integration
     assert source.raw_input_metrics["verified_swap_count"] == 2
     assert source.raw_input_metrics["fifo_policy"] == "deterministic-fifo"
     assert source.raw_input_metrics["net_pnl_usd"] == "UNAVAILABLE"
+    assert source.raw_input_metrics["usd_provenance"] == "coingecko-historical-market-chart"
+    expected_cost = Decimal("12500") * Decimal("8000") / Decimal("17000")
+    assert source.raw_input_metrics["cost_basis_usd"] == str(expected_cost)
+    assert source.raw_input_metrics["realized_pnl_usd"] == str(Decimal("5000") - expected_cost)
+
+
+def test_swap_wallet_context_does_not_substitute_target_notional_for_consideration(tmp_path: Path) -> None:
+    key = Ed25519PrivateKey.generate()
+    buy, buy_signed, cfg, repo, trust = signed_swap(tmp_path, key=key, side="buy", log_index=1)
+    sell, sell_signed, cfg, repo, trust = signed_swap(
+        tmp_path / "sell", key=key, side="sell", log_index=2, usdc_raw=8_000_000_000, weth_raw=2 * 10**18
+    )
+    combined = OnChainRepository(tmp_path / "runtime-combined")
+    combined.save_raw((buy, sell))
+    combined.save_evidence_signatures((buy_signed, sell_signed))
+    historical = HistoricalEvidenceRepository(tmp_path / "historical")
+    historical.save_raw((price_evidence(),))
+
+    source = _swap_wallet_context(
+        "uniswap",
+        (buy, sell),
+        as_of=NOW,
+        config=cfg,
+        repository=combined,
+        trust=trust,
+        usd_valuator=HistoricalUsdValuator(cfg, historical).value,
+    )
+
+    assert source is not None
+    assert source.status == "UNAVAILABLE"
+    assert source.raw_input_metrics["cost_basis_usd"] is None
+    assert source.raw_input_metrics["realized_pnl_usd"] is None
     assert source.raw_input_metrics["usd_provenance"] == "coingecko-historical-market-chart"
 
 
@@ -648,6 +692,39 @@ def test_swap_observations_record_actual_rpc_attempt_count(tmp_path: Path) -> No
     assert len(rows) == 1
     assert rows[0].rpc_request_count == len(transport.calls)
     assert len(transport.calls) <= 30
+
+
+def test_overlapping_swap_replay_preserves_original_signed_metadata(tmp_path: Path) -> None:
+    first, first_signed, _cfg, _repo, trust = signed_swap(tmp_path, log_index=1, rpc_request_count=12)
+    replay = replace(
+        first,
+        rpc_request_count=7,
+        acquisition_timestamp=NOW + timedelta(minutes=3),
+        receipt_verified_at=NOW + timedelta(minutes=3),
+    )
+
+    preserved = _preserved_signed_row(replay, vars(first))
+
+    assert preserved is not None
+    assert preserved.rpc_request_count == 12
+    assert preserved.acquisition_timestamp == first.acquisition_timestamp
+    assert preserved.receipt_verified_at == first.receipt_verified_at
+    assert (
+        verify_observation(
+            preserved,
+            (first_signed,),
+            pool().as_surface(),
+            trust,
+            as_of=NOW + timedelta(minutes=10),
+            pool=pool(),
+        )
+        == preserved
+    )
+    assert _preserved_signed_row(replace(replay, raw_amount="99999999999999"), vars(first)) is None
+    assert _preserved_signed_row(replace(replay, event_type="transfer"), vars(first)) is None
+    assert _preserved_signed_row(replace(replay, provider="other"), vars(first)) is None
+    assert _preserved_signed_row(replace(replay, source_reference="other"), vars(first)) is None
+    assert _preserved_signed_row(replace(replay, finality_status="pending"), vars(first)) is None
 
 
 def test_wallet_performance_isolates_fifo_by_exact_target_asset() -> None:

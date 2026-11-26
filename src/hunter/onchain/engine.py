@@ -750,12 +750,14 @@ def _preserved_signed_row(row: RawOnChainObservation, existing: Mapping[str, obj
     for value in (current_value, previous_value):
         value.pop("acquisition_timestamp", None)
         value.pop("receipt_verified_at", None)
+        value.pop("rpc_request_count", None)
     if current_value != previous_value:
         return None
     return replace(
         row,
         acquisition_timestamp=previous.acquisition_timestamp,
         receipt_verified_at=previous.receipt_verified_at,
+        rpc_request_count=previous.rpc_request_count,
     )
 
 

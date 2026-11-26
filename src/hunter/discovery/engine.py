@@ -36,8 +36,10 @@ from hunter.discovery.providers import (
     DiscoveryProvider,
     GeckoTerminalDiscoveryProvider,
     ScanBudget,
+    canonical_registry_chain,
     contract_slug,
     normalize_contract_address,
+    registry_chain_aliases,
 )
 from hunter.discovery.repository import CandidateRegistryRepository
 from hunter.execution.identity import identity
@@ -285,13 +287,19 @@ class CandidateDiscoveryEngine:
             return run
 
         groups = self.repository.identifier_groups()
-        contract_identifiers = sorted(
-            (namespace, value)
-            for (namespace, value), _candidate_ids in groups.items()
-            if namespace.startswith("contract:")
-        )
+        contract_groups: dict[tuple[str, str], set[str]] = {}
+        for (namespace, value), candidate_ids in groups.items():
+            if not namespace.startswith("contract:"):
+                continue
+            chain = canonical_registry_chain(namespace.split(":", 1)[1])
+            contract_groups.setdefault((chain, value), set()).update(candidate_ids)
+        contract_identifiers = sorted((f"contract:{chain}", value) for chain, value in contract_groups)
         cursor_key = f"dexscreener-enrichment-{selected_mode}"
         cursor = self.repository.identifier_cursor(cursor_key)
+        if cursor is not None and cursor[0].startswith("contract:"):
+            namespace, value = cursor
+            chain = canonical_registry_chain(namespace.split(":", 1)[1])
+            cursor = (f"contract:{chain}", value)
         if cursor is not None and cursor in contract_identifiers:
             index = contract_identifiers.index(cursor)
             ordered_identifiers = contract_identifiers[index + 1 :] + contract_identifiers[: index + 1]
@@ -300,7 +308,8 @@ class CandidateDiscoveryEngine:
         assets: list[tuple[str, str]] = []
         for identifier in ordered_identifiers:
             namespace, value = identifier
-            candidate_ids = groups[identifier]
+            chain = canonical_registry_chain(namespace.split(":", 1)[1])
+            candidate_ids = contract_groups[(chain, value)]
             if selected_mode == "incremental" and any(
                 self._has_current_market_measure(candidate_id) for candidate_id in candidate_ids
             ):
@@ -756,17 +765,26 @@ class CandidateDiscoveryEngine:
         chain = str(metadata.get("chain") or candidate.primary_chain or "").strip().lower()
         contract_address = normalize_contract_address(metadata.get("contract_address"), chain)
         if chain and contract_address:
-            identifiers.append(
-                CandidateIdentifier(
-                    candidate_id,
-                    f"contract:{chain}",
-                    contract_address,
-                    candidate.provider,
-                    0.98,
-                    observed_at,
-                    observed_at,
-                )
-            )
+            seen_identifiers = {(identifiers[0].namespace, identifiers[0].value)}
+            for alias in registry_chain_aliases(chain):
+                for namespace, value in (
+                    (f"contract:{alias}", contract_address),
+                    (candidate.provider, f"{alias}:{contract_address}"),
+                ):
+                    if (namespace, value) in seen_identifiers:
+                        continue
+                    seen_identifiers.add((namespace, value))
+                    identifiers.append(
+                        CandidateIdentifier(
+                            candidate_id,
+                            namespace,
+                            value,
+                            candidate.provider,
+                            0.98 if namespace.startswith("contract:") else 0.95,
+                            observed_at,
+                            observed_at,
+                        )
+                    )
         aliases = [CandidateAlias(candidate_id, candidate.name, "provider_name", candidate.provider, 0.95)]
         if candidate.symbol:
             aliases.append(
@@ -935,10 +953,18 @@ class CandidateDiscoveryEngine:
         chain = str(metadata.get("chain") or candidate.primary_chain or "").strip().lower()
         contract_address = normalize_contract_address(metadata.get("contract_address"), chain)
         if chain and contract_address:
-            existing = self.repository.find_by_identifier(f"contract:{chain}", contract_address)
-            if existing:
-                return existing.candidate_id
-        return self._candidate_id(candidate.provider, candidate.provider_id)
+            for alias in registry_chain_aliases(chain):
+                for namespace, value in (
+                    (f"contract:{alias}", contract_address),
+                    (candidate.provider, f"{alias}:{contract_address}"),
+                ):
+                    existing = self.repository.find_by_identifier(namespace, value)
+                    if existing:
+                        return existing.candidate_id
+        existing = self.repository.find_by_identifier(candidate.provider, candidate.provider_id)
+        if existing:
+            return existing.candidate_id
+        return identity("candidate", {"namespace": candidate.provider, "value": candidate.provider_id})
 
     def _candidate_id(self, namespace: str, value: str) -> str:
         existing = self.repository.find_by_identifier(namespace, value)
