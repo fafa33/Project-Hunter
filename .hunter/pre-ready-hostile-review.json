@@ -21,7 +21,7 @@
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound, fully evidenced and non-merging until explicit owner approval.",
-        "evidence": "Issue #587 non-negotiable rules 1 and 4 and the owner checkpoint require exact-head proof and no merge. PR #788 is open at base a4a9b9e173bb15afaed2c162bda9708e93eb2411; correction commit 7f7ab6fd0d0a9b48efd83419d82cae0a71d2fe25 and its exact-head request refresh are published only through scripts/hunter_push.py with signed commits. The writer judgement is freshly compiled for the exact candidate tree, no reviewer authority is minted here, and no Ready action, merge, deployment, scheduler operation or production mutation is performed.",
+        "evidence": "Issue #587 non-negotiable rules 1 and 4 and the owner checkpoint require exact-head proof and no merge. PR #788 is open at base a4a9b9e173bb15afaed2c162bda9708e93eb2411; correction commit b97acb5f3b127c2e8e659a017ce4c0adf5f9e0cb and its exact-head request refresh are published only through scripts/hunter_push.py with signed commits. The writer judgement is freshly compiled for the exact candidate tree, no reviewer authority is minted here, and no Ready action, merge, deployment, scheduler operation or production mutation is performed.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -294,31 +294,31 @@
     ],
     "findings": [
       {
-        "evidence": "P1 liquidity-driven market_pair_address and market_pair_side changes created permanent provider disagreements and blocked identity handoff. Correction commit 7f7ab6fd0d0a9b48efd83419d82cae0a71d2fe25 classifies those keys and the sibling market_evidence_provider as refreshable market provenance, clears stale pair provenance only on a fresh provider observation, preserves last-known provenance on unavailable or unrelated observations, normalizes historical pair-selection disagreements, preserves genuine identity conflicts, and stabilizes identity fingerprints; RED before, GREEN after. Registry learning DFF-075/PRH-169.",
+        "evidence": "P1 liquidity-driven market_pair_address and market_pair_side changes created permanent provider disagreements and blocked identity handoff. Correction commit b97acb5f3b127c2e8e659a017ce4c0adf5f9e0cb classifies those keys and the sibling market_evidence_provider as refreshable market provenance, clears stale pair provenance only on a fresh provider observation, preserves last-known provenance on unavailable or unrelated observations, normalizes historical pair-selection disagreements, preserves genuine identity conflicts, and stabilizes identity fingerprints; RED before, GREEN after. Registry learning DFF-075/PRH-169.",
         "id": "PRRT_kwDOTRDHr868jZnS",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "7f7ab6fd0d0a9b48efd83419d82cae0a71d2fe25",
+          "correction": "b97acb5f3b127c2e8e659a017ce4c0adf5f9e0cb",
           "regression_test": "tests/test_global_discovery_candidate_registry.py"
         },
         "severity": "blocking"
       },
       {
-        "evidence": "P2 provider unavailability, duplicate capacity reservation, malformed JSON or an unexpected HTTP-200 payload shape on a later DexScreener batch discarded completed rows and cursor progress. Correction commit 7f7ab6fd0d0a9b48efd83419d82cae0a71d2fe25 validates response shape before capacity success, returns completed rows, processed assets and an explicit error marker for those failures so they are persisted before the failed batch is retried, and allows failed dedup reservations to retry immediately; RED before, GREEN after. Registry learning DFF-064/PRH-170.",
+        "evidence": "P2 provider unavailability, duplicate capacity reservation, malformed JSON or an unexpected HTTP-200 payload shape on a later DexScreener batch discarded completed rows and cursor progress. Correction commit b97acb5f3b127c2e8e659a017ce4c0adf5f9e0cb validates response shape before capacity success, returns completed rows, processed assets and an explicit error marker for those failures so they are persisted before the failed batch is retried, and allows failed dedup reservations to retry immediately; RED before, GREEN after. Registry learning DFF-064/PRH-170.",
         "id": "PRRT_kwDOTRDHr868jZnX",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "7f7ab6fd0d0a9b48efd83419d82cae0a71d2fe25",
+          "correction": "b97acb5f3b127c2e8e659a017ce4c0adf5f9e0cb",
           "regression_test": "tests/test_global_discovery_candidate_registry.py"
         },
         "severity": "blocking"
       },
       {
-        "evidence": "P2 transfer acquisition made 612 unmetered RPC calls in one sync with three endpoints. Correction commit 7f7ab6fd0d0a9b48efd83419d82cae0a71d2fe25 installs one config-declared total acquisition allowance around provider checks, transfers, corroboration, retries, failures and swaps; nested swap budgets inherit the same allowance, exhaustion gives explicit partial coverage without checkpoint advancement, and signed swap counts remain per-swap; RED before, GREEN after. Registry learning DFF-073/PRH-171.",
+        "evidence": "P2 transfer acquisition made 612 unmetered RPC calls in one sync with three endpoints. Correction commit b97acb5f3b127c2e8e659a017ce4c0adf5f9e0cb installs one config-declared total acquisition allowance around provider checks, transfers, corroboration, retries, failures and swaps; nested swap budgets inherit the same allowance, exhaustion gives explicit partial coverage without checkpoint advancement, and signed swap counts remain per-swap; RED before, GREEN after. Registry learning DFF-073/PRH-171.",
         "id": "PRRT_kwDOTRDHr868jZnb",
         "resolution": "resolved",
         "resolution_evidence": {
-          "correction": "7f7ab6fd0d0a9b48efd83419d82cae0a71d2fe25",
+          "correction": "b97acb5f3b127c2e8e659a017ce4c0adf5f9e0cb",
           "regression_test": "tests/test_onchain_swap_wallet_evidence.py"
         },
         "severity": "blocking"
@@ -574,9 +574,9 @@
     "pr_number": 788,
     "repository": "fafa33/Project-Hunter"
   },
-  "review_id": "26877c06bc670c1878e386fb9e038949fff695da8bcaba3ba1fffe243c81b634",
+  "review_id": "52f2300c6d8101f9fe5ba253619a8d1bdbf32301aa01321ff1c57bed6d6f5772",
   "review_request": {
-    "claims_id": "26877c06bc670c1878e386fb9e038949fff695da8bcaba3ba1fffe243c81b634",
+    "claims_id": "52f2300c6d8101f9fe5ba253619a8d1bdbf32301aa01321ff1c57bed6d6f5772",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
