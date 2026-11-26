@@ -278,7 +278,38 @@
         "outcome": "repaired"
       }
     ],
-    "findings": [],
+    "findings": [
+      {
+        "evidence": "P2 cursor rotation was defeated by sorted chain grouping under a one-request allowance. Correction commit 9ba119209f57c69e5a21ddc837c90db71831671c dispatches groups in rotated input order; RED before (base,base,base,base), GREEN after (base,ethereum,base,ethereum). Registry learning DFF-064/PRH-144.",
+        "id": "PRRT_kwDOTRDHr868g_Lv",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "9ba119209f57c69e5a21ddc837c90db71831671c",
+          "regression_test": "tests/test_global_discovery_candidate_registry.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "P2 swap replay admitted acquisition and receipt-verification timestamps up to five minutes after the cutoff. Correction commit 9ba119209f57c69e5a21ddc837c90db71831671c applies the strict cutoff to both timestamps while retaining block skew tolerance; RED before, GREEN after. Registry learning DFF-066/PRH-148.",
+        "id": "PRRT_kwDOTRDHr868g_L6",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "9ba119209f57c69e5a21ddc837c90db71831671c",
+          "regression_test": "tests/test_onchain_swap_wallet_evidence.py"
+        },
+        "severity": "blocking"
+      },
+      {
+        "evidence": "P2 GeckoTerminal catalogue, pool and token requests each received a full 10/min allowance. Correction commit 9ba119209f57c69e5a21ddc837c90db71831671c declares one provider-wide rate_limit_group and counts one rolling bucket while retaining endpoint telemetry; RED before (11th reservation accepted), GREEN after. Registry learning DFF-083/PRH-168.",
+        "id": "PRRT_kwDOTRDHr868g_MD",
+        "resolution": "resolved",
+        "resolution_evidence": {
+          "correction": "9ba119209f57c69e5a21ddc837c90db71831671c",
+          "regression_test": "tests/test_global_discovery_candidate_registry.py"
+        },
+        "severity": "blocking"
+      }
+    ],
     "issue": "587",
     "review_target": [
       {
@@ -523,9 +554,9 @@
     "pr_number": 788,
     "repository": "fafa33/Project-Hunter"
   },
-  "review_id": "1468557a717d36e694ca9fb115032c041bd4da018d4f0e54351475c6ced9a987",
+  "review_id": "212e7671f4be625752e9f508b827b97162221f1d59947d45c1a08baab40405b8",
   "review_request": {
-    "claims_id": "1468557a717d36e694ca9fb115032c041bd4da018d4f0e54351475c6ced9a987",
+    "claims_id": "212e7671f4be625752e9f508b827b97162221f1d59947d45c1a08baab40405b8",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
