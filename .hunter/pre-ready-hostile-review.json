@@ -3,25 +3,25 @@
     "acceptance_criteria": [
       {
         "criterion": "Free-provider capacity is inventoried with explicit provenance and observed consumption is persisted without paid API use.",
-        "evidence": "No paid API path was added; bounded EVM RPC, CoinGecko completed-page cursors, and DexScreener retry accounting remain provenance-bound and no full repository suite was used as a local gate.",
+        "evidence": "Fresh staged candidate adds no paid API path and local verification used no credentialed network access; the bounded capacity, cursor, and retry accounting paths are unchanged in this remediation and the focused discovery regression file passed.",
         "id": "AC-587-01",
         "verdict": "satisfied"
       },
       {
         "criterion": "Global discovery uses bounded, resumable free capacity and truthful DexScreener batching without a parallel daemon.",
-        "evidence": "Legacy chain aliases canonicalize for registry identity and cursors, batch retry attempts consume the supplied budget exactly once, and duplicate contract aliases no longer split bounded enrichment work.",
+        "evidence": "DexScreener batch URL, batch_size, batch_index, market_evidence_url, and batch_endpoint are classified as volatile observation provenance by src/hunter/discovery/models.py, so repeated batches refresh in place without provider disagreements or identity fingerprint invalidation; test_dexscreener_batch_provenance_is_not_identity_evidence maps this regression to DFF-075.",
         "id": "AC-587-02",
         "verdict": "satisfied"
       },
       {
         "criterion": "Global coverage is evidence-bound and explicitly discloses inaccessible or unknown scope.",
-        "evidence": "Per-log block binding, exact target-asset FIFO, full-receipt ambiguity, recipient ownership, normalized freshness, all row-derived signed metadata, and consideration-side causal USD valuation fail closed. Signed buy-input and sell-output valuation now lives in the onchain boundary so the market-validation boundary contains no buy/sell transaction-direction literals; focused boundary regression passes.",
+        "evidence": "Four fresh focused regressions map to DFF-069, DFF-075, DFF-075, and DFF-064 respectively: test_conflicting_price_points_only_block_the_selected_causal_point limits USD conflicts to the selected causal point while still failing closed on selected-point conflicts; test_dexscreener_batch_provenance_is_not_identity_evidence protects batch provenance; test_W_unchanged_identity_refresh_preserves_accepted_lifecycle re-asserts accepted lifecycle and queue eligibility; test_X_reconcile_and_handoff_fetch_queued_ids_without_capped_registry_absence loads queued IDs by identity instead of a capped registry scan. Advisory Qwen review at /tmp/hunter-788-local-review.txt reported no significant findings and is recorded only as non-canonical advisory evidence.",
         "id": "AC-587-03",
         "verdict": "satisfied"
       },
       {
         "criterion": "Governed review and publication remain exact-head-bound and non-merging until owner approval.",
-        "evidence": "Fresh writer judgement after the hosted boundary failure on 538dc3dcca28f9b3848b920744c78b4617c6bcde; 63 focused tests, scoped Ruff/Black/mypy, registry JSON validation, no buy/sell token in src/hunter/market_validation, and no prior reviewer authority reused. Hosted exact-head gates remain authoritative and must re-verify the corrected head; PR #788 stays Draft with no merge or deployment asserted.",
+        "evidence": "Fresh writer judgement is derived only from the exact staged tree on top of base a4a9b9e173bb15afaed2c162bda9708e93eb2411, including the seven remediated source/test files and the refreshed review artifact; no prior request claims, findings, reviewer authority, or reviewer verdict are reused. DPM/SPM context compiled from docs/DEFECT_REGISTRY.json through EngineeringContextAuthority for engineering.implement covers 39 staged paths and 44 applicable families with selected_prevention_rules_sha256 05ef145749690d152bcf16712f20a0aa089621b483794da3a644a17316485886. Focused verification passed 4 new regressions and 105 affected-file tests with Ruff, Black, and mypy clean; no full suite was run. This judgement requests a local signed commit only: no push, no Ready action, no thread resolution, no merge, no deployment, and hosted exact-head gates remain authoritative.",
         "id": "AC-587-04",
         "verdict": "satisfied"
       }
@@ -30,12 +30,14 @@
       "asset-contract-isolation",
       "atomic-write",
       "authorization",
+      "batch-provenance",
       "block-identity",
       "boundary-token-scan",
       "caller-controlled-time-state",
       "canonical-chain-alias",
+      "capped-registry-absence",
+      "causal-price-conflict",
       "causal-price-selection",
-      "completed-page-cursor",
       "consideration-valuation",
       "coverage-denominator",
       "cutoff-history",
@@ -49,10 +51,12 @@
       "freshness-normalization",
       "identity-handoff",
       "inclusive-range-boundary",
+      "independent-advisory-review-noncanonical",
       "malformed-unknown-authority",
       "market-validation-boundary",
       "monotonicity",
       "multi-hop-ambiguity",
+      "noncanonical-local-review-evidence",
       "numeric-precision",
       "per-log-timestamp",
       "persistence-restrictions",
@@ -67,9 +71,11 @@
       "rpc-budget",
       "shared-execution-budget",
       "signed-evidence-replay",
+      "staged-tree-freshness",
       "static-analysis-findings",
       "tamper-resistance",
       "transaction-snapshot-consistency",
+      "unchanged-identity-refresh",
       "volatile-metadata-refresh",
       "wallet-inference"
     ],
@@ -77,224 +83,224 @@
     "base_sha": "a4a9b9e173bb15afaed2c162bda9708e93eb2411",
     "defect_families": [
       {
-        "evidence": "Trusted temporal authority unchanged.",
+        "evidence": "Trusted temporal authority is unchanged in this staged remediation.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Atomic signed-pair persistence unchanged.",
+        "evidence": "Atomic signed-pair persistence is unchanged in this staged remediation.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Signed evidence binding unchanged.",
+        "evidence": "Signed evidence binding is unchanged in this staged remediation.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Trust-document authority unchanged.",
+        "evidence": "Trust-document authority is unchanged in this staged remediation.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Conflict fail-closed persistence unchanged.",
+        "evidence": "Conflict fail-closed persistence is unchanged; genuine identity conflicts remain covered by the focused identity handoff file.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Discovery cursor guards unchanged.",
+        "evidence": "Monotonic and restart behavior remains governed by the unchanged fair-cursor guards.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Authorization paths unchanged.",
+        "evidence": "Authorization paths are unchanged by this staged remediation.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "No reviewer authority in writer judgement.",
+        "evidence": "No reviewer authority is minted by this writer judgement; the Qwen review remains advisory and non-canonical.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Connector provenance unchanged.",
+        "evidence": "Connector provenance paths are unchanged by this staged remediation.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Signed writer path unchanged.",
+        "evidence": "Existing signed writer preparation is used locally; no push or remote publication is performed.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Single branch remediation unchanged.",
+        "evidence": "Remediation remains on the single existing candidate branch; no new PR is created.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Request regenerated from fresh staged-tree judgement after hosted boundary failure; no prior request authority reused.",
+        "evidence": "This request is regenerated from fresh staged content; prior request claims and findings are not reused.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Draft PR and pending review preserved.",
+        "evidence": "The existing Draft PR state is preserved; no Ready, merge, or deployment action is asserted.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted publisher and readiness paths unchanged.",
+        "evidence": "Hosted publisher and readiness paths are unchanged by this staged remediation.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "PRH-142 through PRH-151 and DFF-062 through DFF-069 remain compiled into SPM context; PRH-161 through PRH-165 and DFF-078 through DFF-082 still compile as well.",
+        "evidence": "Fresh DPM/SPM compile covers 39 staged paths, 44 applicable families, task engineering.implement, and selected_prevention_rules_sha256 05ef145749690d152bcf16712f20a0aa089621b483794da3a644a17316485886.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Reviewer pool unchanged.",
+        "evidence": "Reviewer pool configuration is unchanged; advisory Qwen evidence carries no authority.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Local checks remain diagnostic only; hosted exact-head gates must re-verify the corrected head.",
+        "evidence": "Local focused checks are diagnostic only; hosted exact-head gates remain authoritative.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Governed artifact paths retained.",
+        "evidence": "Governed artifact paths are retained for the staged request refresh.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "New identity, cursor, budget, and USD fail-closed regressions retained.",
+        "evidence": "Four fresh focused regressions cover batch provenance, causal USD conflict selection, unchanged accepted identity refresh, and capped-registry queue lookup.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "PRH-150/151 and DFF-068/069 remain compiled into SPM context.",
+        "evidence": "PRH-150/151 and DFF-068/069 remain compiled into the fresh SPM context for the staged path set.",
         "family": "DFF-045",
         "outcome": "clear"
       },
       {
-        "evidence": "No new live RPC run or old E2E reuse.",
+        "evidence": "No new live RPC run or reused old E2E claim is introduced by this local remediation.",
         "family": "DFF-059",
         "outcome": "clear"
       },
       {
-        "evidence": "Inclusive block-range guards unchanged.",
+        "evidence": "Inclusive block-range guards are unchanged by this staged remediation.",
         "family": "DFF-060",
         "outcome": "clear"
       },
       {
-        "evidence": "Trusted provenance timestamps unchanged.",
+        "evidence": "Trusted provenance timestamp handling is unchanged by this staged remediation.",
         "family": "DFF-061",
         "outcome": "clear"
       },
       {
-        "evidence": "Immutable signed-pair guards unchanged.",
+        "evidence": "Immutable signed-pair guards are unchanged by this staged remediation.",
         "family": "DFF-062",
         "outcome": "clear"
       },
       {
-        "evidence": "Per-surface finality guards unchanged.",
+        "evidence": "Per-surface finality guards are unchanged by this staged remediation.",
         "family": "DFF-063",
         "outcome": "clear"
       },
       {
-        "evidence": "Shared budget and cursor guards unchanged; CoinGecko completion and DexScreener retry budgets remain regress-tested.",
+        "evidence": "Queue handoff and eligibility reconcile now fetch queued candidate IDs through candidates_by_ids; the capped-registry absence regression passes.",
         "family": "DFF-064",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
-        "evidence": "Catalogue-derived coverage guards unchanged.",
+        "evidence": "Catalogue-derived coverage guards are unchanged by this staged remediation.",
         "family": "DFF-065",
         "outcome": "clear"
       },
       {
-        "evidence": "Strict replay guards unchanged; signed row comparison still covers every row-derived signed field.",
+        "evidence": "Strict replay guards are unchanged by this staged remediation.",
         "family": "DFF-066",
         "outcome": "clear"
       },
       {
-        "evidence": "Exact amount normalization unchanged.",
+        "evidence": "Exact amount normalization is unchanged by this staged remediation.",
         "family": "DFF-067",
         "outcome": "clear"
       },
       {
-        "evidence": "Partial discovery automation fails closed before scheduler loop.",
+        "evidence": "Partial discovery automation still fails closed before the scheduler loop.",
         "family": "DFF-068",
         "outcome": "clear"
       },
       {
-        "evidence": "Historical USD valuation remains causal, exact, fresh, provenance-bound and non-inferential.",
+        "evidence": "Historical USD valuation now records same-time conflicts but fails closed only when the selected causal point conflicts; future conflicts no longer block a valid earlier point and the selected-conflict regression stays UNAVAILABLE.",
         "family": "DFF-069",
-        "outcome": "clear"
+        "outcome": "repaired"
       },
       {
-        "evidence": "Verified pool identity, explicit V2/V3 decode, finalized receipt plus independent endpoints, exact tx/log binding, router exclusion, multi-hop ambiguity and bounded RPC budget regress-tested.",
+        "evidence": "Verified pool identity, explicit decode, finalized receipt, router exclusion, multi-hop ambiguity, and bounded RPC guards are unchanged.",
         "family": "DFF-070",
         "outcome": "clear"
       },
       {
-        "evidence": "Verified attributed swaps feed deterministic exact-Decimal FIFO per chain/wallet; partial inventory, missing fees, net P&L and unrealized values remain UNAVAILABLE.",
+        "evidence": "Deterministic exact-Decimal FIFO wallet aggregation is unchanged by this staged remediation.",
         "family": "DFF-071",
         "outcome": "clear"
       },
       {
-        "evidence": "Each accepted swap log now fetches and validates its own block and signs that block's timestamp; multi-block regression passes.",
+        "evidence": "Per-log block timestamp binding is unchanged by this staged remediation.",
         "family": "DFF-072",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "The shared RPC endpoint dispatcher charges every attempt before transport dispatch, including chainId, logs, receipts, corroboration and failures; count regression and guard-reference validation pass.",
+        "evidence": "Shared RPC dispatcher attempt accounting is unchanged by this staged remediation.",
         "family": "DFF-073",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Wallet FIFO is grouped by exact target asset contract and incomplete per-asset groups stay unavailable; cross-asset regression passes.",
+        "evidence": "Exact target-asset FIFO grouping is unchanged by this staged remediation.",
         "family": "DFF-074",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Volatile timestamps and market measurements refresh in place without provider disagreements while genuine identity conflicts still fail closed.",
+        "evidence": "DexScreener batch provenance keys are volatile/refreshable and unchanged accepted identity refresh re-asserts lifecycle and queue eligibility; both focused regressions pass.",
         "family": "DFF-075",
         "outcome": "repaired"
       },
       {
-        "evidence": "Full receipt swap-topic counting and decoded recipient ownership now gate attribution; multi-hop receipt regression passes.",
+        "evidence": "Full-receipt swap-topic counting and decoded recipient ownership guards are unchanged.",
         "family": "DFF-076",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Swap freshness is normalized from current 1.0 to horizon 0.0 with future and stale clamping plus boundary regression coverage.",
+        "evidence": "Swap freshness normalization is unchanged by this staged remediation.",
         "family": "DFF-077",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Replay preservation still includes event_type, provider, source_reference, and finality_status in comparison; differing signed fields fail closed and preserve no stale metadata.",
+        "evidence": "Replay preservation of signed row fields is unchanged by this staged remediation.",
         "family": "DFF-078",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "CoinGecko resume still returns the last successful page, and exhaustion before the first completed page keeps the prior cursor.",
+        "evidence": "CoinGecko cursor completion guards are unchanged by this staged remediation.",
         "family": "DFF-079",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "DexScreener still passes the active batch meter into the shared dispatcher, charging every retry attempt exactly once without pre-consumption.",
+        "evidence": "Discovery budget retry accounting is unchanged by this staged remediation.",
         "family": "DFF-080",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Canonical chain identity, alias deduplication, and legacy cursor canonicalization remain regress-tested while provider-native transport aliases stay intact.",
+        "evidence": "Canonical chain identity and alias deduplication guards are unchanged by this staged remediation.",
         "family": "DFF-081",
-        "outcome": "repaired"
+        "outcome": "clear"
       },
       {
-        "evidence": "Signed buy-input and sell-output consideration valuation moved to src/hunter/onchain/wallet_performance.py::signed_consideration_valuation; market-validation has no buy/sell literal, target notional remains isolated to USD metrics, unavailable consideration fails closed, and test_market_validation_boundaries now covers the earliest practical boundary.",
+        "evidence": "Consideration-side causal USD valuation remains in the onchain boundary and the market-validation boundary still contains no buy/sell transaction-direction literal.",
         "family": "DFF-082",
-        "outcome": "repaired"
+        "outcome": "clear"
       }
     ],
     "findings": [],
@@ -313,7 +319,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "a1ba561abd739d9a21083d78bceb23972db67ac3",
+        "blob_sha": "78212a87cacc7e6c59d12bf088c71525cd040e5c",
         "path": "src/hunter/historical_acquisition/usd_valuation.py",
         "previous_path": "",
         "status": "added"
@@ -337,7 +343,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "227fa8e915cb9c032cbeb8daf38abb29436698a2",
+        "blob_sha": "b14817f37e6307514dde6dce90be5bfe2ecb16b9",
         "path": "tests/test_discovery_identity_handoff.py",
         "previous_path": "",
         "status": "added"
@@ -403,19 +409,19 @@
         "status": "modified"
       },
       {
-        "blob_sha": "72c410c7ff28e20445a0f0b767eca3ee9be0ebea",
+        "blob_sha": "8b8713f8d86513406413b353d7eb6102c0ad8720",
         "path": "src/hunter/discovery/engine.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "361a5e64b890ec6d5cef1a33985f6e7247f3882c",
+        "blob_sha": "f3c20a548182866ef25a338984be4224f7290df2",
         "path": "src/hunter/discovery/identity.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "6727a6415c028fddecca2d8db896b5b7c843671d",
+        "blob_sha": "0f6010532dc80165d214f46db80497fd66090e2c",
         "path": "src/hunter/discovery/models.py",
         "previous_path": "",
         "status": "modified"
@@ -493,13 +499,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "cef42e81d51ef276f4a8ca82ae7170ce75a68659",
+        "blob_sha": "aa1e0f1064497a2dd3cc055cf350e224e8af58c5",
         "path": "tests/test_global_discovery_candidate_registry.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "d3f883f48f3cacf2edc41b5f8f1e57d0f84c20ab",
+        "blob_sha": "9d5a1edee98de7b9b4058369091ae22a057d3309",
         "path": "tests/test_historical_acquisition.py",
         "previous_path": "",
         "status": "modified"
@@ -529,11 +535,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "99ea43d80183881ffc8f3b9dd606f39fa497799976e259aa6dcfa55f7cf46dbb"
+    "review_target_digest": "8707cdffdc4cae2a4d1c6ed531fb706a94673914aec12ca63fc240713090e94b"
   },
-  "review_id": "d2a2f1727e9dd699dcb1bb07e13a1fd45fbe2a06cac355e97120e6b28231196d",
+  "review_id": "8edb608d77f355db7dcda3baee908408648417675208aaf01985a53878bae6e0",
   "review_request": {
-    "claims_id": "d2a2f1727e9dd699dcb1bb07e13a1fd45fbe2a06cac355e97120e6b28231196d",
+    "claims_id": "8edb608d77f355db7dcda3baee908408648417675208aaf01985a53878bae6e0",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

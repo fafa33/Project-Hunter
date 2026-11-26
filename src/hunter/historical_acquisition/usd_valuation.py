@@ -101,6 +101,7 @@ class HistoricalUsdValuator:
 
         points: dict[datetime, dict[str, Any]] = {}
         provenance: dict[datetime, tuple[str, str, datetime]] = {}
+        conflicting: set[datetime] = set()
         for row in sorted(
             self.repository.raw(), key=lambda item: (item.data_availability_timestamp, item.repository_id)
         ):
@@ -112,15 +113,12 @@ class HistoricalUsdValuator:
             if price is None:
                 continue
             effective = row.data_availability_timestamp.astimezone(UTC)
-            if effective in points and points[effective]["price"] != price:
-                return UsdValuation(
-                    status="UNAVAILABLE",
-                    reason="conflicting historical USD price points at the same availability time",
-                    chain_id=observation.chain_id,
-                    asset_contract=contract,
-                    coingecko_id=asset.coingecko_id,
-                    target_at=observation.block_timestamp,
-                )
+            if effective in points:
+                if points[effective]["price"] != price:
+                    conflicting.add(effective)
+                else:
+                    provenance[effective] = (row.repository_id, row.source_url, row.retrieval_timestamp)
+                continue
             points[effective] = {"price": price}
             provenance[effective] = (row.repository_id, row.source_url, row.retrieval_timestamp)
 
@@ -135,6 +133,16 @@ class HistoricalUsdValuator:
                 target_at=observation.block_timestamp,
             )
         effective_at, values = selected
+        if effective_at in conflicting:
+            return UsdValuation(
+                status="UNAVAILABLE",
+                reason="conflicting historical USD price points at the selected availability time",
+                chain_id=observation.chain_id,
+                asset_contract=contract,
+                coingecko_id=asset.coingecko_id,
+                target_at=observation.block_timestamp,
+                effective_at=effective_at,
+            )
         freshness = observation.block_timestamp - effective_at
         if freshness > self.max_price_age:
             return UsdValuation(

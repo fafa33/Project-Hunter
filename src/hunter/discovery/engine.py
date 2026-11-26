@@ -564,8 +564,12 @@ class CandidateDiscoveryEngine:
         identities = self.repository.latest_identity_by_candidate()
         ticker_groups = self.repository.alias_groups(alias_type="ticker_symbol")
         screenings = self.repository.latest_screening_by_candidate()
-        candidates = {item.candidate_id: item for item in self.repository.list_candidates(limit=100_000)}
-        eligible = [entry for entry in self.repository.all_queue_entries() if entry.eligible_for_deep_analysis]
+        queue_entries = self.repository.all_queue_entries()
+        candidates = {
+            item.candidate_id: item
+            for item in self.repository.candidates_by_ids(tuple(entry.candidate_id for entry in queue_entries))
+        }
+        eligible = [entry for entry in queue_entries if entry.eligible_for_deep_analysis]
         eligible.sort(key=lambda entry: (-entry.priority_score, entry.candidate_id))
         shortlist: list[dict[str, object]] = []
         for entry in eligible:
@@ -610,9 +614,13 @@ class CandidateDiscoveryEngine:
         ticker_groups = self.repository.alias_groups(alias_type="ticker_symbol")
         screenings = self.repository.latest_screening_by_candidate()
         states = self.repository.candidate_lifecycle_states()
-        candidates = {item.candidate_id: item for item in self.repository.list_candidates(limit=100_000)}
+        queue_entries = self.repository.all_queue_entries()
+        candidates = {
+            item.candidate_id: item
+            for item in self.repository.candidates_by_ids(tuple(entry.candidate_id for entry in queue_entries))
+        }
         updates: list[tuple[str, bool]] = []
-        for entry in self.repository.all_queue_entries():
+        for entry in queue_entries:
             result = screenings.get(entry.candidate_id)
             candidate = candidates.get(entry.candidate_id)
             accepted = candidate is not None and identity_is_accepted(

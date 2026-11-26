@@ -5,7 +5,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -29,6 +29,8 @@ from hunter.discovery.capacity import (
     load_capacity_inventory,
 )
 from hunter.discovery.configuration import DiscoveryConfig, DiscoveryProviderConfig
+from hunter.discovery.identity import identity_evidence_fingerprint
+from hunter.discovery.models import CandidateRecord
 from hunter.discovery.providers import (
     GECKOTERMINAL_FREE_MAX_PAGE,
     CoinGeckoDiscoveryProvider,
@@ -423,6 +425,49 @@ def test_volatile_discovery_metadata_refreshes_without_identity_conflict() -> No
     genuine = _merge_metadata({"token_symbol": "AAA"}, {"token_symbol": "BBB"})
 
     assert "token_symbol" in genuine["provider_disagreements"]
+
+
+def test_dexscreener_batch_provenance_is_not_identity_evidence() -> None:
+    from hunter.discovery.repository import _merge_metadata
+
+    previous = {
+        "provider_disagreements": {},
+        "market_evidence_url": "https://api.dexscreener.test/tokens/v1/1/aaa",
+        "batch_size": 1,
+        "batch_index": 0,
+        "market_evidence_observed_at": "2026-11-26T00:00:00+00:00",
+    }
+    current = {
+        "market_evidence_url": "https://api.dexscreener.test/tokens/v1/1/aaa,bbb",
+        "batch_size": 2,
+        "batch_index": 1,
+        "market_evidence_observed_at": "2026-11-26T01:00:00+00:00",
+    }
+
+    refreshed = _merge_metadata(previous, current)
+    observed_at = datetime(2026, 11, 26, tzinfo=UTC)
+    previous_candidate = CandidateRecord(
+        candidate_id="candidate:batch-provenance",
+        slug="eth-0xabc",
+        name="Shared Token",
+        symbol="SHARED",
+        sector="dex_market",
+        primary_chain="eth",
+        candidate_type="token",
+        lifecycle_status="analyzable",
+        discovery_source="dexscreener",
+        first_seen_at=observed_at,
+        last_seen_at=observed_at,
+        confidence=1.0,
+        metadata=previous,
+    )
+    refreshed_candidate = replace(previous_candidate, metadata=refreshed)
+
+    assert refreshed["market_evidence_url"] == current["market_evidence_url"]
+    assert refreshed["batch_size"] == 2
+    assert refreshed["batch_index"] == 1
+    assert refreshed.get("provider_disagreements", {}) == {}
+    assert identity_evidence_fingerprint(previous_candidate) == identity_evidence_fingerprint(refreshed_candidate)
 
 
 def test_identity_resolution_rejected_and_unresolved_outcomes(tmp_path) -> None:

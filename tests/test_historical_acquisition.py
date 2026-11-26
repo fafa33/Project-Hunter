@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -328,6 +329,51 @@ def test_historical_usd_valuation_fails_closed_for_wrong_chain_stale_and_future_
     causal = HistoricalUsdValuator(load_onchain_config(), future_repository).value(_usdc_observation())
     assert causal.status == "UNAVAILABLE"
     assert "causal" in (causal.reason or "")
+
+
+def test_conflicting_price_points_only_block_the_selected_causal_point(tmp_path) -> None:
+    source = _usdc_price_evidence()
+    future = datetime(2026, 11, 25, 10, 0, tzinfo=UTC)
+    future_conflicts = (
+        replace(
+            source,
+            raw_source_id="historical:usdc:10-00-a",
+            repository_id="historical:usdc:10-00-a",
+            data_availability_timestamp=future,
+            payload={"coingecko_id": "usd-coin", "price": 0.1},
+        ),
+        replace(
+            source,
+            raw_source_id="historical:usdc:10-00-b",
+            repository_id="historical:usdc:10-00-b",
+            data_availability_timestamp=future,
+            payload={"coingecko_id": "usd-coin", "price": 0.2},
+        ),
+    )
+    repository = HistoricalEvidenceRepository(tmp_path / "historical-acquisition")
+    repository.save_raw((source, *future_conflicts))
+
+    result = HistoricalUsdValuator(load_onchain_config(), repository, max_price_age=timedelta(hours=1)).value(
+        _usdc_observation()
+    )
+
+    assert result.status == "AVAILABLE"
+    assert result.price_usd == Decimal("0.9995440023519918")
+    assert result.source_record_id == "historical:usdc:09-00"
+
+    selected_conflict = replace(
+        source,
+        raw_source_id="historical:usdc:09-00-b",
+        repository_id="historical:usdc:09-00-b",
+        payload={"coingecko_id": "usd-coin", "price": 0.3},
+    )
+    selected_repository = HistoricalEvidenceRepository(tmp_path / "selected-conflict")
+    selected_repository.save_raw((source, selected_conflict))
+
+    blocked = HistoricalUsdValuator(load_onchain_config(), selected_repository).value(_usdc_observation())
+
+    assert blocked.status == "UNAVAILABLE"
+    assert "conflicting historical USD price points" in (blocked.reason or "")
 
 
 def _usdc_price_evidence() -> RawHistoricalEvidence:

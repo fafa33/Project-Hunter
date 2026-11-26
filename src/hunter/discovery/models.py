@@ -36,6 +36,10 @@ VOLATILE_IDENTITY_METADATA_KEYS = frozenset(
         "retrieved_at",
         "scraped_at",
         "seen_at",
+        "market_evidence_url",
+        "batch_endpoint",
+        "batch_size",
+        "batch_index",
     }
 )
 REFRESHABLE_DISCOVERY_METADATA_KEYS = VOLATILE_IDENTITY_METADATA_KEYS | frozenset(

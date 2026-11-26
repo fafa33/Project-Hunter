@@ -570,3 +570,73 @@ def test_V_partial_discovery_automation_fails_closed(tmp_path) -> None:
 
     with pytest.raises(ValueError, match="discovery-identity-resolution"):
         require_discovery_automation(path)
+
+
+def test_W_unchanged_identity_refresh_preserves_accepted_lifecycle(tmp_path) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    candidate_id = "candidate:unchanged-refresh"
+    identifiers, sources = _contract_candidate(candidate_id, "unchanged-refresh", "source-unchanged-refresh")
+    _add(
+        repository,
+        candidate_id=candidate_id,
+        slug="unchanged-refresh",
+        lifecycle="screenable",
+        identifiers=identifiers,
+        sources=sources,
+        metadata={"liquidity_usd": 1000},
+    )
+    engine = _engine(repository)
+    identity_engine = CandidateIdentityResolutionEngine(repository)
+    assert identity_engine.resolve_batch(limit=10).evaluated == 1
+    engine.refresh_queue(limit=10)
+    assert repository.get(candidate_id).lifecycle_status == "identified"
+    assert all(entry.eligible_for_deep_analysis for entry in repository.all_queue_entries())
+
+    _add(
+        repository,
+        candidate_id=candidate_id,
+        slug="unchanged-refresh",
+        lifecycle="screenable",
+        identifiers=identifiers,
+        sources=sources,
+        metadata={"liquidity_usd": 1000},
+    )
+    second = identity_engine.resolve_batch(limit=10)
+
+    assert second.evaluated == 0 and second.unchanged == 1
+    assert repository.get(candidate_id).lifecycle_status == "identified"
+    assert all(entry.eligible_for_deep_analysis for entry in repository.all_queue_entries())
+    assert engine.reconcile_eligibility() == 0
+
+
+def test_X_reconcile_and_handoff_fetch_queued_ids_without_capped_registry_absence(tmp_path, monkeypatch) -> None:
+    repository = CandidateRegistryRepository(tmp_path / "candidates.sqlite")
+    first, second = "candidate:queued-a", "candidate:queued-b"
+    for candidate_id in (first, second):
+        identifiers, sources = _contract_candidate(
+            candidate_id, candidate_id.rsplit(":", 1)[1], f"source-{candidate_id}"
+        )
+        _add(
+            repository,
+            candidate_id=candidate_id,
+            slug=candidate_id.rsplit(":", 1)[1],
+            identifiers=identifiers,
+            sources=sources,
+        )
+    engine = _engine(repository)
+    assert CandidateIdentityResolutionEngine(repository).resolve_batch(limit=10).evaluated == 2
+    entries = engine.refresh_queue(limit=10)
+    assert len(entries) == 2 and all(entry.eligible_for_deep_analysis for entry in entries)
+
+    original = repository.list_candidates
+
+    def capped_list_candidates(**kwargs: Any) -> tuple[Any, ...]:
+        kwargs["limit"] = 1
+        return original(**kwargs)
+
+    monkeypatch.setattr(repository, "list_candidates", capped_list_candidates)
+
+    assert engine.reconcile_eligibility() == 0
+    manifest = engine.handoff_manifest(limit=10)
+    assert manifest["shortlist_size"] == 2
+    assert {item["candidate_id"] for item in manifest["shortlist"]} == {first, second}  # type: ignore[index]

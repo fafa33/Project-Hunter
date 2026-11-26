@@ -115,7 +115,8 @@ class CandidateIdentityResolutionEngine:
         ticker_groups = self.repository.alias_groups(alias_type="ticker_symbol")
         batch = self.repository.fair_candidates("identity", limit)
         pending: list[CandidateRecord] = []
-        unchanged = 0
+        unchanged_results: list[CandidateIdentity] = []
+        unchanged_count = 0
         for candidate in batch:
             related = related_ticker_candidates(candidate, ticker_groups)
             fingerprint = identity_evidence_fingerprint(candidate, related_candidate_ids=related)
@@ -125,16 +126,18 @@ class CandidateIdentityResolutionEngine:
                 and prior.policy_version == IDENTITY_POLICY_VERSION
                 and prior.evidence_fingerprint == fingerprint
             ):
-                unchanged += 1
+                unchanged_count += 1
+                if identity_is_accepted(prior, candidate=candidate, related_candidate_ids=related):
+                    unchanged_results.append(prior)
                 continue
             pending.append(candidate)
         results = self._evaluate_batch(tuple(pending), ticker_groups=ticker_groups, evaluated_at=now)
-        conflicts_persisted = self._persist_results(results)
+        conflicts_persisted = self._persist_results(tuple(unchanged_results) + results)
         return IdentityResolutionSummary(
             evaluated=len(results),
             by_outcome=dict(Counter(result.outcome for result in results)),
             conflicts_persisted=conflicts_persisted,
-            unchanged=unchanged,
+            unchanged=unchanged_count,
         )
 
     def _evaluate_batch(
