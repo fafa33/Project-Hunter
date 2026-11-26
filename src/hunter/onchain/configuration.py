@@ -72,6 +72,7 @@ def _chain(raw: dict[str, Any]) -> ChainConfig:
         wrapped_native_asset=str(raw["wrapped_native_asset"]) if raw.get("wrapped_native_asset") else None,
         deployment_start_block=int(raw["deployment_start_block"]) if raw.get("deployment_start_block") else None,
         swap_rpc_budget=int(raw.get("swap_rpc_budget", 12)),
+        acquisition_rpc_budget=int(raw.get("acquisition_rpc_budget", 40)),
     )
 
 

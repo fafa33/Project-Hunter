@@ -1532,6 +1532,36 @@
       "guard": "Reserve against a declared provider-wide quota group so every endpoint governed by one ceiling draws from one rolling bucket across scans, helpers and processes, while endpoint telemetry and independent limits remain distinct; migrate existing reservations into the shared partition.",
       "test": "tests/test_global_discovery_candidate_registry.py::test_geckoterminal_public_api_rate_limit_is_shared_across_network_pool_and_token_requests",
       "status": "guarded"
+    },
+    {
+      "id": "PRH-169",
+      "class": "market-pair-selection-identity-conflict",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868jZnS comment PRRC_kwDOTRDHr88AAAABGO06fQ at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: a liquidity-driven pair selection change produced a permanent provider disagreement and blocked identity handoff.",
+      "classification": "systemic",
+      "guard_boundary": "discovery metadata classification, merge and identity fingerprint boundaries",
+      "guard": "Classify selected market pair address, side and evidence provider as refreshable market provenance, overwrite them on refresh, clear stale pair provenance only when a fresh provider observation is present, preserve last-known provenance on unavailable or unrelated observations, normalize historical pair-selection disagreements, exclude them from identity fingerprints, and preserve genuine identity conflicts.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_market_pair_selection_refreshes_without_identity_conflict; tests/test_global_discovery_candidate_registry.py::test_market_evidence_provider_refreshes_without_identity_conflict; tests/test_global_discovery_candidate_registry.py::test_market_provenance_survives_unavailable_and_unrelated_observations",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-170",
+      "class": "enrichment-progress-discarded-on-sibling-batch-failure",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868jZnX comment PRRC_kwDOTRDHr88AAAABGO06hw at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: a successful first batch was discarded when a later batch raised provider unavailability or a duplicate capacity request.",
+      "classification": "systemic",
+      "guard_boundary": "DexScreener batch loop and enrich_dex_contracts persistence boundary",
+      "guard": "Validate provider response shape before completing a capacity reservation, convert malformed JSON or an unexpected HTTP-200 payload into a provider failure, return completed rows, processed assets and an explicit error marker for budget exhaustion, provider unavailability and duplicate reservations; persist those results before advancing the cursor, and allow failed dedup reservations to retry immediately so the failed batch remains retryable.",
+      "test": "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_persists_completed_batches_before_sibling_failure; tests/test_global_discovery_candidate_registry.py::test_dexscreener_batch_truncation_preserves_completed_rows; tests/test_global_discovery_candidate_registry.py::test_dexscreener_malformed_json_preserves_completed_rows; tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_error_payload_preserves_completed_rows_and_is_retryable; tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_retries_failed_dedup_batch_in_incremental_mode; tests/test_global_discovery_candidate_registry.py::test_failed_dedup_reservation_does_not_block_immediate_retry",
+      "status": "guarded"
+    },
+    {
+      "id": "PRH-171",
+      "class": "unmetered-transfer-acquisition-budget",
+      "source": "PR #788 Codex review thread PRRT_kwDOTRDHr868jZnb comment PRRC_kwDOTRDHr88AAAABGO06jQ at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: transfer corroboration issued hundreds of RPC attempts because the meter was installed only for swap acquisition.",
+      "classification": "systemic",
+      "guard_boundary": "live on-chain acquisition boundary before provider checks, transfers and swaps",
+      "guard": "Install one config-declared total RPC allowance around all acquisition, make nested swap budgets inherit the same allowance, charge each retry attempt before dispatch, preserve explicit partial coverage on exhaustion, record each swap's own RPC count, and skip checkpoint advancement while unprocessed work remains.",
+      "test": "tests/test_onchain_swap_wallet_evidence.py::test_nested_swap_budget_cannot_reset_total_acquisition_budget; tests/test_onchain_swap_wallet_evidence.py::test_sync_total_acquisition_budget_bounds_transfers_and_preserves_partial_coverage; tests/test_onchain_swap_wallet_evidence.py::test_retry_attempts_are_charged_to_the_total_acquisition_budget; tests/test_onchain_swap_wallet_evidence.py::test_each_swap_records_its_own_rpc_attempt_count",
+      "status": "guarded"
     }
   ],
   "families": [
@@ -3476,7 +3506,7 @@
     {
       "id": "DFF-064",
       "title": "bounded-discovery-must-advance-and-share-its-request-budget",
-      "invariant": "Bounded discovery enrichment must persist a mode-specific cursor across restarts, preserve case-sensitive contract identifiers verbatim, rotate through identifiers including empty-result cohorts, advance only after processed assets are persisted, meter every helper request against the same ScanBudget used by primary discovery, and schedule chain batches in the caller's rotated order so a constrained allowance still advances across every represented chain.",
+      "invariant": "Bounded discovery enrichment must persist a mode-specific cursor across restarts, preserve case-sensitive contract identifiers verbatim, rotate through identifiers including empty-result cohorts, advance only after processed assets are persisted, meter every helper request against the same ScanBudget used by primary discovery, and schedule chain batches in the caller's rotated order so a constrained allowance still advances across every represented chain. Budget exhaustion, provider unavailable errors, malformed JSON, unexpected batch payload shapes and duplicate capacity reservations on a later batch must preserve completed rows and processed assets in a partial result so they are persisted before the failed batch is retried; a failed dedup reservation must not block that immediate retry.",
       "applicability": {
         "changed_paths": [
           "src/hunter/discovery/engine.py",
@@ -3487,7 +3517,7 @@
         "rationale": "These paths schedule enrichment, issue DexScreener/CoinGecko/GeckoTerminal requests, and persist discovery checkpoints. Restarting from the same identifiers defeats bounded backfill, and helper requests outside the budget defeat the request cap."
       },
       "prevention": {
-        "mechanism": "Persist the last processed identifier with wrap-around, preserve non-EVM identifier case, advance only after processed assets are persisted, pass the constructed ScanBudget through every helper, iterate chain groups in the rotated input order instead of sorting them so budget truncation advances the cursor across chains, catch budget exhaustion without discarding accumulated rows, and regress cursor rotation, case fidelity, persistence ordering, and the shared request count.",
+        "mechanism": "Persist the last processed identifier with wrap-around, preserve non-EVM identifier case, advance only after processed assets are persisted, pass the constructed ScanBudget through every helper, iterate chain groups in the rotated input order instead of sorting them so budget truncation advances the cursor across chains, validate response shape before completing a capacity reservation, convert malformed batch JSON and unexpected HTTP-200 payload shapes into provider failures, catch budget exhaustion, provider unavailability and duplicate capacity reservations without discarding accumulated rows, let failed dedup reservations retry immediately, and regress cursor rotation, case fidelity, persistence ordering, shared request count, sibling-failure durability, payload-shape durability and retryability.",
         "boundary": "hosted-gate",
         "guard_reference": "src/hunter/discovery/engine.py::CandidateDiscoveryEngine::enrich_dex_contracts"
       },
@@ -3496,13 +3526,22 @@
         "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_preserves_rotated_chain_order_under_one_request_budget",
         "tests/test_global_discovery_candidate_registry.py::test_dexscreener_processed_assets_preserve_case_sensitive_identifiers",
         "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_cursor_is_not_advanced_when_candidate_persistence_fails",
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_batch_truncation_preserves_completed_rows",
+        "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_persists_completed_batches_before_sibling_failure",
+        "tests/test_global_discovery_candidate_registry.py::test_dexscreener_malformed_json_preserves_completed_rows",
+        "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_error_payload_preserves_completed_rows_and_is_retryable",
+        "tests/test_global_discovery_candidate_registry.py::test_failed_dedup_reservation_does_not_block_immediate_retry",
+        "tests/test_global_discovery_candidate_registry.py::test_dex_enrichment_retries_failed_dedup_batch_in_incremental_mode",
         "tests/test_global_discovery_candidate_registry.py::test_dexscreener_sync_provider_shares_one_scan_budget_across_helpers",
         "tests/test_engineering_context_authority.py::test_issue_587_review_remediation_families_reach_spm_context"
       ],
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #587 / PR #788 Codex review at head a1a81a106396992e05b275ae77512231ad9e696a: enrichment restarted from the same first identifiers and token-pairs/corroboration helpers bypassed the constructed scan budget.",
-        "PR #788 Codex review thread PRRT_kwDOTRDHr868g_Lv comment 4712110962 at exact head 386b0319f597cf8068c569ec24859705231258eb: sorting regrouped chain batches undid cursor rotation, starving cross-chain progress under a one-request allowance."
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868g_Lv comment 4712110962 at exact head 386b0319f597cf8068c569ec24859705231258eb: sorting regrouped chain batches undid cursor rotation, starving cross-chain progress under a one-request allowance.",
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868jZnX comment PRRC_kwDOTRDHr88AAAABGO06hw at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: only scan-budget exhaustion was caught inside the batch loop, so provider unavailability and duplicate capacity errors discarded completed rows and cursor progress.",
+        "Focused adversarial review at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: malformed JSON on a later batch escaped the loop, and a failed dedup reservation blocked immediate retry inside the 300-second window; both reproduced RED before the family-level guard.",
+        "Second focused adversarial review at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: an HTTP-200 JSON error object was accepted as an empty successful batch, advanced the cursor and blocked retry inside the dedupe window; reproduced RED before the payload-shape guard."
       ]
     },
     {
@@ -3746,28 +3785,38 @@
     {
       "id": "DFF-073",
       "title": "rpc-attempt-budget-must-count-every-dispatch",
-      "invariant": "Every RPC attempt must be charged to the active bounded budget before endpoint dispatch, including chainId, log, receipt, corroboration, and failed attempts.",
+      "invariant": "Every RPC attempt must be charged to one bounded total acquisition allowance before each endpoint dispatch, including provider checks, finalized-block lookups, chainId, log, receipt, corroboration, every retry attempt and failed attempts, across both transfer and swap paths; nested swap budgets may not reset or exceed the total, exhaustion must preserve explicit partial coverage, each signed swap must record only its own RPC work, and checkpoints must not advance past unprocessed work.",
       "applicability": {
         "changed_paths": [
+          "configs/onchain.yaml",
           "src/hunter/onchain/adapters.py",
+          "src/hunter/onchain/configuration.py",
           "src/hunter/onchain/engine.py",
+          "src/hunter/onchain/models.py",
+          "tests/test_onchain_capital_flow_acquisition.py",
           "tests/test_onchain_swap_wallet_evidence.py"
         ],
-        "rationale": "These paths perform network acquisition. Counting only successful evidence RPCs lets costs exceed the configured budget and hides retries and failures."
+        "rationale": "These paths configure and perform live network acquisition. Counting only successful swap evidence RPCs lets transfer, corroboration, retry and failure work exceed the configured budget and hide real costs."
       },
       "prevention": {
-        "mechanism": "Install a request meter around swap acquisition and charge it in the shared endpoint dispatcher before each transport call, then record the meter's actual usage in signed evidence.",
+        "mechanism": "Install one request meter around all live acquisition for a surface before provider checks and transfer work, let nested swap budgets inherit and charge the same total allowance, charge every endpoint attempt inside the retry loop including failures, return explicit partial coverage when exhausted, skip checkpoint advancement past unprocessed work, and record per-path and per-swap actual usage in signed evidence.",
         "boundary": "hosted-gate",
         "guard_reference": "src/hunter/onchain/adapters.py::EVMJsonRpcAdapter::request_budget"
       },
       "regression_evidence": [
         "tests/test_onchain_swap_wallet_evidence.py::test_swap_rpc_meter_charges_each_attempt_before_dispatch_including_failures",
         "tests/test_onchain_swap_wallet_evidence.py::test_swap_observations_record_actual_rpc_attempt_count",
+        "tests/test_onchain_swap_wallet_evidence.py::test_nested_swap_budget_cannot_reset_total_acquisition_budget",
+        "tests/test_onchain_swap_wallet_evidence.py::test_sync_total_acquisition_budget_bounds_transfers_and_preserves_partial_coverage",
+        "tests/test_onchain_swap_wallet_evidence.py::test_retry_attempts_are_charged_to_the_total_acquisition_budget",
+        "tests/test_onchain_swap_wallet_evidence.py::test_each_swap_records_its_own_rpc_attempt_count",
         "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context"
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQe comment PRRC_kwDOTRDHr8678AAAABF-oRu: every RPC attempt must consume budget, including failures."
+        "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQe comment PRRC_kwDOTRDHr8678AAAABF-oRu: every RPC attempt must consume budget, including failures.",
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868jZnb comment PRRC_kwDOTRDHr88AAAABGO06jQ at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: 100 transfers and three endpoints produced 612 unmetered RPC attempts because the request meter was installed only around swap acquisition.",
+        "Focused adversarial review at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: per-endpoint retries were charged once for three dispatches, and a single per-pool baseline signed the second swap with cumulative RPC cost; both reproduced RED before the family-level guard."
       ]
     },
     {
@@ -3799,7 +3848,7 @@
     {
       "id": "DFF-075",
       "title": "volatile-discovery-metadata-refresh-must-not-conflict",
-      "invariant": "Volatile observation timestamps and market measurements must refresh in place without creating identity conflicts, while genuine identity disagreements still fail closed.",
+      "invariant": "Volatile observation timestamps, market measurements and selected market evidence provenance (provider, pair address and side) must refresh in place without creating identity conflicts or stale pair attachment; stale pair provenance is cleared only by a fresh provider observation, last-known provenance survives unavailable or unrelated observations, and genuine identity disagreements still fail closed.",
       "applicability": {
         "changed_paths": [
           "src/hunter/discovery/identity.py",
@@ -3812,19 +3861,25 @@
         "rationale": "These paths merge repeated provider syncs into candidate registry identity evidence. Treating refreshable market observations as disagreements blocks handoff after normal acquisition updates."
       },
       "prevention": {
-        "mechanism": "Define shared volatile and refreshable metadata keys, overwrite those keys during merge, exclude only volatile keys from fingerprints, and preserve provider disagreement recording for all other metadata. Treat discovery mode as volatile observation provenance, not identity evidence. Normalize historical volatile provider disagreements at merge, identity conflict evaluation and fingerprint boundaries; preserve genuine disagreements.",
+        "mechanism": "Define shared volatile and refreshable metadata keys, overwrite those keys during merge, exclude only volatile keys from fingerprints, and preserve provider disagreement recording for all other metadata. Treat discovery mode as volatile observation provenance, not identity evidence. Treat selected market evidence provider, pair address and side as refreshable market provenance, clear stale pair provenance only when a fresh provider observation is present, preserve last-known provenance on unavailable or unrelated observations, normalize historical pair-selection disagreements while preserving genuine identity conflicts. Normalize historical volatile provider disagreements at merge, identity conflict evaluation and fingerprint boundaries; preserve genuine disagreements.",
         "boundary": "hosted-gate",
         "guard_reference": "src/hunter/discovery/repository.py::_merge_metadata"
       },
       "regression_evidence": [
         "tests/test_global_discovery_candidate_registry.py::test_volatile_discovery_metadata_refreshes_without_identity_conflict",
+        "tests/test_global_discovery_candidate_registry.py::test_market_pair_selection_refreshes_without_identity_conflict",
+        "tests/test_global_discovery_candidate_registry.py::test_market_evidence_provider_refreshes_without_identity_conflict",
+        "tests/test_global_discovery_candidate_registry.py::test_market_provenance_survives_unavailable_and_unrelated_observations",
         "tests/test_engineering_context_authority.py::test_issue_587_current_head_codex_review_families_reach_spm_context",
         "tests/test_global_discovery_candidate_registry.py::test_dexscreener_batch_provenance_is_not_identity_evidence"
       ],
       "lifecycle": "regression-tested",
       "sources": [
         "PR #788 Codex review thread PRRT_kwDOTRDHr8678ILQi comment PRRC_kwDOTRDHr8678AAAABF-oR4: volatile market evidence refresh must not create identity conflicts.",
-        "PR #788 Codex review thread PRRT_kwDOTRDHr868ZcTb at 01d78d3ee8ec9c4c85527c56a5119bea418ce35e; reproduced RED then verified GREEN locally. Historical false conflicts reproduced RED in Gateway job job_01M8CCZH5P008KPYJ2D7VRHK4H; extended regression verifies historical normalization, fingerprint stability and mixed genuine conflicts; 99 focused tests passed locally on 2026-11-26. Published exact-head verification pending."
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868ZcTb at 01d78d3ee8ec9c4c85527c56a5119bea418ce35e; reproduced RED then verified GREEN locally. Historical false conflicts reproduced RED in Gateway job job_01M8CCZH5P008KPYJ2D7VRHK4H; extended regression verifies historical normalization, fingerprint stability and mixed genuine conflicts; 99 focused tests passed locally on 2026-11-26. Published exact-head verification pending.",
+        "PR #788 Codex review thread PRRT_kwDOTRDHr868jZnS comment PRRC_kwDOTRDHr88AAAABGO06fQ at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: selected market pair address and side changed without token identity change and were treated as permanent provider disagreements.",
+        "Focused adversarial review at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: a sibling `market_evidence_provider` key still caused permanent conflict and fingerprint churn, and stale pair provenance survived a provider fallback; reproduced RED before the family-level guard.",
+        "Second focused adversarial review at exact head e873df296cbae00f1c73fcdaeffaaecc20bf7ef8: clearing every absent provenance key also erased last-known pair/provider data on a transient unavailable status or unrelated provider sync; reproduced RED before the fresh-provider-only guard."
       ]
     },
     {

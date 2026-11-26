@@ -10,6 +10,7 @@ from typing import Any
 
 from hunter.discovery.canonical_history import CanonicalEntityRecord, digest_payload, replay_canonical_entities
 from hunter.discovery.models import (
+    MARKET_SELECTION_METADATA_KEYS,
     QUEUE_STATUS_ELIGIBLE,
     QUEUE_STATUS_NOT_QUEUED,
     QUEUE_STATUS_QUEUED,
@@ -955,6 +956,7 @@ class CandidateRegistryRepository:
                     """
                     SELECT 1 FROM capacity_requests
                     WHERE provider = ? AND endpoint = ? AND dedup_key = ? AND dedupe_until > ?
+                      AND (state <> 'completed' OR outcome = 'success')
                     LIMIT 1
                     """,
                     (provider, endpoint, dedup_key, attempted_at),
@@ -1636,7 +1638,12 @@ def _with_candidate_id(candidate: CandidateRecord, candidate_id: str) -> Candida
 
 def _merge_metadata(previous: dict[str, Any], current: dict[str, Any]) -> dict[str, Any]:
     merged = normalize_identity_disagreements(previous)
-    for key, value in normalize_identity_disagreements(current).items():
+    refreshed = normalize_identity_disagreements(current)
+    if "market_evidence_provider" in refreshed:
+        for key in MARKET_SELECTION_METADATA_KEYS:
+            if key not in refreshed:
+                merged.pop(key, None)
+    for key, value in refreshed.items():
         if value in (None, "", (), []):
             continue
         if key in REFRESHABLE_DISCOVERY_METADATA_KEYS:

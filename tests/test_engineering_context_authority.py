@@ -656,3 +656,8 @@ def test_issue_587_current_head_codex_review_families_reach_spm_context() -> Non
     assert "canonical chain" in str(by_id["DFF-081"].get("invariant", "")).lower()
     assert "consideration" in str(by_id["DFF-082"].get("invariant", "")).lower()
     assert "provider-wide quota" in str(by_id["DFF-083"].get("invariant", "")).lower()
+    assert "market evidence provenance" in str(by_id["DFF-075"].get("invariant", "")).lower()
+    assert "last-known provenance" in str(by_id["DFF-075"].get("invariant", "")).lower()
+    assert "malformed json" in str(by_id["DFF-064"].get("invariant", "")).lower()
+    assert "unexpected batch payload" in str(by_id["DFF-064"].get("invariant", "")).lower()
+    assert "every retry attempt" in str(by_id["DFF-073"].get("invariant", "")).lower()

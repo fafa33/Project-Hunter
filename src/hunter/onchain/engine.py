@@ -87,31 +87,34 @@ class CapitalFlowEngine:
                 self.repository.save_snapshots((snapshot,))
                 snapshots.append(snapshot)
                 continue
+            chain_config = next((item for item in self.config.chains if item.chain_id == surface.chain_id), None)
+            acquisition_budget = chain_config.acquisition_rpc_budget if chain_config else 40
             try:
-                states = adapter.check_providers()
-                self.repository.save_provider_states(states)
-                if not any(state.status in {"healthy", "degraded"} for state in states):
-                    snapshot = _unavailable_snapshot(surface, "provider_unavailable", ("live_provider",))
-                    self.repository.save_snapshots((snapshot,))
-                    snapshots.append(snapshot)
-                    continue
-                finalized_block = adapter.finalized_block_number()
-                selected_end_block = finalized_block if end_block is None else end_block
-                if selected_end_block < 0 or selected_end_block > finalized_block:
-                    raise EVMProviderUnavailable("requested block is not finalized")
-                block = adapter.block(selected_end_block)
-                block_hash = str(block.get("hash", ""))
-                end_timestamp = adapter.block_timestamp(selected_end_block)
-                start_block = max(0, selected_end_block - self._block_window(surface.chain_id, "24h") + 1)
-                observations, signatures, acquisition_unavailable = self._observations(
-                    surface, adapter, start_block, selected_end_block, block_hash, end_timestamp
-                )
-                swap_observations, swap_signatures, swap_unavailable = self._surface_swap_observations(
-                    surface, adapter, start_block, selected_end_block, block_hash, end_timestamp
-                )
-                evidence = observations + swap_observations
-                signatures = signatures + swap_signatures
-                acquisition_unavailable = tuple(sorted({*acquisition_unavailable, *swap_unavailable}))
+                with adapter.request_budget(acquisition_budget):
+                    states = adapter.check_providers()
+                    self.repository.save_provider_states(states)
+                    if not any(state.status in {"healthy", "degraded"} for state in states):
+                        snapshot = _unavailable_snapshot(surface, "provider_unavailable", ("live_provider",))
+                        self.repository.save_snapshots((snapshot,))
+                        snapshots.append(snapshot)
+                        continue
+                    finalized_block = adapter.finalized_block_number()
+                    selected_end_block = finalized_block if end_block is None else end_block
+                    if selected_end_block < 0 or selected_end_block > finalized_block:
+                        raise EVMProviderUnavailable("requested block is not finalized")
+                    block = adapter.block(selected_end_block)
+                    block_hash = str(block.get("hash", ""))
+                    end_timestamp = adapter.block_timestamp(selected_end_block)
+                    start_block = max(0, selected_end_block - self._block_window(surface.chain_id, "24h") + 1)
+                    observations, signatures, acquisition_unavailable = self._observations(
+                        surface, adapter, start_block, selected_end_block, block_hash, end_timestamp
+                    )
+                    swap_observations, swap_signatures, swap_unavailable = self._surface_swap_observations(
+                        surface, adapter, start_block, selected_end_block, block_hash, end_timestamp
+                    )
+                    evidence = observations + swap_observations
+                    signatures = signatures + swap_signatures
+                    acquisition_unavailable = tuple(sorted({*acquisition_unavailable, *swap_unavailable}))
             except RpcAttemptBudgetExhausted:
                 snapshot = _unavailable_snapshot(surface, "rpc_budget_exhausted", ("live_provider",))
                 self.repository.save_snapshots((snapshot,))
@@ -150,7 +153,11 @@ class CapitalFlowEngine:
             self.repository.save_acquired_evidence(evidence, signatures)
             self.repository.save_flows(flows)
             self.repository.save_snapshots((snapshot,))
-            self.repository.save_checkpoint(surface.chain_id, surface.project, selected_end_block, block_hash)
+            budget_exhausted = bool(
+                {"rpc_budget_exhausted", "swap_rpc_budget_exhausted"} & set(acquisition_unavailable)
+            )
+            if not budget_exhausted:
+                self.repository.save_checkpoint(surface.chain_id, surface.project, selected_end_block, block_hash)
             snapshots.append(snapshot)
         return tuple(snapshots)
 
@@ -242,6 +249,7 @@ class CapitalFlowEngine:
         unavailable: set[str] = set()
         address_topic = "0x" + surface.address.lower()[2:].zfill(64)
         seen: set[str] = set()
+        budget_exhausted = False
         for asset in self.config.tracked_assets:
             if asset.chain_id != surface.chain_id or not asset.contract_address:
                 continue
@@ -351,6 +359,10 @@ class CapitalFlowEngine:
                             rows.append(row)
                             signatures.append(signed)
                             seen.add(evidence_id)
+                        except RpcAttemptBudgetExhausted:
+                            unavailable.add("rpc_budget_exhausted")
+                            budget_exhausted = True
+                            break
                         except (
                             KeyError,
                             TypeError,
@@ -362,10 +374,14 @@ class CapitalFlowEngine:
                             unavailable.add("transfer_evidence_signing_failed")
                             continue
                 except RpcAttemptBudgetExhausted:
-                    raise
+                    unavailable.add("rpc_budget_exhausted")
+                    budget_exhausted = True
+                    break
                 except EVMProviderUnavailable:
                     unavailable.add("transfer_corroboration_unavailable")
                     continue
+            if budget_exhausted:
+                break
         return tuple(rows), tuple(signatures), tuple(sorted(unavailable))
 
     def _surface_swap_observations(
@@ -435,7 +451,7 @@ class CapitalFlowEngine:
         try:
             identity_error = verify_pool_identity(pool_row, adapter, end_block)
         except RpcAttemptBudgetExhausted:
-            raise
+            return (), (), ("swap_rpc_budget_exhausted",)
         except (EVMProviderUnavailable, ValueError, TypeError):
             return (), (), ("pool_identity_unavailable",)
         if identity_error is not None:
@@ -446,7 +462,7 @@ class CapitalFlowEngine:
         try:
             logs = adapter.logs(address=pool_row.address, from_block=start_block, to_block=end_block, topics=(topic,))
         except RpcAttemptBudgetExhausted:
-            raise
+            return (), (), ("swap_rpc_budget_exhausted",)
         except EVMProviderUnavailable:
             return (), (), ("swap_log_provider_unavailable",)
         existing_rows = {
@@ -459,6 +475,7 @@ class CapitalFlowEngine:
         surface = pool_row.as_surface()
         for log in logs:
             try:
+                swap_start_used = adapter.request_meter.used if adapter.request_meter is not None else 0
                 if log.get("removed") or str(log.get("address", "")).lower() != pool_row.address:
                     continue
                 topics_raw = tuple(str(item).lower() for item in log["topics"])
@@ -575,7 +592,9 @@ class CapitalFlowEngine:
                     receipt_status=str(receipt.get("status", "")).lower(),
                     wallet_code=wallet_code if attributable else None,
                     swap_status="AMBIGUOUS" if ambiguous else "AVAILABLE",
-                    rpc_request_count=adapter.request_meter.used if adapter.request_meter is not None else 0,
+                    rpc_request_count=(
+                        adapter.request_meter.used - swap_start_used if adapter.request_meter is not None else 0
+                    ),
                     log_topics=topics_raw,
                     log_data=data,
                 )

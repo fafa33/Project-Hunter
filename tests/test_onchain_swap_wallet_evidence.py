@@ -16,7 +16,7 @@ from hunter.historical_acquisition.models import RawHistoricalEvidence
 from hunter.historical_acquisition.repository import HistoricalEvidenceRepository
 from hunter.historical_acquisition.usd_valuation import HistoricalUsdValuator, UsdValuation
 from hunter.market_validation.acquisition_sources import _swap_wallet_context
-from hunter.onchain.adapters import EVMJsonRpcAdapter, EVMProviderUnavailable
+from hunter.onchain.adapters import EVMJsonRpcAdapter, EVMProviderUnavailable, RpcAttemptBudgetExhausted
 from hunter.onchain.configuration import OnChainConfig
 from hunter.onchain.dex import (
     V2_SWAP_TOPIC,
@@ -25,7 +25,7 @@ from hunter.onchain.dex import (
     v2_swap_data,
     v3_swap_data,
 )
-from hunter.onchain.engine import CapitalFlowEngine, _preserved_signed_row, evm_log_evidence_id
+from hunter.onchain.engine import TRANSFER_TOPIC, CapitalFlowEngine, _preserved_signed_row, evm_log_evidence_id
 from hunter.onchain.evidence import (
     CORROBORATION_POLICY,
     signature_id,
@@ -34,7 +34,7 @@ from hunter.onchain.evidence import (
     write_signing_key,
     write_trust_document,
 )
-from hunter.onchain.models import AssetConfig, ChainConfig, DexPoolConfig, RawOnChainObservation
+from hunter.onchain.models import AssetConfig, ChainConfig, DexPoolConfig, OnChainSurface, RawOnChainObservation
 from hunter.onchain.repository import OnChainRepository
 from hunter.onchain.wallet_performance import wallet_performance_from_swaps
 
@@ -60,17 +60,19 @@ class SwapTransport:
         receipt_logs: tuple[dict[str, Any], ...] | None = None,
         blocks: dict[int, tuple[str, int]] | None = None,
         fail_on_call: int | None = None,
+        fail_on_calls: frozenset[int] = frozenset(),
     ) -> None:
         self.chain_id = chain_id
         self.logs = logs
         self.receipt_logs = logs if receipt_logs is None else receipt_logs
         self.blocks = blocks or {}
         self.fail_on_call = fail_on_call
+        self.fail_on_calls = fail_on_calls
         self.calls: list[str] = []
 
     def rpc(self, method: str, params: tuple[object, ...]) -> object:
         self.calls.append(method)
-        if self.fail_on_call == len(self.calls):
+        if self.fail_on_call == len(self.calls) or len(self.calls) in self.fail_on_calls:
             raise EVMProviderUnavailable("forced RPC failure")
         if method == "eth_chainId":
             return hex(self.chain_id)
@@ -111,7 +113,13 @@ class SwapTransport:
         raise AssertionError(method)
 
 
-def chain(*, swap_rpc_budget: int = 12, rpc_endpoints: tuple[str, ...] = ("https://first.test",)) -> ChainConfig:
+def chain(
+    *,
+    swap_rpc_budget: int = 12,
+    acquisition_rpc_budget: int = 40,
+    retry_limit: int = 0,
+    rpc_endpoints: tuple[str, ...] = ("https://first.test",),
+) -> ChainConfig:
     return ChainConfig(
         chain_id=1,
         network="ethereum",
@@ -124,9 +132,10 @@ def chain(*, swap_rpc_budget: int = 12, rpc_endpoints: tuple[str, ...] = ("https
         finality_depth=64,
         max_block_range=5000,
         polling_interval_seconds=300,
-        retry_limit=0,
+        retry_limit=retry_limit,
         timeout_seconds=1,
         swap_rpc_budget=swap_rpc_budget,
+        acquisition_rpc_budget=acquisition_rpc_budget,
     )
 
 
@@ -748,6 +757,97 @@ def test_local_rpc_budget_exhaustion_propagates_without_provider_cooldown() -> N
     assert adapter._cooldown_failure_type == {}
 
 
+def test_retry_attempts_are_charged_to_the_total_acquisition_budget() -> None:
+    transport = SwapTransport(fail_on_calls=frozenset({1, 2}))
+    adapter = EVMJsonRpcAdapter(chain(retry_limit=2), transport=transport)
+
+    with adapter.request_budget(3) as meter:
+        assert adapter.chain_id() == 1
+
+    assert meter.used == 3
+    assert transport.calls == ["eth_chainId", "eth_chainId", "eth_chainId"]
+
+
+def test_nested_swap_budget_cannot_reset_total_acquisition_budget() -> None:
+    transport = SwapTransport()
+    adapter = EVMJsonRpcAdapter(chain(), transport=transport)
+
+    with adapter.request_budget(1) as total:
+        assert adapter.latest_finalized_block() == 936
+        with adapter.request_budget(12) as swap:
+            assert swap.limit == total.limit
+            with pytest.raises(RpcAttemptBudgetExhausted):
+                adapter.logs(address=POOL, from_block=900, to_block=936, topics=(V3_SWAP_TOPIC,))
+        assert total.used == 1
+
+    assert transport.calls == ["eth_blockNumber"]
+
+
+def test_sync_total_acquisition_budget_bounds_transfers_and_preserves_partial_coverage(tmp_path: Path) -> None:
+    bounded = chain(
+        acquisition_rpc_budget=20,
+        rpc_endpoints=("https://first.test", "https://second.test", "https://third.test"),
+    )
+    counterparty = "0x" + "22" * 20
+
+    def transfer_log(index: int) -> dict[str, Any]:
+        return {
+            "address": USDC,
+            "topics": [
+                TRANSFER_TOPIC,
+                "0x" + counterparty[2:].zfill(64),
+                "0x" + WALLET[2:].zfill(64),
+            ],
+            "data": "0x" + format(1_000_000, "064x"),
+            "transactionHash": "0x" + f"{index:064x}",
+            "logIndex": hex(index),
+            "blockNumber": hex(900),
+            "blockHash": BLOCK_HASH,
+        }
+
+    logs = tuple(transfer_log(index) for index in range(1, 101))
+    transport = SwapTransport(logs=logs, receipt_logs=logs)
+    surface = OnChainSurface(
+        project="uniswap",
+        chain_id=1,
+        network="ethereum",
+        address=WALLET,
+        address_type="other_documented",
+        protocol_role="tracked_wallet",
+        asset_scope="tracked_transfer",
+        source_url="https://etherscan.io/address/" + WALLET,
+        source_type="verified_block_explorer",
+        verification_timestamp=NOW,
+        confidence=1.0,
+        active=True,
+        valid_from=NOW - timedelta(days=1),
+        evidence_id="transfer-surface",
+    )
+    cfg = replace(
+        config(chains=(bounded,)),
+        tracked_assets=(AssetConfig(1, "USDC", "stablecoin", 6, USDC),),
+        surfaces=(surface,),
+        dex_pools=(),
+    )
+    repository = OnChainRepository(tmp_path)
+    engine = CapitalFlowEngine(
+        cfg,
+        repository=repository,
+        adapters={1: EVMJsonRpcAdapter(bounded, transport=transport)},
+        evidence_signing_key=Ed25519PrivateKey.generate(),
+        clock=FixedClock(NOW),
+    )
+
+    snapshot = engine.sync(end_block=936)[0]
+
+    assert len(transport.calls) <= bounded.acquisition_rpc_budget
+    assert snapshot.status == "partial"
+    assert "rpc_budget_exhausted" in snapshot.unavailable_fields
+    assert repository.checkpoints() == ()
+    transfers = [row for row in repository.raw() if row["event_type"] == "erc20_transfer"]
+    assert transfers
+
+
 def test_swap_observations_record_actual_rpc_attempt_count(tmp_path: Path) -> None:
     resolved_pool = pool()
     wide_chain = chain(
@@ -769,8 +869,54 @@ def test_swap_observations_record_actual_rpc_attempt_count(tmp_path: Path) -> No
     )
 
     assert len(rows) == 1
-    assert rows[0].rpc_request_count == len(transport.calls)
+    setup_calls = transport.calls.index("eth_getBlockByNumber")
+    assert rows[0].rpc_request_count == len(transport.calls) - setup_calls
+    assert rows[0].rpc_request_count < len(transport.calls)
     assert len(transport.calls) <= 30
+
+
+def test_each_swap_records_its_own_rpc_attempt_count(tmp_path: Path) -> None:
+    resolved_pool = pool()
+    wide_chain = chain(
+        swap_rpc_budget=40,
+        rpc_endpoints=("https://first.test", "https://second.test", "https://third.test"),
+    )
+    first_log = v3_log(side="buy", pool_row=resolved_pool)
+    second_log = {
+        **v3_log(side="buy", pool_row=resolved_pool),
+        "transactionHash": "0x" + "cd" * 32,
+        "logIndex": "0x8",
+    }
+
+    def collect(logs: tuple[dict[str, Any], ...], directory: Path):
+        directory.mkdir(parents=True, exist_ok=True)
+        transport = SwapTransport(logs=logs, receipt_logs=logs)
+        adapter = EVMJsonRpcAdapter(wide_chain, transport=transport)
+        engine = CapitalFlowEngine(
+            config(resolved_pool, chains=(wide_chain,)),
+            repository=OnChainRepository(directory),
+            adapters={1: adapter},
+            evidence_signing_key=Ed25519PrivateKey.generate(),
+            clock=FixedClock(NOW),
+        )
+        rows, _signatures, unavailable = engine._swap_observations(
+            resolved_pool, adapter, start_block=900, end_block=936, block_hash=BLOCK_HASH, end_timestamp=NOW
+        )
+        return rows, transport.calls, unavailable
+
+    single_rows, single_calls, single_unavailable = collect((first_log,), tmp_path / "single")
+    both_rows, both_calls, both_unavailable = collect((first_log, second_log), tmp_path / "both")
+
+    assert len(single_rows) == 1, single_unavailable
+    assert len(both_rows) == 2, both_unavailable
+    single_count = len(single_calls)
+    total_count = len(both_calls)
+    per_swap_count = single_rows[0].rpc_request_count
+    setup_count = single_count - per_swap_count
+    assert setup_count > 0
+    assert [row.rpc_request_count for row in both_rows] == [per_swap_count, per_swap_count]
+    assert total_count == setup_count + sum(row.rpc_request_count for row in both_rows)
+    assert both_rows[1].rpc_request_count < total_count
 
 
 def test_overlapping_swap_replay_preserves_original_signed_metadata(tmp_path: Path) -> None:

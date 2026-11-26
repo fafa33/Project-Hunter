@@ -20,6 +20,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
     swap_rpc_budget: 12
   - chain_id: 42161
     network: arbitrum
@@ -38,6 +39,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
   - chain_id: 10
     network: optimism
     family: evm
@@ -55,6 +57,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
   - chain_id: 8453
     network: base
     family: evm
@@ -72,6 +75,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
   - chain_id: 137
     network: polygon
     family: evm
@@ -89,6 +93,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
   - chain_id: 56
     network: bnb
     family: evm
@@ -106,6 +111,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
   - chain_id: 43114
     network: avalanche
     family: evm
@@ -123,6 +129,7 @@ chains:
     polling_interval_seconds: 300
     retry_limit: 2
     timeout_seconds: 20
+    acquisition_rpc_budget: 40
 
 tracked_assets:
   - chain_id: 1

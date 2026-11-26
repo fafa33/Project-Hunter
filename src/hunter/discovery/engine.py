@@ -355,13 +355,15 @@ class CandidateDiscoveryEngine:
             if not namespace.startswith("contract:"):
                 namespace = f"contract:{namespace}"
             self.repository.save_identifier_cursor(cursor_key, namespace, value)
-        status = "succeeded" if result.assets and not result.truncated else "partial"
+        status = "succeeded" if result.assets and not result.truncated and result.failure is None else "partial"
         message = (
             f"mode={selected_mode} contracts={result.assets} processed={result.processed} "
             f"batches={result.batches} rows={len(candidates)}"
         )
         if result.truncated:
             message += f" unprocessed={result.assets - result.processed}"
+        if result.failure is not None:
+            message += f" error={result.failure}"
         run = DiscoveryRun(
             run_id=identity("candidate-discovery-run", {"provider": "dexscreener-batch", "started_at": started_at}),
             provider="dexscreener-batch",

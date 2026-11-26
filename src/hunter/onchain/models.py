@@ -60,6 +60,7 @@ class ChainConfig:
     wrapped_native_asset: str | None = None
     deployment_start_block: int | None = None
     swap_rpc_budget: int = 12
+    acquisition_rpc_budget: int = 40
 
 
 @dataclass(frozen=True)

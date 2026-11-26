@@ -14,7 +14,7 @@ from email.utils import parsedate_to_datetime
 from typing import Any, Protocol
 
 from hunter.acquisition.exceptions import ProviderUnavailableError
-from hunter.discovery.capacity import CapacityLedger, endpoint_for_url
+from hunter.discovery.capacity import CapacityLedger, DuplicateCapacityRequest, endpoint_for_url
 
 # GeckoTerminal's free public API rejects page numbers above 10 with HTTP 401
 # ("Upgrade to Analyst plan or above"). This is a documented-by-response free
@@ -77,6 +77,7 @@ class DexEnrichmentResult:
     batches: int
     truncated: bool
     processed_assets: tuple[tuple[str, str], ...] = ()
+    failure: str | None = None
 
 
 class _RequestBudgetExhausted(Exception):
@@ -826,6 +827,7 @@ class DexScreenerDiscoveryProvider:
         processed = 0
         batches = 0
         truncated = False
+        failure: str | None = None
         for chain_id in groups:
             registry_chain, addresses = groups[chain_id]
             for start in range(0, len(addresses), batch_limit):
@@ -843,6 +845,11 @@ class DexScreenerDiscoveryProvider:
                     )
                 except _RequestBudgetExhausted:
                     truncated = True
+                    failure = "request budget exhausted"
+                    break
+                except (ProviderUnavailableError, DuplicateCapacityRequest) as exc:
+                    truncated = True
+                    failure = f"{type(exc).__name__}: {exc}"
                     break
                 processed += len(chunk)
                 processed_assets.extend(
@@ -863,7 +870,9 @@ class DexScreenerDiscoveryProvider:
                 )
             if truncated:
                 break
-        return DexEnrichmentResult(tuple(rows), asset_count, processed, batches, truncated, tuple(processed_assets))
+        return DexEnrichmentResult(
+            tuple(rows), asset_count, processed, batches, truncated, tuple(processed_assets), failure
+        )
 
     def _get(
         self,
@@ -886,6 +895,7 @@ class DexScreenerDiscoveryProvider:
             meter=meter,
             dedup_key=dedup_key,
             batch_size=batch_size,
+            payload_validator=_require_dexscreener_batch_payload,
         )
 
 
@@ -956,6 +966,11 @@ def registry_chain_aliases(value: object) -> tuple[str, ...]:
     return tuple(sorted(aliases))
 
 
+def _require_dexscreener_batch_payload(payload: object) -> None:
+    if not isinstance(payload, list):
+        raise ProviderUnavailableError("DexScreener discovery returned an unexpected batch payload shape")
+
+
 def _dexscreener_batch_rows(
     payload: object,
     *,
@@ -968,7 +983,7 @@ def _dexscreener_batch_rows(
     observed_at: str,
 ) -> tuple[DiscoveredCandidate, ...]:
     if not isinstance(payload, list):
-        return ()
+        raise ProviderUnavailableError("DexScreener discovery returned an unexpected batch payload shape")
     by_address: dict[str, tuple[bool, float, dict[str, Any]]] = {}
     for pair in payload:
         if not isinstance(pair, dict) or str(pair.get("chainId") or "").strip().lower() != chain_id:
@@ -1051,6 +1066,7 @@ def _request_json(
     endpoint: str | None = None,
     dedup_key: str | None = None,
     batch_size: int | None = None,
+    payload_validator: Callable[[object], None] | None = None,
 ) -> object:
     request = urllib.request.Request(
         url,
@@ -1078,9 +1094,19 @@ def _request_json(
                 )
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                 payload = json.loads(response.read().decode("utf-8"))
+            if payload_validator is not None:
+                payload_validator(payload)
             if reservation is not None and ledger is not None:
                 ledger.complete(reservation.reservation_id, status_code=200, outcome="success")
             return payload
+        except ProviderUnavailableError as exc:
+            if reservation is not None and ledger is not None:
+                ledger.complete(reservation.reservation_id, outcome="failure", error=str(exc))
+            raise
+        except (ValueError, UnicodeDecodeError) as exc:
+            if reservation is not None and ledger is not None:
+                ledger.complete(reservation.reservation_id, outcome="failure", error=str(exc))
+            raise ProviderUnavailableError(f"{provider} discovery returned invalid JSON: {exc}") from exc
         except urllib.error.HTTPError as exc:
             retry_after = _retry_after_seconds(exc.headers, max_retry_after_seconds) if exc.code == 429 else None
             if reservation is not None and ledger is not None:

@@ -26,10 +26,14 @@ QUEUE_STATUS_NOT_QUEUED = "not_queued"
 QUEUE_STATUS_QUEUED = "queued"
 QUEUE_STATUS_ELIGIBLE = "deep_analysis_eligible"
 
+MARKET_SELECTION_METADATA_KEYS = frozenset({"market_pair_address", "market_pair_side"})
+MARKET_EVIDENCE_PROVENANCE_KEYS = MARKET_SELECTION_METADATA_KEYS | frozenset({"market_evidence_provider"})
+
 VOLATILE_IDENTITY_METADATA_KEYS = frozenset(
     {
         "last_updated",
         "market_evidence_observed_at",
+        "market_evidence_provider",
         "official_link_observed_at",
         "observed_at",
         "fetched_at",
@@ -41,6 +45,7 @@ VOLATILE_IDENTITY_METADATA_KEYS = frozenset(
         "batch_size",
         "batch_index",
         "discovery_mode",
+        *MARKET_SELECTION_METADATA_KEYS,
     }
 )
 

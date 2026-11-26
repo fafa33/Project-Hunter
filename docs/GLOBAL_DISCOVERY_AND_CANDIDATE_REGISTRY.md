@@ -118,12 +118,23 @@ GeckoTerminal and DexScreener records are keyed by chain plus contract address w
 evidence is available. This allows cross-provider overlap without relying on ticker
 symbols. Hunter records provider disagreements and source uniqueness through source
 references and does not treat a single decentralized-market listing as proof of project
-quality, official identity, or long-term investment merit.
+quality, official identity, or long-term investment merit. The selected `market_pair_address`,
+`market_pair_side` and `market_evidence_provider` are refreshable market provenance: a
+liquidity-driven pair or evidence-provider change is persisted in place, stale pair provenance
+is cleared only by a fresh provider observation, last-known provenance survives transient
+unavailability or an unrelated provider sync, and historical pair-selection disagreements are
+normalized, while genuine identity disagreements remain conflicts.
 
 Provider failures are reported as unavailable discovery runs and are not treated as
 absence of market candidates. Adapters use bounded deterministic retry/backoff for
-timeout, rate-limit, and temporary server failures; provider failure records the run as
-unavailable and does not write partial registry state. A bounded `Retry-After` on HTTP 429
+timeout, rate-limit, and temporary server failures; a failure before any batch completes
+records the run as unavailable without writing invented registry state. When a later batch
+fails through budget exhaustion, provider unavailability, or a duplicate capacity reservation,
+completed batches are returned as an explicit partial result, persisted, and used to advance
+the cursor only through already-processed contracts; the failed batch remains retryable, and a
+failed dedup reservation does not block its immediate retry. Malformed JSON or an unexpected
+HTTP-200 payload shape is validated before capacity success is recorded and becomes a provider
+failure rather than an empty successful batch. A bounded `Retry-After` on HTTP 429
 is honored before the normal exponential backoff fallback. Endpoint configuration can be
 overridden with `HUNTER_DISCOVERY_<PROVIDER>_BASE_URL`, `HUNTER_DISCOVERY_<PROVIDER>_LIMIT`,
 `HUNTER_DISCOVERY_<PROVIDER>_TIMEOUT_SECONDS`, `HUNTER_DISCOVERY_<PROVIDER>_MAX_ATTEMPTS`,

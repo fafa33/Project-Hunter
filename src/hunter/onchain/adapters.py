@@ -107,12 +107,18 @@ class EVMJsonRpcAdapter:
 
     @contextmanager
     def request_budget(self, limit: int) -> Iterator[RpcAttemptMeter]:
-        meter = RpcAttemptMeter(limit)
         previous = self._request_meter
+        if previous is None:
+            meter = RpcAttemptMeter(limit)
+        else:
+            remaining = max(0, previous.limit - previous.used)
+            meter = RpcAttemptMeter(previous.used + min(limit, remaining), used=previous.used)
         self._request_meter = meter
         try:
             yield meter
         finally:
+            if previous is not None:
+                previous.used = meter.used
             self._request_meter = previous
 
     def state(self) -> ProviderState:
@@ -335,11 +341,11 @@ class EVMJsonRpcAdapter:
         raise EVMProviderUnavailable(str(errors[-1]) if errors else "provider unavailable")
 
     def _rpc_endpoint(self, endpoint: str, method: str, params: tuple[object, ...]) -> object:
-        if self._request_meter is not None:
-            self._request_meter.charge()
         errors: list[EVMProviderUnavailable] = []
         for attempt in range(self.config.retry_limit + 1):
             try:
+                if self._request_meter is not None:
+                    self._request_meter.charge()
                 transport = self._single_transport or self._transport_factory(endpoint)
                 return transport.rpc(method, params)
             except RpcAttemptBudgetExhausted:
