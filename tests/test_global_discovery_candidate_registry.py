@@ -1372,6 +1372,87 @@ def _candidate_metadata(row: DiscoveredCandidate) -> dict[str, Any]:
     return row.metadata or {}
 
 
+def _dex_enrichment_addresses() -> tuple[str, ...]:
+    return tuple(f"0x{index:040x}" for index in range(1, 32))
+
+
+def _dex_batch_payload(batch: tuple[str, ...] | list[str]) -> list[dict[str, Any]]:
+    return [
+        {
+            "chainId": "ethereum",
+            "pairAddress": f"pair-{address}",
+            "baseToken": {"address": address, "name": f"Token {address}", "symbol": "TKN"},
+            "liquidity": {"usd": 1000},
+            "volume": {"h24": 25},
+        }
+        for address in batch
+    ]
+
+
+def _dex_enrichment_fixture(
+    tmp_path: Path, *, with_ledger: bool = False
+) -> tuple[CandidateRegistryRepository, CandidateDiscoveryEngine, tuple[str, ...]]:
+    path = str(tmp_path / "candidates.sqlite")
+    repository = CandidateRegistryRepository(path)
+    ledger = (
+        CapacityLedger(repository, load_capacity_inventory("configs/discovery_capacity.yaml")) if with_ledger else None
+    )
+    addresses = _dex_enrichment_addresses()
+    candidates = tuple(
+        DiscoveredCandidate(
+            provider="geckoterminal",
+            provider_id=f"eth_{address}",
+            slug=f"eth-{address}",
+            name=f"Token {index}",
+            symbol=f"T{index}",
+            primary_chain="eth",
+            candidate_type="token",
+            metadata={"chain": "eth", "contract_address": address},
+        )
+        for index, address in enumerate(addresses, 1)
+    )
+    config = DiscoveryConfig(
+        registry_path=path,
+        seed_market_validation_universe=False,
+        providers={
+            "dexscreener": DiscoveryProviderConfig(enabled=True, max_requests_per_cycle=5, min_interval_seconds=0.0)
+        },
+    )
+    engine = CandidateDiscoveryEngine(
+        repository,
+        config,
+        providers={
+            "geckoterminal": StaticDiscoveryProvider("geckoterminal", candidates),
+            "dexscreener": DexScreenerDiscoveryProvider(
+                ledger=ledger, backoff_seconds=0, max_attempts=1 if ledger is not None else 3
+            ),
+        },
+        ledger=ledger,
+    )
+    engine.sync(provider="geckoterminal", limit=40)
+    return repository, engine, addresses
+
+
+def _dex_later_batch_opener(
+    calls: list[str], addresses: tuple[str, ...], *, failure_response: object | None = None
+) -> Any:
+    first_path = f"/tokens/v1/ethereum/{','.join(addresses[:30])}"
+    second_path = f"/tokens/v1/ethereum/{addresses[30]}"
+
+    def opener(request: urllib.request.Request, timeout: int) -> object:
+        visited = urllib.parse.urlparse(request.full_url).path
+        calls.append(visited)
+        if visited == first_path:
+            return _JsonResponse(_dex_batch_payload(addresses[:30]))
+        if visited == second_path and calls.count(second_path) == 1:
+            if failure_response is None:
+                raise urllib.error.URLError("forced later batch failure")
+            return _JsonResponse(failure_response)
+        return _JsonResponse(_dex_batch_payload([addresses[30]]))
+
+    return opener
+
+
 def test_geckoterminal_enumerates_network_catalogue_and_resumes_pages(tmp_path, monkeypatch) -> None:
     from hunter.discovery.providers import ScanBudget
 
@@ -1842,18 +1923,7 @@ def test_dexscreener_batch_truncation_is_reported_instead_of_silently_dropping_a
 
 def test_dexscreener_batch_truncation_preserves_completed_rows(monkeypatch) -> None:
     addresses = [f"0x{index:040x}" for index in range(1, 32)]
-    payloads = {
-        f"/tokens/v1/ethereum/{','.join(addresses[:30])}": [
-            {
-                "chainId": "ethereum",
-                "pairAddress": f"pair-{address}",
-                "baseToken": {"address": address, "name": f"Token {address}", "symbol": "TKN"},
-                "liquidity": {"usd": 1000},
-                "volume": {"h24": 25},
-            }
-            for address in addresses[:30]
-        ]
-    }
+    payloads = {f"/tokens/v1/ethereum/{','.join(addresses[:30])}": _dex_batch_payload(addresses[:30])}
 
     def opener(request: urllib.request.Request, timeout: int) -> _JsonResponse:
         return _JsonResponse(payloads.get(urllib.parse.urlparse(request.full_url).path, []))
@@ -1884,16 +1954,7 @@ def test_dexscreener_malformed_json_preserves_completed_rows(monkeypatch) -> Non
 
     addresses = [f"0x{index:040x}" for index in range(1, 32)]
     first_path = f"/tokens/v1/ethereum/{','.join(addresses[:30])}"
-    payload = [
-        {
-            "chainId": "ethereum",
-            "pairAddress": f"pair-{address}",
-            "baseToken": {"address": address, "name": f"Token {address}", "symbol": "TKN"},
-            "liquidity": {"usd": 1000},
-            "volume": {"h24": 25},
-        }
-        for address in addresses[:30]
-    ]
+    payload = _dex_batch_payload(addresses[:30])
 
     def opener(request: urllib.request.Request, timeout: int) -> object:
         if urllib.parse.urlparse(request.full_url).path == first_path:
@@ -2020,51 +2081,7 @@ def test_dex_enrichment_records_provider_failures_and_duplicates(tmp_path, monke
 
 @pytest.mark.parametrize("failure", ["ProviderUnavailableError", "DuplicateCapacityRequest"])
 def test_dex_enrichment_persists_completed_batches_before_sibling_failure(tmp_path, monkeypatch, failure: str) -> None:
-    path = str(tmp_path / "candidates.sqlite")
-    repository = CandidateRegistryRepository(path)
-    addresses = tuple(f"0x{index:040x}" for index in range(1, 32))
-    candidates = tuple(
-        DiscoveredCandidate(
-            provider="geckoterminal",
-            provider_id=f"eth_{address}",
-            slug=f"eth-{address}",
-            name=f"Token {index}",
-            symbol=f"T{index}",
-            primary_chain="eth",
-            candidate_type="token",
-            metadata={"chain": "eth", "contract_address": address},
-        )
-        for index, address in enumerate(addresses, 1)
-    )
-    config = DiscoveryConfig(
-        registry_path=path,
-        seed_market_validation_universe=False,
-        providers={
-            "dexscreener": DiscoveryProviderConfig(enabled=True, max_requests_per_cycle=5, min_interval_seconds=0.0)
-        },
-    )
-    engine = CandidateDiscoveryEngine(
-        repository,
-        config,
-        providers={
-            "geckoterminal": StaticDiscoveryProvider("geckoterminal", candidates),
-            "dexscreener": DexScreenerDiscoveryProvider(backoff_seconds=0),
-        },
-    )
-    engine.sync(provider="geckoterminal", limit=40)
-
-    def payload(batch: tuple[str, ...] | list[str]) -> list[dict[str, Any]]:
-        return [
-            {
-                "chainId": "ethereum",
-                "pairAddress": f"pair-{address}",
-                "baseToken": {"address": address, "name": f"Token {address}", "symbol": "TKN"},
-                "liquidity": {"usd": 1000},
-                "volume": {"h24": 25},
-            }
-            for address in batch
-        ]
-
+    repository, engine, addresses = _dex_enrichment_fixture(tmp_path)
     calls: list[str] = []
 
     def failing_get(
@@ -2077,7 +2094,7 @@ def test_dex_enrichment_persists_completed_batches_before_sibling_failure(tmp_pa
     ) -> object:
         calls.append(path)
         if len(calls) == 1:
-            return payload(addresses[:30])
+            return _dex_batch_payload(addresses[:30])
         error = ProviderUnavailableError if failure == "ProviderUnavailableError" else DuplicateCapacityRequest
         raise error("forced later batch failure")
 
@@ -2099,7 +2116,7 @@ def test_dex_enrichment_persists_completed_batches_before_sibling_failure(tmp_pa
         dedup_key: str | None = None,
         batch_size: int | None = None,
     ) -> object:
-        return payload([addresses[30]])
+        return _dex_batch_payload([addresses[30]])
 
     monkeypatch.setattr(DexScreenerDiscoveryProvider, "_get", retry_get)
     retry = engine.enrich_dex_contracts(mode="backfill", limit=1)
@@ -2110,67 +2127,10 @@ def test_dex_enrichment_persists_completed_batches_before_sibling_failure(tmp_pa
 
 
 def test_dex_enrichment_retries_failed_dedup_batch_in_incremental_mode(tmp_path, monkeypatch) -> None:
-    path = str(tmp_path / "candidates.sqlite")
-    repository = CandidateRegistryRepository(path)
-    ledger = CapacityLedger(repository, load_capacity_inventory("configs/discovery_capacity.yaml"))
-    addresses = tuple(f"0x{index:040x}" for index in range(1, 32))
-    candidates = tuple(
-        DiscoveredCandidate(
-            provider="geckoterminal",
-            provider_id=f"eth_{address}",
-            slug=f"eth-{address}",
-            name=f"Token {index}",
-            symbol=f"T{index}",
-            primary_chain="eth",
-            candidate_type="token",
-            metadata={"chain": "eth", "contract_address": address},
-        )
-        for index, address in enumerate(addresses, 1)
-    )
-    config = DiscoveryConfig(
-        registry_path=path,
-        seed_market_validation_universe=False,
-        providers={
-            "dexscreener": DiscoveryProviderConfig(enabled=True, max_requests_per_cycle=5, min_interval_seconds=0.0)
-        },
-    )
-    engine = CandidateDiscoveryEngine(
-        repository,
-        config,
-        providers={
-            "geckoterminal": StaticDiscoveryProvider("geckoterminal", candidates),
-            "dexscreener": DexScreenerDiscoveryProvider(ledger=ledger, backoff_seconds=0, max_attempts=1),
-        },
-        ledger=ledger,
-    )
-    engine.sync(provider="geckoterminal", limit=40)
-
-    def payload(batch: tuple[str, ...] | list[str]) -> list[dict[str, Any]]:
-        return [
-            {
-                "chainId": "ethereum",
-                "pairAddress": f"pair-{address}",
-                "baseToken": {"address": address, "name": f"Token {address}", "symbol": "TKN"},
-                "liquidity": {"usd": 1000},
-                "volume": {"h24": 25},
-            }
-            for address in batch
-        ]
-
+    repository, engine, addresses = _dex_enrichment_fixture(tmp_path, with_ledger=True)
     calls: list[str] = []
-    first_path = f"/tokens/v1/ethereum/{','.join(addresses[:30])}"
-    second_path = f"/tokens/v1/ethereum/{addresses[30]}"
 
-    def opener(request: urllib.request.Request, timeout: int) -> object:
-        visited = urllib.parse.urlparse(request.full_url).path
-        calls.append(visited)
-        if visited == first_path:
-            return _JsonResponse(payload(addresses[:30]))
-        if visited == second_path and calls.count(second_path) == 1:
-            raise urllib.error.URLError("forced later batch failure")
-        return _JsonResponse(payload([addresses[30]]))
-
-    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    monkeypatch.setattr(urllib.request, "urlopen", _dex_later_batch_opener(calls, addresses))
     run = engine.enrich_dex_contracts(mode="incremental")
 
     assert run.status == "partial"
@@ -2186,67 +2146,12 @@ def test_dex_enrichment_retries_failed_dedup_batch_in_incremental_mode(tmp_path,
 
 
 def test_dex_enrichment_error_payload_preserves_completed_rows_and_is_retryable(tmp_path, monkeypatch) -> None:
-    path = str(tmp_path / "candidates.sqlite")
-    repository = CandidateRegistryRepository(path)
-    ledger = CapacityLedger(repository, load_capacity_inventory("configs/discovery_capacity.yaml"))
-    addresses = tuple(f"0x{index:040x}" for index in range(1, 32))
-    candidates = tuple(
-        DiscoveredCandidate(
-            provider="geckoterminal",
-            provider_id=f"eth_{address}",
-            slug=f"eth-{address}",
-            name=f"Token {index}",
-            symbol=f"T{index}",
-            primary_chain="eth",
-            candidate_type="token",
-            metadata={"chain": "eth", "contract_address": address},
-        )
-        for index, address in enumerate(addresses, 1)
-    )
-    config = DiscoveryConfig(
-        registry_path=path,
-        seed_market_validation_universe=False,
-        providers={
-            "dexscreener": DiscoveryProviderConfig(enabled=True, max_requests_per_cycle=5, min_interval_seconds=0.0)
-        },
-    )
-    engine = CandidateDiscoveryEngine(
-        repository,
-        config,
-        providers={
-            "geckoterminal": StaticDiscoveryProvider("geckoterminal", candidates),
-            "dexscreener": DexScreenerDiscoveryProvider(ledger=ledger, backoff_seconds=0, max_attempts=1),
-        },
-        ledger=ledger,
-    )
-    engine.sync(provider="geckoterminal", limit=40)
-
-    def payload(batch: tuple[str, ...] | list[str]) -> list[dict[str, Any]]:
-        return [
-            {
-                "chainId": "ethereum",
-                "pairAddress": f"pair-{address}",
-                "baseToken": {"address": address, "name": f"Token {address}", "symbol": "TKN"},
-                "liquidity": {"usd": 1000},
-                "volume": {"h24": 25},
-            }
-            for address in batch
-        ]
-
+    repository, engine, addresses = _dex_enrichment_fixture(tmp_path, with_ledger=True)
     calls: list[str] = []
-    first_path = f"/tokens/v1/ethereum/{','.join(addresses[:30])}"
-    second_path = f"/tokens/v1/ethereum/{addresses[30]}"
 
-    def opener(request: urllib.request.Request, timeout: int) -> object:
-        visited = urllib.parse.urlparse(request.full_url).path
-        calls.append(visited)
-        if visited == first_path:
-            return _JsonResponse(payload(addresses[:30]))
-        if visited == second_path and calls.count(second_path) == 1:
-            return _JsonResponse({"error": "busy"})
-        return _JsonResponse(payload([addresses[30]]))
-
-    monkeypatch.setattr(urllib.request, "urlopen", opener)
+    monkeypatch.setattr(
+        urllib.request, "urlopen", _dex_later_batch_opener(calls, addresses, failure_response={"error": "busy"})
+    )
     run = engine.enrich_dex_contracts(mode="incremental")
 
     assert run.status == "partial"
