@@ -38,6 +38,7 @@ def _stub_issue_412_boundaries(monkeypatch) -> None:
     monkeypatch.setattr(hunter_pre_push.provenance, "check_publish_range", lambda *_args: None)
     monkeypatch.setattr(hunter_pre_push, "_validate_receipt_freshness", lambda _head: None)
     monkeypatch.setattr(hunter_pre_push, "_run_mapped_regressions", lambda _head: 0)
+    monkeypatch.setattr(hunter_pre_push, "_run_preventive_obligations", lambda _head: 0)
     monkeypatch.setattr(hunter_pre_push, "_run_workflow_trigger_contracts", lambda _head: 0)
     monkeypatch.setattr(hunter_pre_push, "report_pre_ready_review_state", lambda _head, _updates: None)
     monkeypatch.setattr(hunter_pre_push, "require_current_review_request_if_present", lambda _head, _updates: None)
@@ -64,6 +65,30 @@ def test_pre_push_blocks_known_deterministic_failure_before_network_push(monkeyp
     )
 
     assert hunter_pre_push.enforce_pre_push(_update()) == 7
+
+
+def test_pre_push_blocks_when_applicable_preventive_obligations_fail(monkeypatch, tmp_path) -> None:
+    def fake_git(*args: str) -> str:
+        if args == ("rev-parse", "--show-toplevel"):
+            return str(tmp_path)
+        if args == ("rev-parse", "HEAD"):
+            return HEAD_A
+        if args == ("status", "--porcelain=v1", "--untracked-files=normal"):
+            return ""
+        raise AssertionError(args)
+
+    monkeypatch.setattr(hunter_pre_push, "_run_git", fake_git)
+    monkeypatch.setattr(hunter_pre_push.os, "chdir", lambda _path: None)
+    _stub_issue_412_boundaries(monkeypatch)
+    monkeypatch.setattr(hunter_pre_push, "_select_preflight_mode", lambda _head: hunter_pre_push.NORMAL_MODE)
+    monkeypatch.setattr(hunter_pre_push, "_run_preventive_obligations", lambda _head: 9)
+    monkeypatch.setattr(
+        hunter_pre_push.subprocess,
+        "run",
+        lambda command, *, check: SimpleNamespace(returncode=0),
+    )
+
+    assert hunter_pre_push.enforce_pre_push(_update()) == 9
 
 
 def test_pre_push_proof_for_commit_a_cannot_authorize_commit_b(monkeypatch, tmp_path) -> None:
@@ -355,6 +380,7 @@ def test_unsigned_candidate_safety_keeps_exact_head_and_gates_without_publicatio
         return 0
 
     monkeypatch.setattr(hunter_pre_push, "_run_push_safety_lane", successful_safety)
+    monkeypatch.setattr(hunter_pre_push, "_run_preventive_obligations", lambda _head: 0)
     monkeypatch.setattr(
         hunter_pre_push, "_validate_writer_provenance", lambda _head: pytest.fail("unsigned provenance")
     )

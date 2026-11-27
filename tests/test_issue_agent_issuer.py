@@ -34,6 +34,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from issue_agent_edge_transport import MAX_REQUEST_BYTES
 from issue_agent_wire import EdgeTransportClientMixin, issue_body_with_scope
 
+from hunter.automation import issue_agent_state as state
 from hunter.automation.agent_fallback_runtime import AgentFallbackRuntimeReceipt
 from hunter.automation.issue_agent_execution import (
     EVIDENCE_DATABASE_ENV,
@@ -51,13 +52,20 @@ from hunter.automation.issue_agent_execution import (
     IssueAgentAuthorization,
     IssueAgentAuthorizationVerifier,
     IssueAgentConfigurationError,
+    IssueAgentExecutionError,
     IssueAgentExecutionLedger,
     IssueAgentReplayError,
     SignedIssueAgentAuthorization,
     build_production_source_handling_resolver,
     issue_agent_document_id,
+    issue_agent_intake_reference,
+    issue_agent_task_request,
 )
 from hunter.evidence_intelligence import smart_prompt_routing
+from hunter.evidence_intelligence.engineering_context_authority import (
+    ENGINEERING_IMPLEMENT_TASK_KEY,
+    EngineeringContextAuthority,
+)
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService
 from hunter.evidence_intelligence.pre_model import PreModelInvariantError, resolve_pre_model_source_handling
@@ -71,6 +79,7 @@ from hunter.evidence_intelligence.source_handling_persistence import (
     SourceHandlingOperatorRoot,
 )
 
+ROOT = Path(__file__).resolve().parents[1]
 RULE_FIXTURE = Path(__file__).parent / "fixtures" / "source_handling" / "authorization_rule_v1.json"
 RULE_GOLDEN = "41119071db0f5c2a2eacfe2848ab6696355195e1ac9c671ee33c4128793aa70a"
 START = datetime(2026, 9, 5, 12, 0, tzinfo=UTC)
@@ -451,6 +460,15 @@ class TextIsSuccess:
 # --- Issuer deployment fixture ----------------------------------------------
 
 
+def _permissive_lineage_binding() -> issuer.LineageBinding:
+    """Legacy wire fixtures: no signed ledger, but still one real ECA for compilation."""
+    return issuer.LineageBinding(
+        knowledge_overlay=(),
+        engineering_context_authority=EngineeringContextAuthority(registry_path=ROOT / "docs" / "DEFECT_REGISTRY.json"),
+        verify_dispatch=lambda *_args: None,
+    )
+
+
 def _environment(tmp_path: Path, database: Path, *, verification_key: bytes) -> dict[str, str]:
     return {
         REPOSITORY_ENV: REPOSITORY,
@@ -509,7 +527,12 @@ class Deployment:
         )
         self.fallback = fallback if fallback is not None else RecordingFallback()
 
-    def services(self, fallback: Any | None = None) -> issuer.IssuerServices:
+    def services(
+        self,
+        fallback: Any | None = None,
+        *,
+        lineage_binding: issuer.LineageBinding | None = None,
+    ) -> issuer.IssuerServices:
         """Fresh services over the same durable state (a process restart)."""
         repository = EvidenceIntelligenceRepository(self.configuration.evidence_database)
         ledger = IssueAgentExecutionLedger(self.configuration.evidence_database)
@@ -518,12 +541,14 @@ class Deployment:
             resolver=self.resolver,
             clock=self.clock,
         )
+        binding = lineage_binding or _permissive_lineage_binding()
         machine = SmartPromptMachine(
             repository=repository,
             profiles=ISSUE_AGENT_PROFILE_REGISTRY,
             routes=ISSUE_AGENT_ROUTE_REGISTRY,
             source_handling_resolver=self.resolver,
             clock=self.clock,
+            engineering_context_authority=binding.engineering_context_authority,
         )
         ingress = GovernedEngineeringTaskIngress(
             machine=machine,
@@ -538,7 +563,52 @@ class Deployment:
             fallback=fallback if fallback is not None else self.fallback,
             ingress=ingress,
             boundary=boundary,
+            lineage_binding=binding,
         )
+
+
+def _binding_for_evidence(evidence: dict[str, Any]) -> issuer.LineageBinding:
+    return issuer.LineageBinding(
+        knowledge_overlay=(),
+        engineering_context_authority=EngineeringContextAuthority(registry_path=ROOT / "docs" / "DEFECT_REGISTRY.json"),
+        verify_dispatch=issuer.bind_dispatch_to_lineage(lambda _authorization: evidence),
+    )
+
+
+def _compiled_lineage_evidence(deployment: Deployment, document: str) -> dict[str, Any]:
+    """Compile once through the real machine to capture the exact signed-shape digests."""
+    signed = SignedIssueAgentAuthorization.from_json(document)
+    services = deployment.services(lineage_binding=_permissive_lineage_binding())
+    authorization = signed.authorization
+    reference = issue_agent_intake_reference(authorization)
+    processed_at = deployment.configuration.clock.now()
+    services.boundary.preflight(reference, processing_run_id=authorization.authorization_id, processed_at=processed_at)
+    services.boundary.ingest(reference, processing_run_id=authorization.authorization_id, processed_at=processed_at)
+    compiled = services.ingress.compile(
+        issue_agent_task_request(authorization), implementation_scope=signed.implementation_scope
+    )
+    artifact = compiled.compilation.orchestration.build_result.prompt_artifact
+    assert artifact is not None
+    scope = signed.implementation_scope
+    task_scope = {
+        "task_id": scope.task_id,
+        "branch_pattern": scope.branch_pattern,
+        "base_ref": scope.base_ref,
+        "base_sha": scope.base_sha,
+        "allowed_paths": list(scope.allowed_paths),
+        "prohibited_paths": list(scope.prohibited_paths),
+    }
+    dpm = EngineeringContextAuthority(registry_path=ROOT / "docs" / "DEFECT_REGISTRY.json")
+    return {
+        "authorization_envelope_sha256": hashlib.sha256(document.encode("utf-8")).hexdigest(),
+        "task_scope_sha256": hashlib.sha256(state.canonical_json(task_scope)).hexdigest(),
+        "lineage": {
+            "prompt_sha256": hashlib.sha256(artifact.content.encode("utf-8")).hexdigest(),
+            "dpm_context_sha256": hashlib.sha256(
+                dpm.canonical_json(ENGINEERING_IMPLEMENT_TASK_KEY, scope=scope).encode("utf-8")
+            ).hexdigest(),
+        },
+    }
 
 
 # --- Wire harness: real threaded HTTPServer on an ephemeral port ------------
@@ -1299,6 +1369,46 @@ def test_execution_side_holds_only_the_public_half_of_the_issuer() -> None:
     assert not hasattr(verifier, "sign")
 
 
+def test_issuer_rejects_prompt_digest_drift_before_durable_dispatch(tmp_path: Path) -> None:
+    deployment = Deployment(tmp_path)
+    document = _authorization_document()
+    evidence = _compiled_lineage_evidence(deployment, document)
+    evidence["lineage"]["prompt_sha256"] = "0" * 64
+    services = deployment.services(lineage_binding=_binding_for_evidence(evidence))
+
+    with pytest.raises(IssueAgentExecutionError, match="prompt_sha256 differs"):
+        issuer.prepare_authorization(services, SignedIssueAgentAuthorization.from_json(document))
+    assert deployment.fallback.documents == []
+    entry = services.ledger.entry(SignedIssueAgentAuthorization.from_json(document).authorization.authorization_id)
+    assert entry is not None and entry.state == "FAILED"
+
+
+def test_issuer_rejects_dpm_context_drift_before_durable_dispatch(tmp_path: Path) -> None:
+    deployment = Deployment(tmp_path)
+    document = _authorization_document()
+    evidence = _compiled_lineage_evidence(deployment, document)
+    evidence["lineage"]["dpm_context_sha256"] = "0" * 64
+    services = deployment.services(lineage_binding=_binding_for_evidence(evidence))
+
+    with pytest.raises(IssueAgentExecutionError, match="dpm_context_sha256 differs"):
+        issuer.prepare_authorization(services, SignedIssueAgentAuthorization.from_json(document))
+    assert deployment.fallback.documents == []
+
+
+def test_issuer_dispatches_only_the_exact_overlay_bound_lineage(tmp_path: Path) -> None:
+    deployment = Deployment(tmp_path)
+    document = _authorization_document()
+    binding = _binding_for_evidence(_compiled_lineage_evidence(deployment, document))
+    services = deployment.services(lineage_binding=binding)
+
+    prepared = issuer.prepare_authorization(services, SignedIssueAgentAuthorization.from_json(document))
+    assert prepared.authorization.authorization_id
+    assert services.ingress._machine._engineering_context_authority is binding.engineering_context_authority
+    assert deployment.fallback.documents == []
+    entry = services.ledger.entry(prepared.authorization.authorization_id)
+    assert entry is not None and entry.state == "DISPATCHED"
+
+
 def test_issuer_edge_reuses_existing_authorities_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The edge composes existing authorities; it gains no minting capability.
 
@@ -1331,7 +1441,10 @@ def test_issuer_edge_reuses_existing_authorities_only(tmp_path: Path, monkeypatc
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
 
-    services = issuer.compose_services(configuration)
+    services = issuer.compose_services(
+        configuration,
+        lineage_binding_factory=lambda _configuration: _permissive_lineage_binding(),
+    )
     assert isinstance(services.fallback, issuer.IssueAgentWorkspaceRuntime)
     assert services.fallback.workspace_root == configuration.repository_checkout
     assert services.configuration is configuration

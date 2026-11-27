@@ -3013,5 +3013,69 @@
         "Issue #588 / PR #757; stuck collector run 44354491426 despite exact-head Codex completion; Hosted Pre-PR run 44362780632 and Trusted Preflight run 44362790081 exposed GITHUB_ACTIONS-only context leakage; fixed on signed PR #757 lineage after repository binding was added."
       ]
     }
+  ],
+  "preventive_obligations": [
+    {
+      "id": "PO-575-A",
+      "finding_ids": [
+        "PRRT_kwDOTRDHr868k0Fl",
+        "4713782946"
+      ],
+      "families": [
+        "DFF-062",
+        "DFF-078",
+        "PRH-142"
+      ],
+      "changed_paths": [
+        "src/hunter/onchain/engine.py",
+        "src/hunter/onchain/evidence.py",
+        "src/hunter/onchain/repository.py",
+        "tests/test_onchain_capital_flow_acquisition.py"
+      ],
+      "selectors": [
+        "tests/test_issue_575_preventive_obligations.py::test_case_a_surface_bound_signature_identity_collision"
+      ]
+    },
+    {
+      "id": "PO-575-B",
+      "finding_ids": [
+        "PRRT_kwDOTRDHr868k0Fo",
+        "4713782951"
+      ],
+      "families": [
+        "DFF-065",
+        "PRH-146"
+      ],
+      "changed_paths": [
+        "src/hunter/discovery/engine.py",
+        "src/hunter/discovery/providers.py",
+        "tests/test_discovery_engine.py",
+        "tests/test_discovery_providers.py"
+      ],
+      "selectors": [
+        "tests/test_issue_575_preventive_obligations.py::test_case_b_pagination_budget_does_not_discard_acquired_catalogue"
+      ]
+    },
+    {
+      "id": "PO-575-C",
+      "finding_ids": [
+        "PRRT_kwDOTRDHr868k0Fu",
+        "4713782958"
+      ],
+      "families": [
+        "DFF-064",
+        "DFF-079",
+        "PRH-145"
+      ],
+      "changed_paths": [
+        "src/hunter/discovery/engine.py",
+        "src/hunter/discovery/providers.py",
+        "tests/test_discovery_engine.py",
+        "tests/test_discovery_providers.py"
+      ],
+      "selectors": [
+        "tests/test_issue_575_preventive_obligations.py::test_case_c_explicit_limit_still_obeys_request_budget"
+      ]
+    }
   ]
 }

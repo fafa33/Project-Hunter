@@ -50,7 +50,7 @@ import hunter_merge_readiness_v2 as readiness
 _REPOSITORY_SRC = str(Path(__file__).resolve().parents[1] / "src")
 if _REPOSITORY_SRC not in sys.path:
     sys.path.insert(0, _REPOSITORY_SRC)
-from hunter.task_scope import TaskScopeContract, path_matches_scope_entry  # noqa: E402
+from hunter.task_scope import TaskScopeContract, path_matches_scope_entry  # type: ignore[import-untyped]  # noqa: E402
 
 # The exact-head check that runs the canonical preflight in normal mode
 # (`.github/workflows/ci.yml` runs `scripts/hunter_pr_preflight.py --mode normal`).
@@ -68,6 +68,82 @@ NONE = "none"
 SCOPE = "scope-contract"
 
 SCOPE_MISMATCH = "SCOPE_MISMATCH"
+
+#: Issue #575 preventive obligations are read from the canonical defect registry.
+#: An obligation is registry data (finding identity, applicable paths, and an
+#: executable selector), never a judgement assertion or a prompt digest.
+PREVENTIVE_OBLIGATION_SCHEMA = "hunter.preventive-obligations.v1"
+REGISTRY_RELATIVE_PATH = Path("docs") / "DEFECT_REGISTRY.json"
+
+
+def _safe_selector(selector: object) -> bool:
+    if not isinstance(selector, str) or not selector.strip() or selector.startswith("/"):
+        return False
+    path = selector.partition("::")[0]
+    return ".." not in Path(path).parts
+
+
+def load_preventive_obligations(root: Path | None = None) -> tuple[tuple[dict[str, Any], ...], str]:
+    """Load registry-derived preventive obligations, failing closed on drift."""
+    path = (root or Path(__file__).resolve().parents[1]) / REGISTRY_RELATIVE_PATH
+    try:
+        registry = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return (), f"{REGISTRY_RELATIVE_PATH} is missing"
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return (), f"{REGISTRY_RELATIVE_PATH} is unreadable ({type(exc).__name__}: {exc})"
+    if not isinstance(registry, dict):
+        return (), f"{REGISTRY_RELATIVE_PATH} must be an object"
+    entries = registry.get("preventive_obligations")
+    if not isinstance(entries, list):
+        return (), f"{REGISTRY_RELATIVE_PATH} preventive_obligations must be a list"
+    obligations: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            return (), "each preventive obligation must be an object"
+        ident, changed, selectors = entry.get("id"), entry.get("changed_paths"), entry.get("selectors")
+        finding_ids, family_ids = entry.get("finding_ids"), entry.get("families")
+        if not isinstance(ident, str) or not ident.strip() or ident in seen:
+            return (), "each preventive obligation needs a unique non-empty id"
+        seen.add(ident)
+        for label, value in (
+            ("finding_ids", finding_ids),
+            ("families", family_ids),
+            ("changed_paths", changed),
+            ("selectors", selectors),
+        ):
+            if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+                return (), f"preventive obligation {ident} has malformed {label}"
+        if not family_ids or not changed or not selectors:
+            return (), f"preventive obligation {ident} must name families, changed paths and selectors"
+        if not all(_safe_selector(item) for item in selectors):
+            return (), f"preventive obligation {ident} has an unsafe selector"
+        if any(".." in Path(item).parts or item.startswith("/") for item in changed):
+            return (), f"preventive obligation {ident} has an unsafe changed path"
+        obligations.append(
+            {
+                "id": ident,
+                "finding_ids": tuple(finding_ids),
+                "families": tuple(family_ids),
+                "selectors": tuple(selectors),
+                "changed_paths": tuple(dict.fromkeys(changed)),
+            }
+        )
+    return tuple(obligations), ""
+
+
+def required_preventive_selectors(family_ids: tuple[str, ...], root: Path | None = None) -> dict[str, tuple[str, ...]]:
+    """Return registry-committed selectors required by each named family."""
+    obligations, error = load_preventive_obligations(root)
+    if error:
+        return {}
+    required: dict[str, set[str]] = {}
+    for obligation in obligations:
+        families = set(obligation["families"])
+        for family_id in set(family_ids) & families:
+            required.setdefault(family_id, set()).update(obligation["selectors"])
+    return {family_id: tuple(sorted(selectors)) for family_id, selectors in required.items()}
 
 
 class WorkflowState(IntEnum):

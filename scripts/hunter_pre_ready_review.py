@@ -42,7 +42,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import hunter_connector_write_ingress as ingress
-from hunter_workflow_state import path_matches_scope_entry
+from hunter_workflow_state import path_matches_scope_entry, required_preventive_selectors
 
 ROOT = Path(__file__).resolve().parents[1]
 REVIEW_RELATIVE_PATH = ".hunter/pre-ready-hostile-review.json"
@@ -1576,6 +1576,26 @@ def verify_claims(
             "incomplete",
             "applicable recurring-defect prevention checks are incomplete: " + ", ".join(missing),
         )
+
+    # Issue #575: a family whose registry entry records executable regression
+    # selectors is not discharged by prose, a selected-rules digest, or a
+    # prompt SHA. The review evidence must name a committed selector that was
+    # actually run against this candidate; otherwise claiming `clear` is an
+    # assertion, not proof. Local execution is bound in the existing pre-push
+    # boundary and hosted exact-HEAD Pytest remains the authoritative lane.
+    preventive_requirements = required_preventive_selectors(tuple(sorted(required)))
+    for item in claims["defect_families"]:
+        family = str(item.get("family"))
+        selectors = preventive_requirements.get(family)
+        if not selectors:
+            continue
+        evidence = str(item.get("evidence"))
+        if not any(selector in evidence or selector.rsplit("::", 1)[-1] in evidence for selector in selectors):
+            return ReviewVerdict(
+                "incomplete",
+                f"defect family {family} requires evidence from a committed regression selector: "
+                + " or ".join(selectors),
+            )
 
     scope_state: str | None = None
     required_criteria: tuple[str, ...] = ()
