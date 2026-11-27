@@ -3,85 +3,85 @@
     "acceptance_criteria": [
       {
         "criterion": "All supported Agents resolve the same canonical repository/mission authority.",
-        "evidence": "No competing workspace authority is introduced; canonical registry loading remains in hunter_workflow_state, and registry-derived preventive obligations are the only new selection source.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-01",
         "verdict": "satisfied"
       },
       {
         "criterion": "Wrong cwd/branch/repo/HEAD/checkpoint fails before reading or writing.",
-        "evidence": "Obligation evidence binds exact content identity, base/head range, selectors, toolchain and outcome, and digest mismatch fails closed before provider dispatch; negative tests cover wrong-context execution.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-02",
         "verdict": "satisfied"
       },
       {
         "criterion": "Missing checkpoint fails closed without fallback.",
-        "evidence": "Missing signed ECA lineage or prompt/DPM digest is refused before provider dispatch; no silent fallback to a current branch or remembered context exists.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-03",
         "verdict": "satisfied"
       },
       {
         "criterion": "Unregistered worktree cannot execute or publish.",
-        "evidence": "No workspace registration or launcher bypass was added; the existing pre-push boundary and signed writer channel remain the only publication paths.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-04",
         "verdict": "satisfied"
       },
       {
         "criterion": "Two concurrent writers cannot hold the same active lease; expired lease cannot mutate.",
-        "evidence": "No lease, branch or commit identity is relaxed; this remediation adds signed commits on the single authorized infrastructure branch without force-push.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-05",
         "verdict": "satisfied"
       },
       {
         "criterion": "Session/model switch resumes exact lineage with no rediscovery.",
-        "evidence": "Overlay-bound ECA context and exact prompt/DPM digests survive issuer-to-execution handoff; resume paths are covered by negative tests and cannot supply caller-supplied digests.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-06",
         "verdict": "satisfied"
       },
       {
         "criterion": "Crash/restart restores deterministic checkpoint and outstanding work.",
-        "evidence": "Crash/restart and fallback/resume paths are covered by issuer/fallback tests; dispatch requires fresh lineage-bound digests and fails closed on mismatch.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-07",
         "verdict": "satisfied"
       },
       {
         "criterion": "Cross-lineage import requires explicit owner authorization and preserves both trees.",
-        "evidence": "No cross-lineage import was performed; PR #788 remains Draft with its original head and findings, and no product code from that candidate was adopted.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-08",
         "verdict": "satisfied"
       },
       {
         "criterion": "Tool admission and publisher reject forged/stale registry or lease.",
-        "evidence": "Pre-push obligations consume evidence from committed registry data and exact git ranges; skipped selectors, missing fixtures, stale digests and prompt-only prose all fail closed.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-09",
         "verdict": "satisfied"
       },
       {
         "criterion": "CI anti-rollback catches removal/bypass of any workspace admission route.",
-        "evidence": "The canonical Defect Prevention Guard and registry-derived obligation tests were retained and strengthened; no guard was removed or weakened.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-10",
         "verdict": "satisfied"
       },
       {
         "criterion": "Registry supports safe migration of existing worktrees without deletion.",
-        "evidence": "No workspace registry schema or migration behavior was changed by this candidate.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-11",
         "verdict": "satisfied"
       },
       {
         "criterion": "Issue #574 and other Issue flows consume the global authority without introducing a second workspace authority.",
-        "evidence": "Issue #575 workspace authority is consumed rather than replaced; the new enforcement reuses the existing issuer, pre-push and hosted proof chain.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-12",
         "verdict": "satisfied"
       },
       {
         "criterion": "No PR creation/merge or hosted publication without exact-head lineage proof.",
-        "evidence": "Local records explicitly set trusted_proof=false; exact-head hosted Pre-PR Preflight and trusted Candidate Admission remain the only proof authorities, and no merge is authorized.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-13",
         "verdict": "satisfied"
       },
       {
         "criterion": "Missing provider/runtime integration is reported BLOCKED, not falsely PASS.",
-        "evidence": "Failures and missing evidence produce BLOCKED records with explicit errors; no provider/runtime gap is reported as a false PASS.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation: the governing behavior is unchanged, the two resolver security decisions remain enforced and mutation-killed, and hosted exact-head proof remains the sole production authority.",
         "id": "AC-575-14",
         "verdict": "satisfied"
       }
@@ -103,193 +103,198 @@
     "base_sha": "a4a9b9e173bb15afaed2c162bda9708e93eb2411",
     "defect_families": [
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-045",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-047",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-049",
         "outcome": "clear"
       },
       {
-        "evidence": "Hosted authorize DPM registry checkout authority unchanged; scripts/hunter_issue_agent_lifecycle.py resolver path reuses the pinned checkout. Selector tests/test_issue_agent_authorize.py::test_prepare_reads_configured_checkout_registry_not_ambient_cwd.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-054",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-055",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-057",
         "outcome": "clear"
       },
       {
-        "evidence": "Trusted resolver writer identity bound in WRITERS[RECONCILE_WORKFLOW] and cmd_resolve; regression selectors tests/test_issue_agent_manual_pr_resolution.py::test_the_trusted_resolve_finding_job_identity_is_allowed and ::test_cmd_resolve_records_the_actual_trusted_workflow_job; 49 passed across the new and resolution suites.",
+        "evidence": "Fresh exact staged-content judgement: WRITERS[RECONCILE_WORKFLOW] and cmd_resolve still bind only the real trusted `resolve-finding` job, and the refused-resolve mutant now weakens the current `isResolved is True` decision and is killed. Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-059",
         "outcome": "clear"
       },
       {
-        "evidence": "Signed-receipt manual-PR adoption in control.manual_adoption_proof / knowledge.verified_manual_adoption_at_head / remediation.resolution_writes; regression selector tests/test_issue_agent_manual_pr_resolution.py::test_manual_adoption_resolves_the_exact_thread_and_records_it_once plus idempotency, head-race and fail-closed cases; 21 passed.",
+        "evidence": "Fresh exact staged-content judgement: signed-receipt manual-PR adoption and the governed exact-head barrier are unchanged, and the wrong-head mutant now weakens that current decision and is killed. Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
         "family": "DFF-060",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh exact staged-content judgement after the mutation-anchor remediation. All 22 anchors are verified unique by tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique; the refused-resolve and wrong-head mutants in tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed were killed without weakening either assertion; 134 affected remediation/manual-adoption tests passed and Defect Prevention Guard, Ruff, Black and Mypy are green on the changed file. Hosted exact-head proof remains authoritative.",
+        "family": "DFF-061",
         "outcome": "clear"
       }
     ],
@@ -321,13 +326,13 @@
         "status": "added"
       },
       {
-        "blob_sha": "c1bbd3100510eda44cb4acdb0d8ca2d996ee7268",
+        "blob_sha": "2c98360f245efb8f1e228616f0a58d72c20a2773",
         "path": "docs/ADR/0039-review-knowledge-remediation-loop.md",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "0a9edb9ce825c53806ef74d4c78476491d572c42",
+        "blob_sha": "9bfe35161fff838943d6a5d8e7b6fb26126b4498",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -427,13 +432,19 @@
         "path": "tests/test_issue_agent_provisioner.py",
         "previous_path": "",
         "status": "modified"
+      },
+      {
+        "blob_sha": "61af28474e924a5c595d8707da2d0390e8cabbcc",
+        "path": "tests/test_issue_agent_remediation_mutation.py",
+        "previous_path": "",
+        "status": "modified"
       }
     ],
-    "review_target_digest": "4d8ebd5d7a32c30aca051e31fbbd4142749f719b2ae3c056b667169d304fec60"
+    "review_target_digest": "ac093e7a3f8b1d29b8fe8fd330d638b4756f0ea95cd65d9314dc060e97ce774b"
   },
-  "review_id": "a92fbf16d78c9280e7a18c73b81a73bd92961f2a79d209eea3ea8c737b9e94f5",
+  "review_id": "38c8202259d11d74eb0fafdf03293d2c8dca2cc473526fbd5ce8817ebc38aa62",
   "review_request": {
-    "claims_id": "a92fbf16d78c9280e7a18c73b81a73bd92961f2a79d209eea3ea8c737b9e94f5",
+    "claims_id": "38c8202259d11d74eb0fafdf03293d2c8dca2cc473526fbd5ce8817ebc38aa62",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

@@ -3033,7 +3033,8 @@
       "regression_evidence": [
         "tests/test_issue_agent_manual_pr_resolution.py::test_the_trusted_resolve_finding_job_identity_is_allowed",
         "tests/test_issue_agent_manual_pr_resolution.py::test_cmd_resolve_records_the_actual_trusted_workflow_job",
-        "tests/test_issue_agent_control.py::test_a_record_from_any_other_run_is_invalid"
+        "tests/test_issue_agent_control.py::test_a_record_from_any_other_run_is_invalid",
+        "tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed"
       ],
       "lifecycle": "regression-tested",
       "sources": [
@@ -3069,11 +3070,38 @@
         "tests/test_issue_agent_manual_pr_resolution.py::test_unauthorized_or_mismatched_owner_replies_are_never_adopted",
         "tests/test_issue_agent_manual_pr_resolution.py::test_a_current_thread_repeating_the_claim_blocks_adoption",
         "tests/test_issue_agent_manual_pr_resolution.py::test_a_missing_or_failed_exact_head_preflight_blocks_adoption",
-        "tests/test_issue_agent_manual_pr_resolution.py::test_a_resolution_record_requires_the_signed_receipt_digest"
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_resolution_record_requires_the_signed_receipt_digest",
+        "tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed"
       ],
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #575 / PR #789, 2026-11-27: PR #789 was created manually, so `control.exact_head_proof` could never resolve its two confirmed-and-corrected threads (findings 4716015777 / 4716015788, exact remediation replies 4717097703 / 4717100862, signed Knowledge Ledger head a5a9abc7ec4e92bacafaaf50ce460da3fb023535). The canonical resolver required a `proven` classification and exactly one `PUBLISHED` remediation authorization at head, neither of which exists for a manual PR; adding a resolution-only signed-receipt adoption closes that gap without fabricating lifecycle facts."
+      ]
+    },
+    {
+      "id": "DFF-061",
+      "title": "stale-mutation-anchor-disables-resolution-invariant-proof",
+      "invariant": "A mutation proof that cannot apply its exact-text anchor is not evidence that a weakened invariant was observed. When a resolver implementation changes, every mutation anchor for its load-bearing decisions must be retargeted to the current decision in the same change; an absent or duplicated anchor must fail before the mutant suite runs, never be mistaken for a killed mutant.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/issue_agent_control.py",
+          "src/hunter/automation/issue_agent_remediation.py",
+          "tests/test_issue_agent_remediation_mutation.py"
+        ],
+        "rationale": "The resolver's exact-thread and exact-head decisions and the mutation anchors that weaken them are one enforcement unit. A change to either side can leave a security invariant unproven while the suite still exits nonzero for the wrong reason."
+      },
+      "prevention": {
+        "mechanism": "`test_every_mutation_anchor_is_unique` requires every configured anchor to occur exactly once before any mutant runs; `Mutant.apply` keeps the same fail-closed check at application time. The resolver mutants now target the current load-bearing decisions: `resolve_thread` returns a resolution id only when GitHub reports `isResolved is True`, and governed `resolution_writes` refuses a head that differs from `item.proven[\"remediated_head_sha\"]` while manual adoption still requires the signed receipt digest at that head. No assertion is weakened or skipped and no mutation is disabled.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/automation/issue_agent_control.py::resolve_thread"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique",
+        "tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 exact-head Trusted Preflight run 45974936031, job 140424215026, 2026-11-27: hosted Pytest reported `anchor is not unique` for the refused-resolve and wrong-head mutation cases because the resolver implementation had changed their exact text. All 22 anchors were revalidated, the two decisions were retargeted without weakening either check, the two focused mutant cases were killed, and 134 affected remediation and manual-adoption tests passed locally."
       ]
     }
   ],

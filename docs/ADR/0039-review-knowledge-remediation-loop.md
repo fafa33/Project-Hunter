@@ -587,8 +587,12 @@ Delivered on branch `issue-575-preventive-enforcement`:
 trusted writer identity and rejection of `resolve`/other writers, the AST guard on `cmd_resolve`, valid manual
 adoption and one-time resolution, interrupt/retry without a second reply, an already-resolved thread, a moved
 head, missing/stale/ambiguous/unauthenticated replies and receipts, a current unresolved repeat of the claim, a
-missing/failed preflight, and the receipt-digest requirement on the resolution record. The affected existing
-suites are re-run before publication. This is local evidence; the hosted exact-head `Hunter / Pre-PR Preflight`
-and the trusted `resolve-finding` job on the default branch remain the authorities for production behavior, and
-production resolution of these manually created PR threads is not claimed until that trusted path actually runs
-against the merged head.
+missing/failed preflight, and the receipt-digest requirement on the resolution record. The S5b mutation harness
+was corrected at this head: all 22 exact-text anchors were revalidated as unique before any mutant runs, and the
+refused-resolve and wrong-head mutants now weaken the current `isResolved is True` and governed-head decisions
+rather than stale identifiers. Both focused mutant cases are killed, and the affected remediation and
+manual-adoption suites are 134 passed; these facts are recorded in DFF-059, DFF-060 and DFF-061. The affected
+existing suites are re-run before publication. This is local evidence; the hosted exact-head `Hunter / Pre-PR
+Preflight` and the trusted `resolve-finding` job on the default branch remain the authorities for production
+behavior, and production resolution of these manually created PR threads is not claimed until that trusted path
+actually runs against the merged head.
