@@ -1384,7 +1384,9 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
     a dismissal, an approval or a merge, and never a second pull request call.
     """
 
-    writer = _writer("reconcile", "resolve", control.RECONCILE_WORKFLOW)
+    # ADR 0039 L7: the trusted reconcile workflow's real resolver job is `resolve-finding`. A ledger
+    # record naming any other job can never be produced by a trusted run and is refused by provenance.
+    writer = _writer("reconcile", "resolve-finding", control.RECONCILE_WORKFLOW)
     github = _github(configuration)
     control.require_anchor(github, configuration, knowledge.KNOWLEDGE_LEDGER_REF)
     provenance = control.run_provenance(github, configuration)
@@ -1397,53 +1399,62 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
         for finding_id in sorted(known.findings):
             try:
                 proof = control.exact_head_proof(github, configuration, known, state_view, finding_id)
+                manual = False
+                if proof is None:
+                    # A manually created PR has no Issue Agent ledger, authorization or PUBLISHED
+                    # record. Adopt its exact-head evidence only from a signed Knowledge Receipt plus
+                    # the owner's authenticated disposition reply -- never fabricate an authorization.
+                    proof = control.manual_adoption_proof(github, configuration, known, finding_id)
+                    manual = proof is not None
                 if proof is None:
                     continue
-                _head, after = knowledge.read(store, trust=configuration.trust, provenance=provenance)
-                written = knowledge.append(
-                    store,
-                    remediation.proven_writes(
-                        after,
-                        finding_id,
-                        authorization_id=proof.authorization_id,
-                        remediated_head_sha=proof.remediated_head_sha,
-                        receipt_sha256=proof.receipt_sha256,
-                        preflight_run_id=proof.preflight_run_id,
-                    ),
-                    trust=configuration.trust,
-                    provenance=provenance,
-                    signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
-                    recorded_by=writer.recorded_by(),
-                    recorded_at=_timestamp(),
-                )[2]
-                # The signed exact-head proof is the receipt authority for governed
-                # Issue Agent remediations; never synthesize an owner disposition.
-                # Persist receipt before replying/resolving the GitHub thread.
-                _head, receipt_view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
-                receipt_writes = knowledge.proven_receipt_writes(
-                    receipt_view, finding_id, exact_head=proof.remediated_head_sha
-                )
-                if receipt_view.findings[finding_id].receipt is None and not receipt_writes:
-                    print(f"issue {issue}: {finding_id[:12]} receipt proof not eligible; thread remains open")
-                    continue
-                if receipt_writes:
-                    knowledge.append(
+                written = 0
+                if not manual:
+                    # Governed Issue Agent remediation: persist the signed exact-head finding_proven
+                    # record and receipt BEFORE replying/resolving the GitHub thread. Never synthesize
+                    # an owner disposition for this path.
+                    _head, after = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+                    written = knowledge.append(
                         store,
-                        receipt_writes,
+                        remediation.proven_writes(
+                            after,
+                            finding_id,
+                            authorization_id=proof.authorization_id,
+                            remediated_head_sha=proof.remediated_head_sha,
+                            receipt_sha256=proof.receipt_sha256,
+                            preflight_run_id=proof.preflight_run_id,
+                        ),
                         trust=configuration.trust,
                         provenance=provenance,
                         signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
                         recorded_by=writer.recorded_by(),
                         recorded_at=_timestamp(),
+                    )[2]
+                    _head, receipt_view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+                    receipt_writes = knowledge.proven_receipt_writes(
+                        receipt_view, finding_id, exact_head=proof.remediated_head_sha
                     )
-                # Verify the signed append is readable and bound to the same
-                # exact-head proof BEFORE any GitHub reply or thread mutation.
-                _head, verified_view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
-                if not knowledge.verified_receipt_at_head(
-                    verified_view, finding_id, exact_head=proof.remediated_head_sha
-                ):
-                    print(f"issue {issue}: {finding_id[:12]} receipt not verified; thread remains open")
-                    continue
+                    if receipt_view.findings[finding_id].receipt is None and not receipt_writes:
+                        print(f"issue {issue}: {finding_id[:12]} receipt proof not eligible; thread remains open")
+                        continue
+                    if receipt_writes:
+                        knowledge.append(
+                            store,
+                            receipt_writes,
+                            trust=configuration.trust,
+                            provenance=provenance,
+                            signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                            recorded_by=writer.recorded_by(),
+                            recorded_at=_timestamp(),
+                        )
+                    # Verify the signed append is readable and bound to the same exact-head proof
+                    # BEFORE any GitHub reply or thread mutation.
+                    _head, verified_view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+                    if not knowledge.verified_receipt_at_head(
+                        verified_view, finding_id, exact_head=proof.remediated_head_sha
+                    ):
+                        print(f"issue {issue}: {finding_id[:12]} receipt not verified; thread remains open")
+                        continue
                 comment_id = control.resolve_thread(
                     github,
                     configuration,
@@ -1456,23 +1467,52 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
                     ),
                 )
                 if comment_id is None:
-                    print(f"issue {issue}: {finding_id[:12]} proven ({written} record(s)); the thread is not resolved")
+                    print(
+                        f"issue {issue}: {finding_id[:12]} "
+                        f"({'proven' if not manual else 'adopted'} ({written} record(s)); the thread is not resolved)"
+                    )
                     continue
                 _head, after = knowledge.read(store, trust=configuration.trust, provenance=provenance)
-                knowledge.append(
-                    store,
-                    remediation.resolution_writes(
+                if manual:
+                    if finding_id in after.findings and after.findings[finding_id].resolved is not None:
+                        resolved += 1
+                        resolved_proofs.append(proof)
+                        print(f"issue {issue}: already resolved {finding_id[:12]} at {proof.remediated_head_sha[:12]}")
+                        continue
+                    resolution = remediation.resolution_writes(
                         after,
                         finding_id,
                         remediated_head_sha=proof.remediated_head_sha,
                         reply_comment_id=comment_id,
-                    ),
-                    trust=configuration.trust,
-                    provenance=provenance,
-                    signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
-                    recorded_by=writer.recorded_by(),
-                    recorded_at=_timestamp(),
-                )
+                        adoption_receipt_sha256=proof.adoption_receipt_sha256,
+                    )
+                    if not resolution:
+                        print(f"issue {issue}: {finding_id[:12]} adoption receipt not verified; thread remains open")
+                        continue
+                    knowledge.append(
+                        store,
+                        resolution,
+                        trust=configuration.trust,
+                        provenance=provenance,
+                        signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                        recorded_by=writer.recorded_by(),
+                        recorded_at=_timestamp(),
+                    )
+                else:
+                    knowledge.append(
+                        store,
+                        remediation.resolution_writes(
+                            after,
+                            finding_id,
+                            remediated_head_sha=proof.remediated_head_sha,
+                            reply_comment_id=comment_id,
+                        ),
+                        trust=configuration.trust,
+                        provenance=provenance,
+                        signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                        recorded_by=writer.recorded_by(),
+                        recorded_at=_timestamp(),
+                    )
                 resolved += 1
                 resolved_proofs.append(proof)
                 print(f"issue {issue}: resolved {finding_id[:12]} at {proof.remediated_head_sha[:12]}")

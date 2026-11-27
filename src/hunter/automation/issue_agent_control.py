@@ -27,7 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -49,6 +49,7 @@ from hunter.automation.issue_agent_transport import (
     header,
     recipient_key_id,
 )
+from hunter.evidence_intelligence.historical_evidence_adjudication import split_owner_disposition
 
 TRUST_ROOTS_PATH: Final = Path("config/issue_agent_trust_roots.json")
 TRUST_ROOTS_SCHEMA_VERSION: Final = "hunter-issue-agent-trust-roots-v1"
@@ -84,7 +85,13 @@ WRITERS: Final[Mapping[str, WriterWorkflow]] = {
     ),
     RECONCILE_WORKFLOW: WriterWorkflow(
         frozenset({"schedule", "workflow_dispatch"}),
-        {"reconcile": frozenset({"reconcile"}), "remediate": frozenset({"reconcile"})},
+        # ADR 0039 L7: the resolver's real trusted job id is `resolve-finding`. A record that names
+        # any other job (for example the old literal `resolve`) can never be produced by a trusted
+        # run and is refused by run_provenance(), fail-closed.
+        {
+            "reconcile": frozenset({"reconcile", "resolve-finding"}),
+            "remediate": frozenset({"reconcile"}),
+        },
     ),
     CANDIDATE_PR_WORKFLOW: WriterWorkflow(frozenset({"workflow_run"}), {"candidate-pr-record": frozenset({"record"})}),
     KNOWLEDGE_WORKFLOW: WriterWorkflow(
@@ -116,6 +123,10 @@ _ACTIVE_RUN_STATUSES: Final = frozenset({"queued", "in_progress", "waiting", "pe
 _SHA40 = re.compile(r"[0-9a-f]{40}")
 _SHA64 = re.compile(r"[0-9a-f]{64}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}")
+#: ADR 0039 L7 manual-PR adoption: the same two bounded selectors the collector parses from an owner reply.
+_OWNER_FAMILY_TAG = re.compile(r"\[family:(DFF-[0-9]{3})\]", re.IGNORECASE)
+_OWNER_TEST_TAG = re.compile(r"\[test:([^\]]+::[^\]]+)\]", re.IGNORECASE)
+COMMENTS_PAGE_SIZE = 100
 
 
 class ControlRefused(RuntimeError):
@@ -1468,7 +1479,14 @@ def review_threads(github: GitHub, configuration: Configuration, number: int) ->
 
 @dataclass(frozen=True, slots=True)
 class ResolutionProof:
-    """Everything ADR 0039 L7 requires before one exact review thread may be answered and resolved."""
+    """Everything ADR 0039 L7 requires before one exact review thread may be answered and resolved.
+
+    There are exactly two evidence modes, both bound to the same live exact head: a governed Issue
+    Agent remediation (``adoption_receipt_sha256 is None``, with a real ``authorization_id``) and a
+    manually created PR adopted from a signed Knowledge Receipt plus the owner's authenticated
+    disposition reply (``authorization_id == ""``, ``adoption_receipt_sha256`` set). A manual PR never
+    manufactures an execution ledger, authorization or PUBLISHED record.
+    """
 
     finding_id: str
     pull_request_number: int
@@ -1479,6 +1497,8 @@ class ResolutionProof:
     receipt_sha256: str
     regression_tests: tuple[str, ...]
     family_id: str | None
+    adoption_receipt_sha256: str | None = None
+    existing_reply_id: int | None = None
 
 
 def exact_head_proof(
@@ -1548,33 +1568,178 @@ def exact_head_proof(
     )
 
 
-def resolve_thread(github: GitHub, configuration: Configuration, proof: ResolutionProof, body: str) -> int | None:
-    """Post the one evidence reply and resolve exactly that thread. Nothing else is ever written.
+def live_evidence_reply(
+    github: GitHub,
+    configuration: Configuration,
+    number: int,
+    thread: ReviewThread,
+    exact_head: str,
+    *,
+    family_id: str,
+    tests: Sequence[str],
+) -> int | None:
+    """The id of an already-posted, authoritative owner evidence reply on this exact thread, or ``None``.
 
-    Returns the reply comment id, or ``None`` when either write was refused. A reply that landed but whose
-    resolve was refused is not a resolution: the finding stays open and the next pass re-observes the thread.
+    This is the idempotency read: a signed receipt is minted from an owner's structured disposition, so a
+    retry, a lost acknowledgement or a resolve that landed before its ledger record must reuse that reply
+    rather than post a second one. The author, the finding's thread, the confirmation, the exact head, the
+    family and every regression selector must all match; anything else is not evidence and is ignored.
+    """
+
+    path = f"/repos/{configuration.repository}/pulls/{number}/comments?per_page={COMMENTS_PAGE_SIZE}"
+    comments = definitive(github.get(path))
+    if comments is None:
+        return None
+    if not isinstance(comments, list):
+        raise FactsUnavailable("review comments are not observable")
+    if len(comments) >= COMMENTS_PAGE_SIZE:
+        raise FactsUnavailable("the owner reply page is full; absence cannot be proved")
+    wanted = {str(item).upper() for item in tests}
+    for item in comments:
+        if not isinstance(item, Mapping) or item.get("in_reply_to_id") != thread.comment_id:
+            continue
+        user = item.get("user")
+        if not isinstance(user, Mapping) or str(user.get("login") or "") != configuration.owner_login:
+            continue
+        body = str(item.get("body") or "")
+        classification, _substance, fix_reference = split_owner_disposition(body)
+        if classification != "confirmed" or fix_reference != exact_head:
+            continue
+        family = _OWNER_FAMILY_TAG.search(body)
+        if family is None or family.group(1).upper() != family_id.upper():
+            continue
+        if {match.upper() for match in _OWNER_TEST_TAG.findall(body)} != wanted:
+            continue
+        identity = item.get("id")
+        if type(identity) is int and identity > 0:
+            return identity
+    return None
+
+
+def manual_adoption_proof(
+    github: GitHub,
+    configuration: Configuration,
+    known: knowledge.KnowledgeView,
+    finding_id: str,
+) -> ResolutionProof | None:
+    """ADR 0039 L7 manual-PR adoption: adopt exact-head evidence, never invent an execution ledger.
+
+    A manually created PR has no Issue Agent authorization and no ``PUBLISHED`` record. Its admissible
+    evidence is exactly what the repository itself produced and signed: a ``knowledge_receipt`` bound to
+    the live exact head with a canonical family and regression selectors, the owner's authenticated
+    disposition reply carrying the same facts, and a successful hosted exact-head Pre-PR Preflight. The
+    live review-cycle read also binds the proof to one observable, unresolved finding thread with no
+    current repeat of the claim. Missing, stale, ambiguous or unauthenticated facts yield ``None``.
+    """
+
+    item = known.findings.get(finding_id)
+    if item is None or not item.open or item.proven is not None:
+        return None
+    receipt = item.receipt
+    if receipt is None or receipt.get("outcome") != "matched-family" or not receipt.get("family_id"):
+        return None
+    head = str(receipt.get("correction_commit") or "")
+    if _SHA40.fullmatch(head) is None:
+        return None
+    digest = knowledge.verified_manual_adoption_at_head(known, finding_id, exact_head=head)
+    if digest is None:
+        return None
+    live_head, threads = review_threads(github, configuration, item.pull_request_number)
+    if live_head != head:
+        return None
+    comment_id = int(item.ingested["provenance"]["comment_id"])
+    current = [thread for thread in threads if not thread.outdated]
+    if any(
+        not thread.resolved and (thread.comment_id == comment_id or thread.fingerprint == item.ingested["fingerprint"])
+        for thread in current
+    ):
+        return None  # the claim is still open at this head: no adoption, readiness stays blocked
+    matched = [thread for thread in threads if thread.comment_id == comment_id]
+    if len(matched) != 1:
+        return None
+    tests = tuple(sorted({str(item) for item in receipt.get("regression_evidence") or []}))
+    if not tests:
+        return None
+    reply_id = live_evidence_reply(
+        github,
+        configuration,
+        item.pull_request_number,
+        matched[0],
+        head,
+        family_id=str(receipt["family_id"]),
+        tests=tests,
+    )
+    if reply_id is None:
+        return None
+    conclusion, preflight_run = _preflight(github, configuration, head)
+    if conclusion != "success" or preflight_run is None:
+        return None
+    return ResolutionProof(
+        finding_id,
+        item.pull_request_number,
+        matched[0],
+        head,
+        preflight_run,
+        "",  # no Issue Agent authorization exists for a manual PR; never fabricate one
+        digest,
+        tests,
+        str(receipt["family_id"]),
+        adoption_receipt_sha256=digest,
+        existing_reply_id=reply_id,
+    )
+
+
+def resolve_thread(github: GitHub, configuration: Configuration, proof: ResolutionProof, body: str) -> int | None:
+    """Post the one evidence reply (unless a valid one already exists) and resolve exactly that thread.
+
+    Nothing else is ever written. For a manually adopted PR the current head and the exact thread are re-read
+    immediately before any mutation, so a head move, a moved thread or an indefinite read after proof is a safe
+    no-op, and an already-posted owner reply is reused instead of posting a duplicate. The governed Issue Agent
+    path keeps its established order (reply, then resolve) because its exact-head proof was just derived from a
+    live read. In both paths a reply that landed but whose resolve was refused is not a resolution: the next pass
+    re-observes the thread rather than reporting success.
     """
 
     try:
-        posted = definitive(
-            github.reply(
-                THREAD_REPLY_PATH.format(
-                    repository=configuration.repository,
-                    number=proof.pull_request_number,
-                    comment_id=proof.thread.comment_id,
-                ),
-                {"body": body, "in_reply_to": proof.thread.comment_id},
+        reply_id = proof.existing_reply_id
+        if reply_id is not None:
+            # Manual-PR adoption: re-verify the exact head and thread before reusing the owner's reply.
+            head, threads = review_threads(github, configuration, proof.pull_request_number)
+            if head != proof.remediated_head_sha:
+                return None
+            matched = [
+                thread
+                for thread in threads
+                if thread.comment_id == proof.thread.comment_id and thread.node_id == proof.thread.node_id
+            ]
+            if len(matched) != 1:
+                return None
+            if matched[0].resolved:
+                return reply_id  # already resolved: a retry only records the same evidence, never mutates again
+            thread = matched[0]
+        else:
+            # Governed proof: no second reply exists; reply on the proven thread, then resolve it.
+            thread = proof.thread
+            posted = definitive(
+                github.reply(
+                    THREAD_REPLY_PATH.format(
+                        repository=configuration.repository,
+                        number=proof.pull_request_number,
+                        comment_id=proof.thread.comment_id,
+                    ),
+                    {"body": body, "in_reply_to": proof.thread.comment_id},
+                )
             )
-        )
-        if not isinstance(posted, Mapping) or type(posted.get("id")) is not int:
-            return None
-        resolved = definitive(github.graphql(RESOLVE_THREAD_MUTATION, {"threadId": proof.thread.node_id}))
+            if not isinstance(posted, Mapping) or type(posted.get("id")) is not int:
+                return None
+            reply_id = int(posted["id"])
+        resolved = definitive(github.graphql(RESOLVE_THREAD_MUTATION, {"threadId": thread.node_id}))
     except FactsUnavailable:
-        # An indefinite write is never reported as a resolution: the finding stays open and the next pass
-        # re-observes the thread, so an ambiguous or lost acknowledgement cannot look like success.
+        # An indefinite read or write is never reported as a resolution: the finding stays open and the next
+        # pass re-observes the thread, so an ambiguous or lost acknowledgement cannot look like success.
         return None
-    thread = resolved.get("resolveReviewThread", {}).get("thread") if isinstance(resolved, Mapping) else None
-    return int(posted["id"]) if isinstance(thread, Mapping) and thread.get("isResolved") is True else None
+    result = resolved.get("resolveReviewThread", {}).get("thread") if isinstance(resolved, Mapping) else None
+    return reply_id if isinstance(result, Mapping) and result.get("isResolved") is True else None
 
 
 def _preflight(github: GitHub, configuration: Configuration, head_sha: str) -> tuple[str | None, int | None]:

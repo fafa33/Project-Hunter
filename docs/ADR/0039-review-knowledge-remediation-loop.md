@@ -5,7 +5,9 @@
 **Accepted** (2026-10-04, owner decisions RD-1…RD-6 on Issue #560). **Amended** 2026-11-09 by L9 (owner decisions
 D1–D3, Issue #706). **Amended** 2026-11-12 by L11 (owner decisions, Issue #527): every confirmed-and-corrected
 finding must carry a fast-path Knowledge Receipt before it can be treated as complete; the policy itself is this
-amendment plus the mandatory lifecycle it encodes below. This is a binding amendment of:
+amendment plus the mandatory lifecycle it encodes below. **Amended** 2026-11-27 by the L7 manual-PR resolution
+adoption (Issue #575): the resolver may resolve an exact finding thread on a manually created PR from signed
+receipt evidence, as specified in L7 below. This is a binding amendment of:
 
 - ADR 0037 D6 (publication becomes create-only **or fast-forward from the bound head** for a remediation);
 - ADR 0037 D9/D1, which add a knowledge ledger and a remediation authorization next to the Issue ledger;
@@ -196,6 +198,38 @@ A control job writes `finding_proven` and then replies to and resolves the exact
 
 An outdated thread, or a thread resolved by anyone else, is never proof by itself. Merge readiness keeps counting
 unresolved threads.
+
+#### L7 manual-PR resolution adoption (Issue #575, 2026-11-27)
+
+RD-4/RD-5 keep **publication** limited to Hunter-agent PRs: the candidate-PR workflow still opens/adopts only
+the exact head the anchored ledger recorded as `PUBLISHED`, and nothing here changes that. This amendment is
+**resolution-only** and applies when a finding was reported on a manually created PR that therefore has no Issue
+Agent execution ledger, no remediation authorization and no `PUBLISHED` record. It adds no new workflow, token,
+scheduler or privileged execution path and never fabricates any of those absent records.
+
+For such a PR the resolver may resolve the exact thread only when **all** of these hold, re-read live at the
+moment of decision:
+
+- the ingested finding is still open, unclassified-as-`proven`, and has a signed `knowledge_receipt` whose
+  `outcome` is `matched-family`, with a canonical family, non-empty regression evidence and a full exact-head
+  `correction_commit`;
+- the ledger re-verifies that receipt's digest (`verified_manual_adoption_at_head`) — the authority is the signed
+  record, never a bot reply or a prose claim;
+- the live PR head equals the receipt's exact head, the original thread is uniquely observable, and no current
+  (non-outdated) thread still repeats the claim;
+- the owner's authenticated disposition reply is on that exact thread, is parsed as `confirmed`, carries the exact
+  head as its fix reference, and carries the same `[family:DFF-nnn]` and `[test:...::...]` selectors as the
+  receipt; an unauthenticated or mismatched reply is ignored;
+- a hosted exact-head `Pre-PR Preflight` first-attempt run succeeded at that same head.
+
+The proof carries an **empty** authorization id and the verified receipt digest. The resolver reuses the owner's
+already-posted reply instead of posting a second one, re-reads the head and thread immediately before mutating,
+and resolves only that one thread. The only ledger write is `thread_resolved` bound to the adoption receipt
+digest, with `finding_proven` deliberately absent; the ledger fold independently refuses such a record unless it
+names a verified exact-head receipt and no governed proof exists. Missing, stale, moved-head, ambiguous or
+unauthenticated evidence is a no-op, and a reply that landed but whose resolve was refused is retried by reusing
+that reply — never by posting a duplicate. This closes the writer-provenance defect where the resolver recorded
+the non-existent job id `resolve` instead of the real trusted `resolve-finding` job.
 
 ### L8. Failure and restart
 
@@ -533,3 +567,28 @@ behavior, the consumer's live re-derivation, pagination and malformed-payload ha
 success/failure/pending symmetry of a fingerprint mismatch are covered in `test_issue_agent_knowledge.py`,
 `test_issue_agent_lifecycle_entry.py` and `test_hunter_merge_readiness_v2.py`. Ruff, Black and mypy green on
 every changed file and on the full configured file list (1035 source files).
+
+### L7 manual-PR resolution adoption implementation status (Issue #575, 2026-11-27)
+
+Delivered on branch `issue-575-preventive-enforcement`:
+
+- `control.WRITERS[RECONCILE_WORKFLOW]` now admits role `reconcile` for the real trusted job id
+  `resolve-finding` (the job that actually exists in `hunter-issue-agent-reconcile.yml`) and refuses the
+  former fabricated `resolve` id; `cmd_resolve` records the real job.
+- `control.manual_adoption_proof`, `control.live_evidence_reply`, `knowledge.verified_manual_adoption_at_head`,
+  the optional `adoption_receipt_sha256` on `thread_resolved`, the ledger fold's manual branch, and
+  `remediation.resolution_writes(..., adoption_receipt_sha256=...)` implement the resolution-only adoption in
+  L7 above. `resolve_thread` re-reads the live head and exact thread before every mutation and reuses an
+  existing valid owner reply instead of posting a duplicate.
+- The governed Issue Agent path is unchanged: it still requires exactly one `PUBLISHED` remediation
+  authorization at head and writes `finding_proven` plus the receipt before resolving.
+
+**Verification actually performed.** `tests/test_issue_agent_manual_pr_resolution.py` — 21 passed — covers the
+trusted writer identity and rejection of `resolve`/other writers, the AST guard on `cmd_resolve`, valid manual
+adoption and one-time resolution, interrupt/retry without a second reply, an already-resolved thread, a moved
+head, missing/stale/ambiguous/unauthenticated replies and receipts, a current unresolved repeat of the claim, a
+missing/failed preflight, and the receipt-digest requirement on the resolution record. The affected existing
+suites are re-run before publication. This is local evidence; the hosted exact-head `Hunter / Pre-PR Preflight`
+and the trusted `resolve-finding` job on the default branch remain the authorities for production behavior, and
+production resolution of these manually created PR threads is not claimed until that trusted path actually runs
+against the merged head.

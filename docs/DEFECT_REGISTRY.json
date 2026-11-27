@@ -3012,6 +3012,69 @@
       "sources": [
         "Issue #588 / PR #757; stuck collector run 44354491426 despite exact-head Codex completion; Hosted Pre-PR run 44362780632 and Trusted Preflight run 44362790081 exposed GITHUB_ACTIONS-only context leakage; fixed on signed PR #757 lineage after repository binding was added."
       ]
+    },
+    {
+      "id": "DFF-059",
+      "title": "resolver-writer-job-id-not-a-trusted-workflow-job",
+      "invariant": "A resolver's recorded ledger writer job id must name a job that actually exists in the trusted workflow and is allowlisted for that role. A fabricated id such as `resolve` can never be produced by any trusted run, so every resolution record fails authentic run provenance and the review-to-resolution loop stalls while the finding stays open. The trusted identity must be bound in one canonical allowlist and re-verified against the live first-attempt run on the default branch; any other job id, attempt, event, branch, head or repository identity is refused fail-closed.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-issue-agent-reconcile.yml",
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "src/hunter/automation/issue_agent_control.py"
+        ],
+        "rationale": "The resolver's writer identity is minted in the lifecycle command and validated in the control-domain provenance allowlist against the workflow's real job. A drift between the two, or a new resolver entry point, silently makes every resolution record untrustworthy."
+      },
+      "prevention": {
+        "mechanism": "`control.WRITERS[RECONCILE_WORKFLOW]` binds role `reconcile` to the real trusted job id `resolve-finding` (the job in `hunter-issue-agent-reconcile.yml`); `cmd_resolve` records exactly that job; `control.run_provenance` authenticates the run against a live first-attempt default-branch run and refuses the former fabricated `resolve` id and every other job/attempt/event/branch/head/repository mismatch. No privileged write authority is added and no record is accepted from an untrusted run.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/automation/issue_agent_control.py::run_provenance"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_manual_pr_resolution.py::test_the_trusted_resolve_finding_job_identity_is_allowed",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_cmd_resolve_records_the_actual_trusted_workflow_job",
+        "tests/test_issue_agent_control.py::test_a_record_from_any_other_run_is_invalid"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 exact-head resolver investigation, 2026-11-27: `cmd_resolve` minted the writer as (`reconcile`, `resolve`, RECONCILE_WORKFLOW), but the workflow's real resolver job is `resolve-finding` and `WRITERS[RECONCILE_WORKFLOW]` allowed only job `reconcile` for role `reconcile`, so every resolution record failed real run provenance. Fixed by binding the real job id in the allowlist and recording it in the resolver; no trust, signature, repository, attempt or HEAD check was relaxed."
+      ]
+    },
+    {
+      "id": "DFF-060",
+      "title": "manual-pr-confirmed-finding-cannot-be-resolved-from-signed-evidence",
+      "invariant": "A reviewer finding the owner confirmed and corrected on a manually created pull request must be resolvable even though that PR has no Issue Agent execution ledger, no remediation authorization and no `PUBLISHED` record. The only admissible authority is a signed, exact-head Knowledge Receipt whose family and regression selectors match the owner's authenticated `confirmed` disposition reply on the exact thread, backed by a successful hosted exact-head Pre-PR Preflight. Missing, stale, moved-head, ambiguous, unauthenticated or mismatched evidence must be a no-op; no authorization, `finding_proven` record, `PUBLISHED` state or second reply may be fabricated, and the exact head and thread must be re-read immediately before the single thread mutation so an interrupted resolve retries by reusing the existing reply.",
+      "applicability": {
+        "changed_paths": [
+          "docs/ADR/0039-review-knowledge-remediation-loop.md",
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "src/hunter/automation/issue_agent_control.py",
+          "src/hunter/automation/issue_agent_knowledge.py",
+          "src/hunter/automation/issue_agent_remediation.py"
+        ],
+        "rationale": "This scope owns the exact-head proof, receipt schema/fold and resolver path. A change to any of them can reopen the gap where a confirmed, evidenced finding on a manually created PR can never be resolved, or can be resolved from forged or stale evidence."
+      },
+      "prevention": {
+        "mechanism": "ADR 0039 L7 resolution-only adoption: `control.manual_adoption_proof` requires an open, unproven finding with a signed `matched-family` receipt at the live exact head, a unique exact thread with no current unresolved repeat, an authenticated owner `confirmed` reply carrying the same head/family/test selectors, and a successful first-attempt exact-head Pre-PR Preflight. `knowledge.verified_manual_adoption_at_head`, `remediation.resolution_writes(..., adoption_receipt_sha256=...)` and the ledger fold independently re-check the receipt digest and forbid any governed proof on this path. `resolve_thread` re-reads the live head and thread before mutating and reuses an existing valid reply instead of posting a duplicate. Publication remains Hunter-agent-only and unchanged.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/automation/issue_agent_control.py::manual_adoption_proof"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_manually_created_pr_is_adopted_from_signed_receipt_evidence",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_manual_adoption_resolves_the_exact_thread_and_records_it_once",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_an_interrupted_resolve_retries_without_a_second_reply",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_thread_already_resolved_by_the_owner_needs_no_mutation",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_head_that_moves_after_proof_is_never_mutated",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_invalid_receipt_evidence_is_never_adopted",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_unauthorized_or_mismatched_owner_replies_are_never_adopted",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_current_thread_repeating_the_claim_blocks_adoption",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_missing_or_failed_exact_head_preflight_blocks_adoption",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_resolution_record_requires_the_signed_receipt_digest"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789, 2026-11-27: PR #789 was created manually, so `control.exact_head_proof` could never resolve its two confirmed-and-corrected threads (findings 4716015777 / 4716015788, exact remediation replies 4717097703 / 4717100862, signed Knowledge Ledger head a5a9abc7ec4e92bacafaaf50ce460da3fb023535). The canonical resolver required a `proven` classification and exactly one `PUBLISHED` remediation authorization at head, neither of which exists for a manual PR; adding a resolution-only signed-receipt adoption closes that gap without fabricating lifecycle facts."
+      ]
     }
   ],
   "preventive_obligations": [

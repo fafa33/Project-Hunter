@@ -268,6 +268,11 @@
         "outcome": "clear"
       },
       {
+        "evidence": "Hosted authorize DPM registry checkout authority unchanged; scripts/hunter_issue_agent_lifecycle.py resolver path reuses the pinned checkout. Selector tests/test_issue_agent_authorize.py::test_prepare_reads_configured_checkout_registry_not_ambient_cwd.",
+        "family": "DFF-054",
+        "outcome": "clear"
+      },
+      {
         "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-055",
         "outcome": "clear"
@@ -275,6 +280,16 @@
       {
         "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-057",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Trusted resolver writer identity bound in WRITERS[RECONCILE_WORKFLOW] and cmd_resolve; regression selectors tests/test_issue_agent_manual_pr_resolution.py::test_the_trusted_resolve_finding_job_identity_is_allowed and ::test_cmd_resolve_records_the_actual_trusted_workflow_job; 49 passed across the new and resolution suites.",
+        "family": "DFF-059",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Signed-receipt manual-PR adoption in control.manual_adoption_proof / knowledge.verified_manual_adoption_at_head / remediation.resolution_writes; regression selector tests/test_issue_agent_manual_pr_resolution.py::test_manual_adoption_resolves_the_exact_thread_and_records_it_once plus idempotency, head-race and fail-closed cases; 21 passed.",
+        "family": "DFF-060",
         "outcome": "clear"
       }
     ],
@@ -300,7 +315,19 @@
         "status": "added"
       },
       {
-        "blob_sha": "53fe1027fcb3207c9cd04ada38821ec6e5ba4318",
+        "blob_sha": "beb9862a05db0c38294a7ce9e5b482f6859f3b85",
+        "path": "tests/test_issue_agent_manual_pr_resolution.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "c1bbd3100510eda44cb4acdb0d8ca2d996ee7268",
+        "path": "docs/ADR/0039-review-knowledge-remediation-loop.md",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "0a9edb9ce825c53806ef74d4c78476491d572c42",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -314,6 +341,12 @@
       {
         "blob_sha": "7c829add05e31f356d7c73ab97a54ff799534a36",
         "path": "scripts/hunter_issue_agent_issuer.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "1b7916e5f99ebb56402ca5ef3c39d745008dc2b7",
+        "path": "scripts/hunter_issue_agent_lifecycle.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -336,8 +369,26 @@
         "status": "modified"
       },
       {
+        "blob_sha": "92bd9b9cfcc7167957f230fd57c87e5000b019ec",
+        "path": "src/hunter/automation/issue_agent_control.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
         "blob_sha": "ba1b05e28120c229d4d1e1043d3a0bfbc8966b4a",
         "path": "src/hunter/automation/issue_agent_execution.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "4fb486a2bf34029885b53765ee2d5631dbdbda6b",
+        "path": "src/hunter/automation/issue_agent_knowledge.py",
+        "previous_path": "",
+        "status": "modified"
+      },
+      {
+        "blob_sha": "e2d7b375c6a38a1b862ace7588356d5f0a8dd8d7",
+        "path": "src/hunter/automation/issue_agent_remediation.py",
         "previous_path": "",
         "status": "modified"
       },
@@ -378,11 +429,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "fc29f14e0d9c4d7eccb1836cbaf4aab921e173951c5f1186c15ac55f7a48be7b"
+    "review_target_digest": "4d8ebd5d7a32c30aca051e31fbbd4142749f719b2ae3c056b667169d304fec60"
   },
-  "review_id": "b6685f8b9fa3a787f2f41278baada1ef3f4cf8febfa18e171b1e5026676fff97",
+  "review_id": "a92fbf16d78c9280e7a18c73b81a73bd92961f2a79d209eea3ea8c737b9e94f5",
   "review_request": {
-    "claims_id": "b6685f8b9fa3a787f2f41278baada1ef3f4cf8febfa18e171b1e5026676fff97",
+    "claims_id": "a92fbf16d78c9280e7a18c73b81a73bd92961f2a79d209eea3ea8c737b9e94f5",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
