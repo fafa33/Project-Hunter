@@ -3120,22 +3120,135 @@
         "rationale": "The resolver's durable-write boundary, its workflow completion event, the trusted privileged reconciler's trigger/scope gate, and the readiness consumer are one lifecycle unit. A change to any one can leave a stale BLOCKING_FINDINGS status after resolution or let an untrusted/ambiguous event publish false readiness."
       },
       "prevention": {
-        "mechanism": "cmd_resolve emits `resolved_pr_numbers` through GITHUB_OUTPUT only after the signed knowledge append and verified thread mutation, and only for newly durable resolutions. Hunter Governance Review Reconcile adds the actual `Hunter / Issue Agent Reconcile` workflow_run completion, then reads that run's `resolve-finding` job outputs with the trusted Actions API; `hunter_resolution_reconcile_ingress.select_resolved_pull_requests` requires success, one resolver job, one well-formed numeric PR set, and rejects failure/cancellation/malformed/duplicate producer data. Reconciliation is scoped to those PRs, re-derives each current HEAD from the live PR API, publishes a run/attempt marker at that exact HEAD before invocation, re-reads HEAD after the marker, and passes `--expected-head` so a moved head fails closed. The resolver still holds no `actions: write` and makes no workflow call; the global non-cancelling concurrency group serializes duplicate events; the 5-minute sweep remains recovery only.",
+        "mechanism": "cmd_resolve writes a canonical evidence document to an authenticated Actions artifact only after the signed knowledge append and verified thread mutation, and only newly durable resolutions add PR identities. The artifact is keyed by the exact resolver run id and attempt. Hunter Governance Review Reconcile adds the actual `Hunter / Issue Agent Reconcile` workflow_run completion, then reads that run's successful `resolve-finding` job and uniquely named artifact through the authenticated Actions API; `hunter_resolution_reconcile_ingress.select_resolved_pull_requests` verifies the documented job/artifact response shapes, artifact digest, repository, workflow, run id, attempt, HEAD, schema and PR identities, and rejects failure/cancellation/stale/ambiguous/malformed/untrusted data. The newline-separated PR identities are consumed by a real shell `while read` loop. Reconciliation is scoped to those PRs, re-derives each current HEAD from the live PR API, publishes a run/attempt marker at that exact HEAD before invocation, re-reads HEAD after the marker, and passes `--expected-head` so a moved head fails closed. The resolver still holds no `actions: write` and makes no workflow call; the global non-cancelling concurrency group serializes duplicate events; the 5-minute sweep remains recovery only.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_issue_agent_lifecycle.py::cmd_resolve"
       },
       "regression_evidence": [
         "tests/test_issue_agent_resolution_reconcile.py::test_governance_reconcile_uses_the_actual_issue_agent_completion_event",
-        "tests/test_issue_agent_resolution_reconcile.py::test_resolver_publishes_scoped_output_without_gaining_workflow_authority",
-        "tests/test_issue_agent_resolution_reconcile.py::test_successful_resolver_output_selects_only_the_affected_pr",
+        "tests/test_issue_agent_resolution_reconcile.py::test_resolver_publishes_an_authenticated_artifact_without_gaining_workflow_authority",
+        "tests/test_issue_agent_resolution_reconcile.py::test_successful_trusted_artifact_selects_only_the_affected_pr",
+        "tests/test_issue_agent_resolution_reconcile.py::test_jobs_api_shape_without_step_outputs_is_the_only_producer_identity",
         "tests/test_issue_agent_resolution_reconcile.py::test_failed_or_incomplete_resolution_never_creates_false_readiness",
-        "tests/test_issue_agent_resolution_reconcile.py::test_duplicate_malformed_and_untrusted_outputs_fail_closed",
-        "tests/test_issue_agent_resolution_reconcile.py::test_manual_thread_resolution_without_a_trusted_resolver_output_is_recovery_only",
-        "tests/test_issue_agent_resolution_reconcile.py::test_reconcile_dedupes_events_and_rebinds_exact_head_before_refresh"
+        "tests/test_issue_agent_resolution_reconcile.py::test_untrusted_ambiguous_or_stale_artifacts_fail_closed",
+        "tests/test_issue_agent_resolution_reconcile.py::test_mismatched_or_malformed_evidence_fails_closed",
+        "tests/test_issue_agent_resolution_reconcile.py::test_resolve_output_contract_runs_through_the_real_shell_loop",
+        "tests/test_issue_agent_resolution_reconcile.py::test_reconcile_consumes_the_artifact_output_contract_and_rebinds_exact_head",
+        "tests/test_issue_agent_resolution_reconcile.py::test_manual_thread_resolution_without_a_trusted_artifact_is_recovery_only",
+        "tests/test_issue_agent_resolution_reconcile.py::test_scheduled_sweep_remains_the_recovery_path_only"
       ],
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #575 / PR #789, 2026-11-27: cmd_resolve explicitly deferred readiness refresh to the trusted 5-minute sweep after successful resolution. Owner-authorized scope extension recorded on Issue #575 required immediate post-resolution reconciliation without granting the resolver workflow authority. Issue #588 M1 knowledge and DFF-046 establish that a downstream gate's lifecycle transition must have an event-driven trusted prerequisite path and that schedules are recovery, not freshness guarantees. The fix reuses the existing privileged governance reconciler and its workflow_run mechanism; no new credential, privileged candidate execution path, merge authorization or production activation is claimed."
+      ]
+    },
+    {
+      "id": "DFF-080",
+      "title": "unsupported-workflow-step-output-cross-workflow-evidence",
+      "invariant": "Cross-workflow evidence may use only documented, authenticated GitHub API surfaces. The workflow jobs response has no steps[].outputs field; a resolver identity must travel in a uniquely named immutable Actions artifact bound to the exact repository, workflow, run id, attempt, job and head, with a verified artifact digest and canonical evidence payload.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-governance-reconcile.yml",
+          ".github/workflows/hunter-issue-agent-reconcile.yml",
+          "scripts/hunter_resolution_reconcile_ingress.py"
+        ],
+        "rationale": "A producer that invents a response field and a consumer that trusts it can never interoperate against the live API; both sides of the cross-workflow channel plus the trusted ingress are one enforcement unit."
+      },
+      "prevention": {
+        "mechanism": "The resolver uploads resolution-evidence.json as a digest-bound artifact named for its exact run id and attempt without gaining actions:write. The trusted reconciler lists and downloads that artifact through the authenticated API and `select_resolved_pull_requests` validates the documented jobs/artifact shapes, exact run/repository/workflow/head bindings, artifact digest, schema and PR identities; any missing, stale, ambiguous or untrusted value yields no wake-up.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_resolution_reconcile_ingress.py::select_resolved_pull_requests"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_resolution_reconcile.py::test_jobs_api_shape_without_step_outputs_is_the_only_producer_identity",
+        "tests/test_issue_agent_resolution_reconcile.py::test_successful_trusted_artifact_selects_only_the_affected_pr",
+        "tests/test_issue_agent_resolution_reconcile.py::test_untrusted_ambiguous_or_stale_artifacts_fail_closed",
+        "tests/test_issue_agent_resolution_reconcile.py::test_mismatched_or_malformed_evidence_fails_closed"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 review thread PRRT_kwDOTRDHr8682GTN, 2026-11-27: the trusted reconciler read `steps[].outputs` from the jobs API, a field GitHub does not expose. GitHub's documented jobs and artifact response schemas were verified before replacing that channel; no workflow authority or caller-shaped payload was added."
+      ]
+    },
+    {
+      "id": "DFF-081",
+      "title": "producer-consumer-pr-identity-format-mismatch",
+      "invariant": "A validated producer output and its shell consumer must share one executable contract. Comma-separated PR identities cannot be consumed by a newline-separated `while read` loop, so the trusted producer must emit one numeric PR identity per line and the real loop must observe empty, single, multiple and duplicate cases without malformed values reaching the loop.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-governance-reconcile.yml",
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "scripts/hunter_resolution_reconcile_ingress.py"
+        ],
+        "rationale": "The lifecycle producer, artifact ingress and privileged reconciliation shell loop are one data contract; a format change in only one surface silently drops every wake-up."
+      },
+      "prevention": {
+        "mechanism": "cmd_resolve emits newline-separated identities through a multiline-safe GITHUB_OUTPUT delimiter; the ingress `--for-shell` mode emits bare newline-separated identities; the trusted workflow passes that output directly to the existing `while read -r pr_number` loop. The regression executes that actual shell loop against empty, single, duplicate and malformed evidence files.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_resolution_reconcile_ingress.py::_write_output"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_resolution_reconcile.py::test_resolve_output_contract_runs_through_the_real_shell_loop",
+        "tests/test_issue_agent_resolution_reconcile.py::test_reconcile_consumes_the_artifact_output_contract_and_rebinds_exact_head",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_manual_adoption_runs_with_multiple_and_mixed_ledgers"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 review thread PRRT_kwDOTRDHr8682GTT, 2026-11-27: the resolver wrote `resolved_pr_numbers=788,789` while the privileged consumer loop reads one line at a time. The fix validates identities at the ingress and tests the real shell boundary, not a simulated split."
+      ]
+    },
+    {
+      "id": "DFF-082",
+      "title": "long-running-issuer-frozen-dpm-context",
+      "invariant": "A long-running issuer must resolve the signed authorization's trusted DPM/SPM knowledge context per authorization before claim. It may never compile with a process-startup snapshot that can diverge from the knowledge view used by the signer, and the measured prompt and DPM context digests must still be compared with the signed AUTHORIZED lineage before dispatch.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_issue_agent_issuer.py",
+          "src/hunter/evidence_intelligence/engineering_context_authority.py"
+        ],
+        "rationale": "The sign job and issuer are two halves of one DPM-to-SPM lineage. Freezing only the issuer side makes valid later authorizations impossible and creates a stale-context bypass surface."
+      },
+      "prevention": {
+        "mechanism": "production_lineage_binding no longer reads the knowledge ledger at process startup. Before each ledger claim, prepare_authorization invokes a request-scoped context resolver that re-reads the anchored signed knowledge ledger, builds an EngineeringContextAuthority for that authorization, compiles through a request-local governed ingress, and verifies prompt_sha256 and dpm_context_sha256 against signed lineage with hmac.compare_digest. Missing, unavailable or mismatched contexts fail closed before dispatch.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_issue_agent_issuer.py::prepare_authorization"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_issuer_context_freshness.py::test_a_live_issuer_accepts_authorization_minted_after_knowledge_changes",
+        "tests/test_issue_agent_issuer_context_freshness.py::test_a_mismatched_knowledge_context_is_refused_without_restart",
+        "tests/test_issue_agent_issuer_context_freshness.py::test_an_unavailable_knowledge_context_is_refused",
+        "tests/test_issue575_eca_execution_binding.py::test_composition_root_passes_explicit_eca_into_the_smart_prompt_machine"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 review thread PRRT_kwDOTRDHr8682GTY, 2026-11-27: the deployable issuer composed once at startup and froze the DPM overlay, while the signer read knowledge when minting each authorization. One live issuer object now accepts an authorization minted after knowledge changes without restart and refuses mismatched or unavailable contexts."
+      ]
+    },
+    {
+      "id": "DFF-083",
+      "title": "manual-adoption-gated-by-unrelated-issue-ledgers",
+      "invariant": "Manual-PR adoption is ledger-independent evidence and must be evaluated exactly once over the verified knowledge findings, even with zero, unreadable or multiple Issue ledgers. Governed remediation remains ledger-bound and takes precedence; no Issue ledger failure may suppress, duplicate or bypass a signed-receipt adoption.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "tests/test_issue_agent_manual_pr_resolution.py"
+        ],
+        "rationale": "The resolver call site and its proof/write helpers are one authority boundary: nesting a ledger-independent proof in a ledger-dependent loop makes the proof unreachable or duplicated."
+      },
+      "prevention": {
+        "mechanism": "cmd_resolve now runs a governed pass over verified Issue ledgers and a separate manual pass over sorted knowledge findings, skipping findings already handled or blocked by an indefinite governed proof. A shared apply_proof helper preserves the existing authorization, receipt, idempotency and exact-head checks; ledger failures are scoped to their governed issue and cannot stop the manual pass. Only a newly durable resolution publishes a PR identity.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_issue_agent_lifecycle.py::cmd_resolve"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_manual_pr_resolution.py::test_manual_adoption_runs_without_any_active_issue_ledger",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_manual_adoption_runs_with_multiple_and_mixed_ledgers",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_invalid_receipt_evidence_is_never_adopted",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_head_that_moves_after_proof_is_never_mutated"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 review thread PRRT_kwDOTRDHr8682GTd, 2026-11-27: manual adoption was nested inside the active Issue-ledger loop, so a scheduled run with no ledgers never evaluated the signed receipt. The fix keeps governed proof ledger-bound and evaluates manual evidence independently and once."
       ]
     }
   ],

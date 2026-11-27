@@ -16,10 +16,13 @@ invented by the resolver.
 
 from __future__ import annotations
 
+import argparse
 import ast
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import hunter_issue_agent_lifecycle as lifecycle
 import pytest
 import test_issue_agent_control as ct
 import test_issue_agent_remediation_reconcile as rr
@@ -427,3 +430,138 @@ def test_a_resolution_record_requires_the_signed_receipt_digest(
     )
     assert [item.kind for item in writes] == ["thread_resolved"]
     assert writes[0].evidence["adoption_receipt_sha256"] == digest
+
+
+# --- RED-to-GREEN: the resolver's control flow, not only its proof helpers ----------------------------------
+
+
+def _proof(finding_id: str, number: int, *, manual: bool = False) -> control.ResolutionProof:
+    return control.ResolutionProof(
+        finding_id=finding_id,
+        pull_request_number=number,
+        thread=control.ReviewThread("thread-" + finding_id[:8], False, True, 9001, "src/x.py", None),
+        remediated_head_sha=HEAD,
+        preflight_run_id=555,
+        authorization_id="" if manual else "auth-" + finding_id[:8],
+        receipt_sha256="1" * 64,
+        regression_tests=(TESTS[0],),
+        family_id=FAMILY,
+        adoption_receipt_sha256="2" * 64 if manual else None,
+        existing_reply_id=9001 if manual else None,
+    )
+
+
+def _resolve_harness(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    active_issues: list[int],
+    ledger_failures: set[int],
+    governed_findings: set[str],
+    manual_findings: set[str],
+) -> tuple[list[str], list[tuple[str, list[Any]]], dict[str, int]]:
+    findings = {
+        identity: SimpleNamespace(
+            open=True,
+            classifications={},
+            proven=None,
+            resolved=None,
+            receipt={"family_id": FAMILY} if identity in governed_findings else None,
+            ingested={},
+        )
+        for identity in sorted(governed_findings | manual_findings)
+    }
+    view = SimpleNamespace(findings=findings)
+    outputs: list[str] = []
+    appends: list[tuple[str, list[Any]]] = []
+    calls = {"governed": 0, "manual": 0, "ledger": 0}
+
+    monkeypatch.setenv("GITHUB_RUN_ID", "300")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("GITHUB_SHA", rt.CONTROL)
+    monkeypatch.setattr(lifecycle, "_github", lambda _configuration: object())
+    monkeypatch.setattr(lifecycle, "_store", lambda *_a, **_k: object())
+    monkeypatch.setattr(lifecycle, "_knowledge_view", lambda *_a, **_k: view)
+    monkeypatch.setattr(lifecycle, "_active_issues", lambda _configuration: list(active_issues))
+    monkeypatch.setattr(
+        lifecycle,
+        "_writer",
+        lambda *_a, **_k: SimpleNamespace(recorded_by=lambda: {"job": "resolve-finding"}),
+    )
+    monkeypatch.setattr(lifecycle, "_ed25519", lambda *_a, **_k: b"0" * 64)
+    monkeypatch.setattr(lifecycle, "_output", lambda **values: outputs.extend(f"{k}={v}\n" for k, v in values.items()))
+    monkeypatch.setattr(control, "require_anchor", lambda *_a, **_k: None)
+    monkeypatch.setattr(control, "run_provenance", lambda *_a, **_k: (lambda *_x, **_y: True))
+
+    def load_ledger(_store: Any, _configuration: Any, _provenance: Any, issue: int) -> tuple[str, Any]:
+        calls["ledger"] += 1
+        if issue in ledger_failures:
+            raise control.FactsUnavailable("no ledger for this manual PR")
+        return "head", SimpleNamespace(authorizations={})
+
+    monkeypatch.setattr(control, "load_ledger", load_ledger)
+
+    def governed(_github: Any, _configuration: Any, _known: Any, _ledger: Any, finding_id: str) -> Any:
+        calls["governed"] += 1
+        return _proof(finding_id, 788) if finding_id in governed_findings else None
+
+    def manual(_github: Any, _configuration: Any, _known: Any, finding_id: str) -> Any:
+        calls["manual"] += 1
+        return _proof(finding_id, 789, manual=True) if finding_id in manual_findings else None
+
+    monkeypatch.setattr(control, "exact_head_proof", governed)
+    monkeypatch.setattr(control, "manual_adoption_proof", manual)
+    monkeypatch.setattr(control, "resolve_thread", lambda *_a, **_k: 9001)
+    monkeypatch.setattr(remediation, "evidence_reply", lambda *_a, **_k: "evidence reply")
+    monkeypatch.setattr(remediation, "proven_writes", lambda *_a, **_k: [SimpleNamespace(kind="finding_proven")])
+    monkeypatch.setattr(remediation, "resolution_writes", lambda *_a, **_k: [SimpleNamespace(kind="thread_resolved")])
+    monkeypatch.setattr(knowledge, "read", lambda *_a, **_k: ("head", view))
+    monkeypatch.setattr(knowledge, "proven_receipt_writes", lambda *_a, **_k: [])
+    monkeypatch.setattr(knowledge, "verified_receipt_at_head", lambda *_a, **_k: True)
+
+    def append(_store: Any, writes: list[Any], **_kwargs: Any) -> tuple[str, Any, int]:
+        appends.append(("head", list(writes)))
+        return "head", view, len(writes)
+
+    monkeypatch.setattr(knowledge, "append", append)
+    return outputs, appends, calls
+
+
+def test_manual_adoption_runs_without_any_active_issue_ledger(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A manually created PR has no Issue ledger at all; its adoption is still evaluated."""
+
+    outputs, appends, calls = _resolve_harness(
+        monkeypatch,
+        active_issues=[],
+        ledger_failures=set(),
+        governed_findings=set(),
+        manual_findings={"b" * 64},
+    )
+    code = lifecycle.cmd_resolve(ct.CONFIG, argparse.Namespace(issue=None))
+    assert code == 0
+    assert calls["ledger"] == 0
+    assert calls["manual"] == 1
+    assert [kind for _head, writes in appends for kind in (item.kind for item in writes)] == ["thread_resolved"]
+    assert "resolved_pr_numbers=789\n" in outputs
+
+
+def test_manual_adoption_runs_with_multiple_and_mixed_ledgers(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Governed and manual evidence are each evaluated once, even with several active ledgers."""
+
+    outputs, appends, calls = _resolve_harness(
+        monkeypatch,
+        active_issues=[575, 576, 577],
+        ledger_failures={575, 577},
+        governed_findings={"a" * 64},
+        manual_findings={"b" * 64},
+    )
+    code = lifecycle.cmd_resolve(ct.CONFIG, argparse.Namespace(issue=None))
+    assert code == 0
+    assert calls["ledger"] == 3
+    assert calls["governed"] == 2  # the one readable ledger's two findings
+    assert calls["manual"] == 1  # never re-evaluated merely because another ledger exists
+    assert [kind for _head, writes in appends for kind in (item.kind for item in writes)] == [
+        "finding_proven",
+        "thread_resolved",
+        "thread_resolved",
+    ]
+    assert "resolved_pr_numbers=788\n789\n" in outputs

@@ -109,7 +109,14 @@ def _run_context() -> tuple[int, int, str]:
 
 def _output(**values: object) -> None:
     path = os.environ.get("GITHUB_OUTPUT")
-    lines = "".join(f"{key}={value}\n" for key, value in values.items())
+    lines = ""
+    for key, value in values.items():
+        text = str(value)
+        if "\n" in text or "\r" in text:
+            delimiter = f"HUNTER_{key.upper()}"
+            lines += f"{key}<<{delimiter}\n{text.rstrip(chr(10))}\n{delimiter}\n"
+        else:
+            lines += f"{key}={text}\n"
     if path:
         with open(path, "a", encoding="utf-8") as handle:
             handle.write(lines)
@@ -1375,6 +1382,32 @@ def cmd_remediate(configuration: control.Configuration, arguments: argparse.Name
     return 0 if dispatched or arguments.issue else EXIT_NOOP
 
 
+def _publish_resolution_evidence(configuration: control.Configuration, numbers: set[int]) -> None:
+    """Write the resolver's authenticated artifact evidence, never a workflow command.
+
+    The trusted reconcile workflow reads this archive back through the Actions
+    API after the resolver run completes. GitHub's jobs API does not expose step
+    outputs, so this is the only supported cross-workflow evidence channel.
+    """
+
+    path = os.environ.get("HUNTER_RESOLUTION_EVIDENCE_PATH")
+    if not path:
+        return
+    run_id, attempt, head_sha = _run_context()
+    document = {
+        "schema": "hunter-resolution-reconcile-evidence-v1",
+        "repository": configuration.repository,
+        "workflow": "Hunter / Issue Agent Reconcile",
+        "run_id": run_id,
+        "run_attempt": attempt,
+        "head_sha": head_sha,
+        "pr_numbers": sorted(numbers),
+    }
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(document, sort_keys=True), encoding="utf-8")
+
+
 def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namespace) -> int:
     """ADR 0039 L7 (RD-6): answer and resolve one exact review thread, only at an exactly proven head.
 
@@ -1395,147 +1428,179 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
     resolved = 0
     resolved_proofs: list[control.ResolutionProof] = []
     reconciled_pr_numbers: set[int] = set()
-    for issue in ([arguments.issue] if arguments.issue else _active_issues(configuration)):
-        _head, state_view = control.load_ledger(store, configuration, provenance, issue)
+    governed_handled: set[str] = set()
+    governed_blocked: set[str] = set()
+
+    def apply_proof(issue: int | None, finding_id: str, proof: control.ResolutionProof, manual: bool) -> None:
+        nonlocal resolved
+        written = 0
+        if not manual:
+            # Governed Issue Agent remediation: persist the signed exact-head finding_proven
+            # record and receipt BEFORE replying/resolving the GitHub thread. Never synthesize
+            # an owner disposition for this path.
+            _head, after = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+            written = knowledge.append(
+                store,
+                remediation.proven_writes(
+                    after,
+                    finding_id,
+                    authorization_id=proof.authorization_id,
+                    remediated_head_sha=proof.remediated_head_sha,
+                    receipt_sha256=proof.receipt_sha256,
+                    preflight_run_id=proof.preflight_run_id,
+                ),
+                trust=configuration.trust,
+                provenance=provenance,
+                signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                recorded_by=writer.recorded_by(),
+                recorded_at=_timestamp(),
+            )[2]
+            _head, receipt_view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+            receipt_writes = knowledge.proven_receipt_writes(
+                receipt_view, finding_id, exact_head=proof.remediated_head_sha
+            )
+            if receipt_view.findings[finding_id].receipt is None and not receipt_writes:
+                print(f"issue {issue}: {finding_id[:12]} receipt proof not eligible; thread remains open")
+                return
+            if receipt_writes:
+                knowledge.append(
+                    store,
+                    receipt_writes,
+                    trust=configuration.trust,
+                    provenance=provenance,
+                    signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                    recorded_by=writer.recorded_by(),
+                    recorded_at=_timestamp(),
+                )
+            # Verify the signed append is readable and bound to the same exact-head proof
+            # BEFORE any GitHub reply or thread mutation.
+            _head, verified_view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+            if not knowledge.verified_receipt_at_head(verified_view, finding_id, exact_head=proof.remediated_head_sha):
+                print(f"issue {issue}: {finding_id[:12]} receipt not verified; thread remains open")
+                return
+        comment_id = control.resolve_thread(
+            github,
+            configuration,
+            proof,
+            remediation.evidence_reply(
+                finding_id,
+                remediated_head_sha=proof.remediated_head_sha,
+                family=proof.family_id or "a new family candidate",
+                tests=proof.regression_tests,
+            ),
+        )
+        if comment_id is None:
+            print(
+                f"issue {issue}: {finding_id[:12]} "
+                f"({'proven' if not manual else 'adopted'} ({written} record(s)); the thread is not resolved)"
+            )
+            return
+        _head, after = knowledge.read(store, trust=configuration.trust, provenance=provenance)
+        if manual:
+            if finding_id in after.findings and after.findings[finding_id].resolved is not None:
+                resolved += 1
+                resolved_proofs.append(proof)
+                print(f"issue {issue}: already resolved {finding_id[:12]} at {proof.remediated_head_sha[:12]}")
+                return
+            resolution = remediation.resolution_writes(
+                after,
+                finding_id,
+                remediated_head_sha=proof.remediated_head_sha,
+                reply_comment_id=comment_id,
+                adoption_receipt_sha256=proof.adoption_receipt_sha256,
+            )
+            if not resolution:
+                print(f"issue {issue}: {finding_id[:12]} adoption receipt not verified; thread remains open")
+                return
+            knowledge.append(
+                store,
+                resolution,
+                trust=configuration.trust,
+                provenance=provenance,
+                signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                recorded_by=writer.recorded_by(),
+                recorded_at=_timestamp(),
+            )
+        else:
+            knowledge.append(
+                store,
+                remediation.resolution_writes(
+                    after,
+                    finding_id,
+                    remediated_head_sha=proof.remediated_head_sha,
+                    reply_comment_id=comment_id,
+                ),
+                trust=configuration.trust,
+                provenance=provenance,
+                signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
+                recorded_by=writer.recorded_by(),
+                recorded_at=_timestamp(),
+            )
+        # ADR 0039 L7: only a newly durable resolution is eligible to wake
+        # trusted reconciliation. The idempotent already-resolved branch
+        # above deliberately does not publish a PR identity.
+        reconciled_pr_numbers.add(proof.pull_request_number)
+        resolved += 1
+        resolved_proofs.append(proof)
+        print(f"issue {issue}: resolved {finding_id[:12]} at {proof.remediated_head_sha[:12]}")
+
+    # Governed remediation remains bound to a verified Issue ledger. Any ledger
+    # problem is a no-op for that Issue only and cannot stop the separate manual pass.
+    issues = [arguments.issue] if arguments.issue else _active_issues(configuration)
+    for issue in issues:
+        try:
+            _head, state_view = control.load_ledger(store, configuration, provenance, issue)
+        except control.FactsUnavailable as error:
+            print(f"issue {issue}: no-op ({error})")
+            continue
+        except (control.Frozen, state.LedgerConflictError) as error:
+            print(f"issue {issue}: no-op ({error})")
+            continue
         for finding_id in sorted(known.findings):
             try:
                 proof = control.exact_head_proof(github, configuration, known, state_view, finding_id)
-                manual = False
-                if proof is None:
-                    # A manually created PR has no Issue Agent ledger, authorization or PUBLISHED
-                    # record. Adopt its exact-head evidence only from a signed Knowledge Receipt plus
-                    # the owner's authenticated disposition reply -- never fabricate an authorization.
-                    proof = control.manual_adoption_proof(github, configuration, known, finding_id)
-                    manual = proof is not None
-                if proof is None:
-                    continue
-                written = 0
-                if not manual:
-                    # Governed Issue Agent remediation: persist the signed exact-head finding_proven
-                    # record and receipt BEFORE replying/resolving the GitHub thread. Never synthesize
-                    # an owner disposition for this path.
-                    _head, after = knowledge.read(store, trust=configuration.trust, provenance=provenance)
-                    written = knowledge.append(
-                        store,
-                        remediation.proven_writes(
-                            after,
-                            finding_id,
-                            authorization_id=proof.authorization_id,
-                            remediated_head_sha=proof.remediated_head_sha,
-                            receipt_sha256=proof.receipt_sha256,
-                            preflight_run_id=proof.preflight_run_id,
-                        ),
-                        trust=configuration.trust,
-                        provenance=provenance,
-                        signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
-                        recorded_by=writer.recorded_by(),
-                        recorded_at=_timestamp(),
-                    )[2]
-                    _head, receipt_view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
-                    receipt_writes = knowledge.proven_receipt_writes(
-                        receipt_view, finding_id, exact_head=proof.remediated_head_sha
-                    )
-                    if receipt_view.findings[finding_id].receipt is None and not receipt_writes:
-                        print(f"issue {issue}: {finding_id[:12]} receipt proof not eligible; thread remains open")
-                        continue
-                    if receipt_writes:
-                        knowledge.append(
-                            store,
-                            receipt_writes,
-                            trust=configuration.trust,
-                            provenance=provenance,
-                            signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
-                            recorded_by=writer.recorded_by(),
-                            recorded_at=_timestamp(),
-                        )
-                    # Verify the signed append is readable and bound to the same exact-head proof
-                    # BEFORE any GitHub reply or thread mutation.
-                    _head, verified_view = knowledge.read(store, trust=configuration.trust, provenance=provenance)
-                    if not knowledge.verified_receipt_at_head(
-                        verified_view, finding_id, exact_head=proof.remediated_head_sha
-                    ):
-                        print(f"issue {issue}: {finding_id[:12]} receipt not verified; thread remains open")
-                        continue
-                comment_id = control.resolve_thread(
-                    github,
-                    configuration,
-                    proof,
-                    remediation.evidence_reply(
-                        finding_id,
-                        remediated_head_sha=proof.remediated_head_sha,
-                        family=proof.family_id or "a new family candidate",
-                        tests=proof.regression_tests,
-                    ),
-                )
-                if comment_id is None:
-                    print(
-                        f"issue {issue}: {finding_id[:12]} "
-                        f"({'proven' if not manual else 'adopted'} ({written} record(s)); the thread is not resolved)"
-                    )
-                    continue
-                _head, after = knowledge.read(store, trust=configuration.trust, provenance=provenance)
-                if manual:
-                    if finding_id in after.findings and after.findings[finding_id].resolved is not None:
-                        resolved += 1
-                        resolved_proofs.append(proof)
-                        print(f"issue {issue}: already resolved {finding_id[:12]} at {proof.remediated_head_sha[:12]}")
-                        continue
-                    resolution = remediation.resolution_writes(
-                        after,
-                        finding_id,
-                        remediated_head_sha=proof.remediated_head_sha,
-                        reply_comment_id=comment_id,
-                        adoption_receipt_sha256=proof.adoption_receipt_sha256,
-                    )
-                    if not resolution:
-                        print(f"issue {issue}: {finding_id[:12]} adoption receipt not verified; thread remains open")
-                        continue
-                    knowledge.append(
-                        store,
-                        resolution,
-                        trust=configuration.trust,
-                        provenance=provenance,
-                        signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
-                        recorded_by=writer.recorded_by(),
-                        recorded_at=_timestamp(),
-                    )
-                else:
-                    knowledge.append(
-                        store,
-                        remediation.resolution_writes(
-                            after,
-                            finding_id,
-                            remediated_head_sha=proof.remediated_head_sha,
-                            reply_comment_id=comment_id,
-                        ),
-                        trust=configuration.trust,
-                        provenance=provenance,
-                        signing_key=_ed25519(STATE_SIGNING_KEY_ENV),
-                        recorded_by=writer.recorded_by(),
-                        recorded_at=_timestamp(),
-                    )
-                # ADR 0039 L7: only a newly durable resolution is eligible to wake
-                # trusted reconciliation. The idempotent already-resolved branch
-                # above deliberately does not publish a PR identity.
-                reconciled_pr_numbers.add(proof.pull_request_number)
-                resolved += 1
-                resolved_proofs.append(proof)
-                print(f"issue {issue}: resolved {finding_id[:12]} at {proof.remediated_head_sha[:12]}")
             except control.FactsUnavailable as error:
+                governed_blocked.add(finding_id)
                 print(f"issue {issue}: no-op ({error})")
+                continue
             except state.LedgerConflictError:
+                governed_blocked.add(finding_id)
                 print(f"issue {issue}: no-op (the knowledge ledger moved; the next pass re-decides)")
+                continue
+            if proof is not None:
+                governed_handled.add(finding_id)
+                apply_proof(issue, finding_id, proof, manual=False)
+
+    # A manually created PR has no Issue ledger, authorization or PUBLISHED
+    # record. Evaluate its signed Knowledge Receipt and owner disposition once
+    # over the knowledge findings, independently of every Issue ledger above.
+    for finding_id in sorted(known.findings):
+        if finding_id in governed_handled or finding_id in governed_blocked:
+            continue
+        try:
+            proof = control.manual_adoption_proof(github, configuration, known, finding_id)
+        except control.FactsUnavailable as error:
+            print(f"manual {finding_id[:12]}: no-op ({error})")
+            continue
+        except state.LedgerConflictError:
+            print(f"manual {finding_id[:12]}: no-op (the knowledge ledger moved; the next pass re-decides)")
+            continue
+        if proof is not None:
+            apply_proof(None, finding_id, proof, manual=True)
+
+    # Even an empty result is published: the trusted reconciler must be able to
+    # distinguish "no durable resolution" from a missing or unreadable artifact.
+    _publish_resolution_evidence(configuration, reconciled_pr_numbers)
     if reconciled_pr_numbers:
         # ADR 0039 L7: this resolver still holds no `actions: write` and makes no
-        # privileged workflow call. It only publishes the affected PR identities
-        # after the signed knowledge append and verified thread resolution. The
-        # trusted workflow_run completion is the event-driven wake-up; the 5-minute
-        # sweep remains bounded recovery for events GitHub does not emit, including
-        # an owner resolving a thread outside this resolver.
-        numbers = ",".join(str(number) for number in sorted(reconciled_pr_numbers))
+        # privileged call. It only publishes the affected PR identities in an
+        # authenticated artifact after the signed knowledge append and verified
+        # thread resolution. The trusted completion event is the wake-up; the
+        # 5-minute sweep remains bounded recovery.
+        numbers = "\n".join(str(number) for number in sorted(reconciled_pr_numbers))
         _output(resolved_pr_numbers=numbers)
         print(
-            f"trusted issue-agent workflow completion wakes governance reconcile for PR #{numbers}; "
+            f"issue-agent resolver published identities for PR #{numbers.replace(chr(10), ', ')}; "
             "scheduled sweep remains recovery"
         )
     elif resolved:

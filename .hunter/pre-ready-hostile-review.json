@@ -3,85 +3,85 @@
     "acceptance_criteria": [
       {
         "criterion": "All supported Agents resolve the same canonical repository/mission authority.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-01",
         "verdict": "satisfied"
       },
       {
         "criterion": "Wrong cwd/branch/repo/HEAD/checkpoint fails before reading or writing.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-02",
         "verdict": "satisfied"
       },
       {
         "criterion": "Missing checkpoint fails closed without fallback.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-03",
         "verdict": "satisfied"
       },
       {
         "criterion": "Unregistered worktree cannot execute or publish.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-04",
         "verdict": "satisfied"
       },
       {
         "criterion": "Two concurrent writers cannot hold the same active lease; expired lease cannot mutate.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-05",
         "verdict": "satisfied"
       },
       {
         "criterion": "Session/model switch resumes exact lineage with no rediscovery.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-06",
         "verdict": "satisfied"
       },
       {
         "criterion": "Crash/restart restores deterministic checkpoint and outstanding work.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-07",
         "verdict": "satisfied"
       },
       {
         "criterion": "Cross-lineage import requires explicit owner authorization and preserves both trees.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-08",
         "verdict": "satisfied"
       },
       {
         "criterion": "Tool admission and publisher reject forged/stale registry or lease.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-09",
         "verdict": "satisfied"
       },
       {
         "criterion": "CI anti-rollback catches removal/bypass of any workspace admission route.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-10",
         "verdict": "satisfied"
       },
       {
         "criterion": "Registry supports safe migration of existing worktrees without deletion.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-11",
         "verdict": "satisfied"
       },
       {
         "criterion": "Issue #574 and other Issue flows consume the global authority without introducing a second workspace authority.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-12",
         "verdict": "satisfied"
       },
       {
         "criterion": "No PR creation/merge or hosted publication without exact-head lineage proof.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-13",
         "verdict": "satisfied"
       },
       {
         "criterion": "Missing provider/runtime integration is reported BLOCKED, not falsely PASS.",
-        "evidence": "Fresh exact staged-content judgement for the post-resolution reconciliation scope extension: verified resolution publishes only scoped PR identities after durable knowledge persistence, trusted workflow_run completion drives exact-head reconciliation, failed/duplicate/stale events fail closed, least privilege and candidate-code isolation are preserved, and hosted proof remains the sole production authority.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-14",
         "verdict": "satisfied"
       }
@@ -89,11 +89,18 @@
     "adversarial_dimensions": [
       "authorization",
       "caller-controlled-time-state",
+      "context-freshness",
+      "cross-workflow-evidence-binding",
       "cutoff-history",
+      "exact-head-binding",
       "fail-closed",
+      "idempotency",
+      "least-privilege",
+      "ledger-independence",
       "malformed-unknown-authority",
       "monotonicity",
       "persistence-restrictions",
+      "producer-consumer-contract",
       "replay",
       "restart-crash-retry",
       "tamper-resistance",
@@ -103,248 +110,268 @@
     "base_sha": "a4a9b9e173bb15afaed2c162bda9708e93eb2411",
     "defect_families": [
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-042",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-045",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-047",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-049",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-052",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-054",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-055",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-057",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-058",
         "outcome": "clear"
       },
       {
-        "evidence": "The resolver writer binding and exact-thread mutation decision are unchanged; Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-059",
         "outcome": "clear"
       },
       {
-        "evidence": "The signed-receipt manual adoption and exact-head barriers are unchanged; Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-060",
         "outcome": "clear"
       },
       {
-        "evidence": "Mutation anchors remain unique and the resolver mutation proof is unchanged; Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-061",
         "outcome": "clear"
       },
       {
-        "evidence": "DFF-063 is directly exercised: successful resolver output wakes scoped governance reconciliation; failed, cancelled, ambiguous, duplicate and malformed events create no readiness refresh; the exact HEAD is rebound and duplicate markers are consumed; manual UI resolution is explicitly recovery-only. Fresh exact staged-content judgement for the Issue #575 post-resolution reconciliation extension. RED was reproduced first (7 failed tests), then the trusted completion path was implemented. Focused verification: 247 passed across resolution/reconcile/lifecycle/manual-adoption suites, 388 passed across the expanded governance/readiness set, 352 passed across orchestrator/governance/convergence/remediation suites, and the final targeted rerun was 9 passed. Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and repository-wide Mypy are green on this staged content. No full-suite rerun was repeated on unchanged content. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
         "family": "DFF-063",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh exact staged-content judgement for PRRT_kwDOTRDHr8682GTN: documented jobs/artifact API schemas, artifact digest and repository/workflow/run/attempt/HEAD/job bindings were verified; malformed, stale, expired, ambiguous and untrusted evidence fails closed; resolver least privilege and candidate isolation are unchanged.",
+        "family": "DFF-080",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh exact staged-content judgement for PRRT_kwDOTRDHr8682GTT: empty, single, multiple, duplicate and malformed PR identity cases pass through the actual --for-shell producer and real bash while-read loop; no malformed value reaches reconciliation.",
+        "family": "DFF-081",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh exact staged-content judgement for PRRT_kwDOTRDHr8682GTY: one live issuer object accepts an authorization minted after knowledge changes without restart, and refuses mismatched or unavailable contexts while preserving signed prompt_sha256 and dpm_context_sha256 checks.",
+        "family": "DFF-082",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh exact staged-content judgement for PRRT_kwDOTRDHr8682GTd: manual adoption is evaluated exactly once with zero, multiple and mixed ledgers; governed proof takes precedence; invalid receipts, moved heads and failed resolution still fail closed.",
+        "family": "DFF-083",
         "outcome": "clear"
       }
     ],
@@ -358,7 +385,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "1b8bd960e4692a5e0c0fd49ea552074ee77a4fd8",
+        "blob_sha": "5977a40c04dc172953c48469f6e08b88214506e2",
         "path": "scripts/hunter_resolution_reconcile_ingress.py",
         "previous_path": "",
         "status": "added"
@@ -376,25 +403,31 @@
         "status": "added"
       },
       {
-        "blob_sha": "beb9862a05db0c38294a7ce9e5b482f6859f3b85",
+        "blob_sha": "d74704c98fee6bfce9cf15acb3e5c8a0ec8c6905",
+        "path": "tests/test_issue_agent_issuer_context_freshness.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "88938e9adc0b1a2b6002ec98fdd583b7d54d5782",
         "path": "tests/test_issue_agent_manual_pr_resolution.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "c88e5aa8020c0b532e6cac250510264793b37b19",
+        "blob_sha": "bed4b2ae9f8d5c1b1342e5708f48cf7e5c0bc275",
         "path": "tests/test_issue_agent_resolution_reconcile.py",
         "previous_path": "",
         "status": "added"
       },
       {
-        "blob_sha": "55e968d7dce248a96ef7ff6bf931e4909be646ac",
+        "blob_sha": "6f8b83debd9b59d991d79909cb17d1f1ea61e176",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "68434b24c7e4132ab23a1737bb9c562a20ae8889",
+        "blob_sha": "aa542fadb7adb8cf595c96eac3c82c96b4a2348e",
         "path": ".github/workflows/hunter-issue-agent-reconcile.yml",
         "previous_path": "",
         "status": "modified"
@@ -412,7 +445,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "12e72ff9b9f58f6482cf12f259ffc8c097b53e9c",
+        "blob_sha": "ba41d6fb1cf847bceef698f2724c4b022ebd5816",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -430,13 +463,13 @@
         "status": "modified"
       },
       {
-        "blob_sha": "7c829add05e31f356d7c73ab97a54ff799534a36",
+        "blob_sha": "61c2a7ade521d5a92f093343f8e17d009f289f78",
         "path": "scripts/hunter_issue_agent_issuer.py",
         "previous_path": "",
         "status": "modified"
       },
       {
-        "blob_sha": "f85b7307b272b0f38f97f605615b708aab035eae",
+        "blob_sha": "00c5adbe49075d0b64a2ab247886981cf5efe084",
         "path": "scripts/hunter_issue_agent_lifecycle.py",
         "previous_path": "",
         "status": "modified"
@@ -544,11 +577,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "6a3c056cfdded736feae424d34f85c914ca9cba0809bd83d3749bc24fad82f4a"
+    "review_target_digest": "452956fe38ff4d9f4ff75d8548e9b332b6ce82999e083e3accc8fb5ec6fd711b"
   },
-  "review_id": "67a241dd18ca165fe8d0cdf3ec8f08cdb18c941f0770f9af9ac4e5f4a775d2ba",
+  "review_id": "6474d1440001166498c361325c25e84203f1c18187245999215651fc054680c9",
   "review_request": {
-    "claims_id": "67a241dd18ca165fe8d0cdf3ec8f08cdb18c941f0770f9af9ac4e5f4a775d2ba",
+    "claims_id": "6474d1440001166498c361325c25e84203f1c18187245999215651fc054680c9",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

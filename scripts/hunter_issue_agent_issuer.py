@@ -146,15 +146,18 @@ def _new_instance_id() -> str:
 LineageEvidenceSource = Callable[[IssueAgentAuthorization], Mapping[str, Any]]
 #: The exact-dispatch guard run immediately before the durable dispatch record.
 LineageDispatchGuard = Callable[[SignedIssueAgentAuthorization, str, str], None]
+#: A request-scoped authority resolved from the trusted knowledge ledger for one authorization.
+ContextResolver = Callable[[IssueAgentAuthorization], EngineeringContextAuthority | None]
 
 
 @dataclass(frozen=True, slots=True)
 class LineageBinding:
-    """The one overlay-bound context used to compile and to verify an execution."""
+    """The overlay-bound context and the exact-dispatch guard for an execution."""
 
     knowledge_overlay: tuple[dict[str, Any], ...]
     engineering_context_authority: EngineeringContextAuthority
     verify_dispatch: LineageDispatchGuard
+    resolve_context: ContextResolver | None = None
 
 
 def bind_dispatch_to_lineage(evidence: LineageEvidenceSource) -> LineageDispatchGuard:
@@ -232,8 +235,24 @@ def production_lineage_binding(
         f"https://github.com/{configuration.repository}.git",
         auth_header=_github_auth_header(source),
     )
-    _, knowledge_view = knowledge.read(store, trust=trusted.trust, provenance=provenance)
-    overlay = tuple(knowledge.overlay_families(knowledge_view))
+
+    def resolve_context(authorization: IssueAgentAuthorization) -> EngineeringContextAuthority:
+        """Read the anchored knowledge view for this authorization, not for the process.
+
+        The sign job reads the same trusted ledger when it mints ``AUTHORIZED``. A
+        long-running issuer that froze the overlay at boot could compile against
+        a different knowledge context; the signed prompt/DPM digest guard below
+        then refuses the dispatch. Resolving per authorization removes that
+        asymmetry without ever substituting merely-current context for signed
+        lineage.
+        """
+
+        _head, knowledge_view = knowledge.read(store, trust=trusted.trust, provenance=provenance)
+        overlay = tuple(knowledge.overlay_families(knowledge_view))
+        return EngineeringContextAuthority(
+            registry_path=configuration.repository_checkout / "docs" / "DEFECT_REGISTRY.json",
+            knowledge_overlay=overlay,
+        )
 
     def evidence(authorization: IssueAgentAuthorization) -> Mapping[str, Any]:
         _, entries = store.read(authorization.issue_number)
@@ -253,12 +272,13 @@ def production_lineage_binding(
         return bound
 
     return LineageBinding(
-        knowledge_overlay=overlay,
+        knowledge_overlay=(),
         engineering_context_authority=EngineeringContextAuthority(
             registry_path=configuration.repository_checkout / "docs" / "DEFECT_REGISTRY.json",
-            knowledge_overlay=overlay,
+            knowledge_overlay=(),
         ),
         verify_dispatch=bind_dispatch_to_lineage(evidence),
+        resolve_context=resolve_context,
     )
 
 
@@ -414,6 +434,28 @@ def compose_services(
     )
 
 
+def _ingress_for_authority(
+    services: IssuerServices, authority: EngineeringContextAuthority
+) -> GovernedEngineeringTaskIngress:
+    """Compile one authorization with its own verified knowledge authority."""
+
+    if authority is services.lineage_binding.engineering_context_authority:
+        return services.ingress
+    machine = SmartPromptMachine(
+        repository=services.repository,
+        profiles=ISSUE_AGENT_PROFILE_REGISTRY,
+        routes=ISSUE_AGENT_ROUTE_REGISTRY,
+        source_handling_resolver=services.source_handling_resolver,
+        clock=services.configuration.clock,
+        engineering_context_authority=authority,
+    )
+    return GovernedEngineeringTaskIngress(
+        machine=machine,
+        routes=ISSUE_AGENT_ROUTE_REGISTRY,
+        profiles=ISSUE_AGENT_PROFILE_REGISTRY,
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class PreparedIssueAgentExecution:
     """Durably prepared work whose provider phase may safely outlive HTTP."""
@@ -455,6 +497,21 @@ def prepare_authorization(
         processed_at=services.configuration.clock.now(),
     )
 
+    # Resolve the signer's knowledge context before consuming the authorization.
+    # The ledger-backed production resolver rereads the anchored knowledge view
+    # for every authorization; a missing or untrusted context is refused here.
+    authority = services.lineage_binding.engineering_context_authority
+    resolver = services.lineage_binding.resolve_context
+    if resolver is not None:
+        try:
+            resolved_authority = resolver(authorization)
+        except Exception as error:
+            raise IssueAgentExecutionError("authorization knowledge context is unavailable") from error
+        if resolved_authority is None:
+            raise IssueAgentExecutionError("authorization knowledge context is unavailable")
+        authority = resolved_authority
+    ingress = _ingress_for_authority(services, authority)
+
     services.ledger.claim(
         authorization,
         claimed_at=services.configuration.clock.now(),
@@ -467,7 +524,13 @@ def prepare_authorization(
             processed_at=services.configuration.clock.now(),
         )
 
-        compiled = services.ingress.compile(request, implementation_scope=signed.implementation_scope)
+        # Reuse the canonical ingress when the authorization needs no new context;
+        # otherwise compile through the request-scoped ingress above. Both paths
+        # use the one GovernedEngineeringTaskIngress implementation.
+        if ingress is services.ingress:
+            compiled = services.ingress.compile(request, implementation_scope=signed.implementation_scope)
+        else:
+            compiled = ingress.compile(request, implementation_scope=signed.implementation_scope)
         envelope = compiled.envelope
         envelope.verify_issuer_signature(services.configuration.prompt_verifier)
         if envelope.build_record_id != compiled.compilation.manifest.build_record_id:
@@ -478,9 +541,7 @@ def prepare_authorization(
             raise IssueAgentExecutionError("no concrete prompt artifact was compiled for execution")
         prompt_sha256 = hashlib.sha256(artifact.content.encode("utf-8")).hexdigest()
         dpm_context_sha256 = hashlib.sha256(
-            services.lineage_binding.engineering_context_authority.canonical_json(
-                ENGINEERING_IMPLEMENT_TASK_KEY, scope=signed.implementation_scope
-            ).encode("utf-8")
+            authority.canonical_json(ENGINEERING_IMPLEMENT_TASK_KEY, scope=signed.implementation_scope).encode("utf-8")
         ).hexdigest()
         services.lineage_binding.verify_dispatch(signed, prompt_sha256, dpm_context_sha256)
 

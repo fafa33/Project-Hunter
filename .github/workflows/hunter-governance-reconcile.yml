@@ -158,24 +158,43 @@ jobs:
               pr_numbers=""
             else
               jobs_json="$(mktemp)"
+              artifacts_json="$(mktemp)"
+              evidence_zip="$(mktemp)"
+              artifact_id=""
               if ! gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${EVENT_WORKFLOW_RUN_ID}/attempts/${EVENT_WORKFLOW_RUN_ATTEMPT}/jobs?per_page=100" > "${jobs_json}"; then
                 echo "::error::Cannot read resolver jobs for run ${EVENT_WORKFLOW_RUN_ID}; skipping wake-up."
                 failures=1
-                pr_numbers=""
+              elif ! gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${EVENT_WORKFLOW_RUN_ID}/artifacts?per_page=100" > "${artifacts_json}"; then
+                echo "::error::Cannot read resolver artifacts for run ${EVENT_WORKFLOW_RUN_ID}; skipping wake-up."
+                failures=1
               else
-                resolution_output="$(
-                  python scripts/hunter_resolution_reconcile_ingress.py \
-                    --event "${GITHUB_EVENT_PATH}" \
-                    --jobs "${jobs_json}" \
-                    --event-name "${event_name}"
-                )" || resolution_output="pr_numbers="
-                echo "${resolution_output}" >> "${GITHUB_OUTPUT}"
-                pr_numbers="${resolution_output#pr_numbers=}"
-                if [[ -n "${pr_numbers}" ]]; then
-                  resolution_marker="hunter-resolution-reconcile/${EVENT_WORKFLOW_RUN_ID}/${EVENT_WORKFLOW_RUN_ATTEMPT}"
+                artifact_id="$(
+                  jq -r --arg name "hunter-resolution-reconcile-${EVENT_WORKFLOW_RUN_ID}-${EVENT_WORKFLOW_RUN_ATTEMPT}" \
+                    '[.artifacts[] | select(.name == $name and .expired == false) | .id] | if length == 1 then .[0] else empty end' \
+                    "${artifacts_json}"
+                )"
+                if [[ -z "${artifact_id}" ]]; then
+                  echo "::notice::No unique unexpired resolution artifact for this exact run and attempt; no wake-up."
+                elif ! gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${artifact_id}/zip" > "${evidence_zip}"; then
+                  echo "::error::Cannot download resolution artifact ${artifact_id}; skipping wake-up."
+                  failures=1
+                else
+                  pr_numbers="$(
+                    python scripts/hunter_resolution_reconcile_ingress.py \
+                      --event "${GITHUB_EVENT_PATH}" \
+                      --jobs "${jobs_json}" \
+                      --artifacts "${artifacts_json}" \
+                      --evidence-zip "${evidence_zip}" \
+                      --repository "${GITHUB_REPOSITORY}" \
+                      --event-name "${event_name}" \
+                      --for-shell
+                  )" || pr_numbers=""
+                  if [[ -n "${pr_numbers}" ]]; then
+                    resolution_marker="hunter-resolution-reconcile/${EVENT_WORKFLOW_RUN_ID}/${EVENT_WORKFLOW_RUN_ATTEMPT}"
+                  fi
                 fi
               fi
-              rm -f "${jobs_json}"
+              rm -f "${jobs_json}" "${artifacts_json}" "${evidence_zip}"
             fi
           elif [[ "${event_name}" == "workflow_run" ]]; then
             pr_numbers="$(
