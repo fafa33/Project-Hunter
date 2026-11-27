@@ -292,8 +292,6 @@ def _assert_digest_describes_final_record(record: dict[str, Any]) -> None:
 
 def test_skipped_focused_test_is_blocked_in_bound_record(tmp_path: Path) -> None:
     """A skipped selector exits zero under pytest but must not count as proof."""
-    import subprocess
-
     sys.path.insert(0, str(ROOT / "scripts"))
     module = importlib.import_module("hunter_ci_impact")
     fixture = _committed_fixture_repo(

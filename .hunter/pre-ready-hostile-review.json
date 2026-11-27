@@ -9,7 +9,7 @@
       },
       {
         "criterion": "Wrong cwd/branch/repo/HEAD/checkpoint fails before reading or writing.",
-        "evidence": "Obligation evidence binds exact content identity, base/head range, selectors, toolchain and outcome; ECA digest mismatch fails closed before dispatch. Negative tests cover wrong-context execution.",
+        "evidence": "Obligation evidence binds exact content identity, base/head range, selectors, toolchain and outcome, and digest mismatch fails closed before provider dispatch; negative tests cover wrong-context execution.",
         "id": "AC-575-02",
         "verdict": "satisfied"
       },
@@ -27,7 +27,7 @@
       },
       {
         "criterion": "Two concurrent writers cannot hold the same active lease; expired lease cannot mutate.",
-        "evidence": "No lease, branch or commit identity is relaxed; the remediation adds one signed commit on the single authorized infrastructure branch without force-push.",
+        "evidence": "No lease, branch or commit identity is relaxed; this remediation adds signed commits on the single authorized infrastructure branch without force-push.",
         "id": "AC-575-05",
         "verdict": "satisfied"
       },
@@ -103,177 +103,177 @@
     "base_sha": "a4a9b9e173bb15afaed2c162bda9708e93eb2411",
     "defect_families": [
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-045",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-047",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-049",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-055",
         "outcome": "clear"
       },
       {
-        "evidence": "Current base-to-HEAD remediation re-derived from canonical registry applicability. Focused verification: 498 passed, 3 skipped across issuer/ECA, preventive obligations, fallback/resume, pre-push, review-evidence, candidate topology, provisioner and Issue #412 gates; narrower post-finalization check 62 passed, 3 skipped. Skipped selectors now produce a blocked evidence record instead of a pass, and the emitted evidence digest is computed once over the final record. No reviewer authority is self-certified and hosted exact-head proof remains owned by the trusted workflows.",
+        "evidence": "Fresh exact staged-content judgement after the Ruff/Black correction. Final staged tree verified with 659 passed and 3 skipped across Issue #575 ECA/issuer/fallback/resume, preventive obligations, skip and digest regressions, pre-push, review evidence, candidate topology, provisioner and Issue #412 gates; the focused two-file check was 22 passed and 3 skipped. Skipped selectors are blocked, evidence digests are computed once over the final record, and hosted exact-head proof remains solely with the trusted workflows.",
         "family": "DFF-057",
         "outcome": "clear"
       }
@@ -294,7 +294,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "031d0ef66bdb3e383c9a52acd6bd03171c477e94",
+        "blob_sha": "8417eec353856c78c1a147ace76dad2c94e64ba2",
         "path": "tests/test_issue_575_preventive_obligations.py",
         "previous_path": "",
         "status": "added"
@@ -306,7 +306,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "3cc1aded3d42da6c2eff647c91508fbb50283bcb",
+        "blob_sha": "5ab16c9ea56b6d812a8390fab95a2885f23dc9c1",
         "path": "scripts/hunter_ci_impact.py",
         "previous_path": "",
         "status": "modified"
@@ -378,11 +378,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "299259a8b41f98a273cf1534557cb3c8c85d46007ed87fbbaab5bbd8e7931cd3"
+    "review_target_digest": "fc29f14e0d9c4d7eccb1836cbaf4aab921e173951c5f1186c15ac55f7a48be7b"
   },
-  "review_id": "2bc0f3b900af1d263cec5b8da063060c5a2a2a6368852a9fc52df92499c32af2",
+  "review_id": "b6685f8b9fa3a787f2f41278baada1ef3f4cf8febfa18e171b1e5026676fff97",
   "review_request": {
-    "claims_id": "2bc0f3b900af1d263cec5b8da063060c5a2a2a6368852a9fc52df92499c32af2",
+    "claims_id": "b6685f8b9fa3a787f2f41278baada1ef3f4cf8febfa18e171b1e5026676fff97",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

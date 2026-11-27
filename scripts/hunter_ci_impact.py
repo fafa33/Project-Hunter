@@ -152,8 +152,7 @@ def _junit_counts(report: Path) -> dict[str, Any]:
             name: int(suite.attrib.get(name, "0")) for name in ("tests", "failures", "errors", "skipped")
         }
         counts["cases"] = [
-            f"{case.attrib.get('classname', '')}::{case.attrib.get('name', '')}"
-            for case in suite.findall("testcase")
+            f"{case.attrib.get('classname', '')}::{case.attrib.get('name', '')}" for case in suite.findall("testcase")
         ]
         return counts
     except (OSError, ET.ParseError, TypeError, ValueError) as exc:
