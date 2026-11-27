@@ -16,6 +16,8 @@ import re
 import shlex
 import subprocess
 import sys
+import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
 
@@ -129,8 +131,72 @@ def _evidence_record(
     }
     if error:
         record["error"] = error
+    return record
+
+
+def _finalize_evidence(record: dict[str, Any]) -> dict[str, Any]:
+    """Hash the finished record exactly once, never a previous digest."""
+    record.pop("evidence_digest", None)
     record["evidence_digest"] = evidence_digest(record)
     return record
+
+
+def _junit_counts(report: Path) -> dict[str, Any]:
+    """Read objective execution counts and test identities from pytest's report."""
+    try:
+        root = ET.parse(report).getroot()
+        suite = root if root.tag == "testsuite" else root.find("testsuite")
+        if suite is None:
+            raise ValueError("JUnit report has no testsuite")
+        counts: dict[str, Any] = {
+            name: int(suite.attrib.get(name, "0")) for name in ("tests", "failures", "errors", "skipped")
+        }
+        counts["cases"] = [
+            f"{case.attrib.get('classname', '')}::{case.attrib.get('name', '')}"
+            for case in suite.findall("testcase")
+        ]
+        return counts
+    except (OSError, ET.ParseError, TypeError, ValueError) as exc:
+        raise RuntimeError(f"focused JUnit report unavailable: {exc}") from exc
+
+
+def _execute_selector(workspace: Path, selector: str, env: dict[str, str]) -> dict[str, Any]:
+    """Run one selector and prove its assertions actually executed."""
+    with tempfile.TemporaryDirectory(prefix="hunter-obligation-") as directory:
+        report = Path(directory) / "junit.xml"
+        completed = subprocess.run(
+            (sys.executable, "-m", "pytest", "-q", f"--junitxml={report}", selector),
+            cwd=workspace,
+            env=env,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            counts = _junit_counts(report)
+            error = ""
+        except RuntimeError as exc:
+            counts = {"tests": 0, "failures": 0, "errors": 0, "skipped": 0, "cases": []}
+            error = str(exc)
+    executed = (
+        completed.returncode == 0
+        and counts["tests"] > 0
+        and len(counts["cases"]) == counts["tests"]
+        and counts["failures"] == 0
+        and counts["errors"] == 0
+        and counts["skipped"] == 0
+    )
+    result: dict[str, Any] = {
+        "selector": selector,
+        "exists": True,
+        "pytest_returncode": completed.returncode,
+        "outcome": "executed" if executed else "blocked",
+        **counts,
+    }
+    if error:
+        result["error"] = error
+    return result
 
 
 def execute_obligations(
@@ -147,13 +213,15 @@ def execute_obligations(
     except Exception as exc:  # noqa: BLE001 - absent evidence must fail closed
         selectors = tuple(sorted({selector for item in obligations for selector in item["selectors"]}))
         return (
-            _evidence_record(
-                obligations=obligations,
-                content_identity="",
-                toolchain={},
-                selectors=selectors,
-                exit_code=2,
-                error=f"{type(exc).__name__}: {exc}",
+            _finalize_evidence(
+                _evidence_record(
+                    obligations=obligations,
+                    content_identity="",
+                    toolchain={},
+                    selectors=selectors,
+                    exit_code=2,
+                    error=f"{type(exc).__name__}: {exc}",
+                )
             ),
             2,
         )
@@ -161,36 +229,40 @@ def execute_obligations(
     missing = [selector for selector in selectors if not (workspace / _selector_file(selector)).is_file()]
     if missing:
         return (
-            _evidence_record(
-                obligations=obligations,
-                content_identity=content_identity,
-                toolchain=toolchain,
-                selectors=selectors,
-                exit_code=2,
-                error="focused test selectors are missing: " + ", ".join(missing),
+            _finalize_evidence(
+                _evidence_record(
+                    obligations=obligations,
+                    content_identity=content_identity,
+                    toolchain=toolchain,
+                    selectors=selectors,
+                    exit_code=2,
+                    error="focused test selectors are missing: " + ", ".join(missing),
+                )
             ),
             2,
         )
     env = dict(os.environ)
     env.pop("PYTEST_ADDOPTS", None)
-    completed = subprocess.run(
-        (sys.executable, "-m", "pytest", "-q", *selectors),
-        cwd=workspace,
-        env=env,
-        check=False,
-    )
+    test_inputs = tuple(_execute_selector(workspace, selector, env) for selector in selectors)
+    blocked = [item for item in test_inputs if item["outcome"] != "executed"]
+    error = ""
+    if blocked:
+        error = "focused selectors did not execute successfully: " + ", ".join(
+            f"{item['selector']}(tests={item['tests']}, skipped={item['skipped']}, "
+            f"failures={item['failures']}, errors={item['errors']}, pytest_returncode={item['pytest_returncode']})"
+            for item in blocked
+        )
+    code = 2 if blocked else 0
     record = _evidence_record(
         obligations=obligations,
         content_identity=content_identity,
         toolchain=toolchain,
         selectors=selectors,
-        exit_code=completed.returncode,
+        exit_code=code,
+        error=error,
     )
-    record["test_inputs"] = [
-        {"selector": selector, "exists": (workspace / _selector_file(selector)).is_file()} for selector in selectors
-    ]
-    record["evidence_digest"] = evidence_digest(record)
-    return record, completed.returncode
+    record["test_inputs"] = list(test_inputs)
+    return _finalize_evidence(record), code
 
 
 def enforce_preventive_obligations(base: str, head: str, *, cwd: Path | None = None) -> int:

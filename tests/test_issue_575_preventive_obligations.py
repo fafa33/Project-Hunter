@@ -265,6 +265,81 @@ def test_missing_focused_test_fails_closed_in_bound_record(tmp_path: Path) -> No
     )
 
 
+def _committed_fixture_repo(tmp_path: Path, test_source: str) -> Path:
+    """Create a clean committed repository containing one focused test."""
+    import subprocess
+
+    (tmp_path / "README.md").write_text("fixture\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_focused.py").write_text(test_source, encoding="utf-8")
+    subprocess.run(("git", "init", "-q"), cwd=tmp_path, check=True)
+    subprocess.run(("git", "add", "."), cwd=tmp_path, check=True)
+    subprocess.run(
+        ("git", "-c", "user.email=test@example.invalid", "-c", "user.name=test", "commit", "-qm", "fixture"),
+        cwd=tmp_path,
+        check=True,
+    )
+    return tmp_path
+
+
+def _assert_digest_describes_final_record(record: dict[str, Any]) -> None:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    module = importlib.import_module("hunter_ci_impact")
+    assert record["evidence_digest"] == module.evidence_digest(
+        {key: value for key, value in record.items() if key != "evidence_digest"}
+    )
+
+
+def test_skipped_focused_test_is_blocked_in_bound_record(tmp_path: Path) -> None:
+    """A skipped selector exits zero under pytest but must not count as proof."""
+    import subprocess
+
+    sys.path.insert(0, str(ROOT / "scripts"))
+    module = importlib.import_module("hunter_ci_impact")
+    fixture = _committed_fixture_repo(
+        tmp_path,
+        "import pytest\n\ndef test_focused() -> None:\n    pytest.skip('not executed')\n",
+    )
+    obligations = (
+        {
+            "id": "PO-SKIP",
+            "changed_paths": ["src/hunter/discovery/providers.py"],
+            "selectors": ["tests/test_focused.py::test_focused"],
+        },
+    )
+    record, code = module.execute_obligations(fixture, obligations, cwd=fixture)
+    assert code != 0
+    assert record["outcome"] == "blocked"
+    assert "skipped" in record["error"]
+    assert record["test_inputs"][0]["skipped"] == 1
+    assert record["trusted_proof"] is False
+    _assert_digest_describes_final_record(record)
+
+
+def test_executed_focused_test_digest_describes_final_record(tmp_path: Path) -> None:
+    """The emitted digest must cover the final execution record exactly once."""
+    sys.path.insert(0, str(ROOT / "scripts"))
+    module = importlib.import_module("hunter_ci_impact")
+    fixture = _committed_fixture_repo(
+        tmp_path,
+        "def test_focused() -> None:\n    assert True\n",
+    )
+    obligations = (
+        {
+            "id": "PO-EXEC",
+            "changed_paths": ["src/hunter/discovery/providers.py"],
+            "selectors": ["tests/test_focused.py::test_focused"],
+        },
+    )
+    record, code = module.execute_obligations(fixture, obligations, cwd=fixture)
+    assert code == 0
+    assert record["outcome"] == "passed"
+    assert record["test_inputs"][0]["tests"] == 1
+    assert record["test_inputs"][0]["skipped"] == 0
+    assert record["trusted_proof"] is False
+    _assert_digest_describes_final_record(record)
+
+
 def _review_for_family_evidence(evidence: str) -> dict[str, Any]:
     changes = (ingress.ConnectorFileChange("modified", "src/hunter/onchain/evidence.py", "", "a" * 40),)
     claims = review.build_claims(
