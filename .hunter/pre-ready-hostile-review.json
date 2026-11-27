@@ -3,95 +3,97 @@
     "acceptance_criteria": [
       {
         "criterion": "All supported Agents resolve the same canonical repository/mission authority.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-01",
         "verdict": "satisfied"
       },
       {
         "criterion": "Wrong cwd/branch/repo/HEAD/checkpoint fails before reading or writing.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-02",
         "verdict": "satisfied"
       },
       {
         "criterion": "Missing checkpoint fails closed without fallback.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-03",
         "verdict": "satisfied"
       },
       {
         "criterion": "Unregistered worktree cannot execute or publish.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-04",
         "verdict": "satisfied"
       },
       {
         "criterion": "Two concurrent writers cannot hold the same active lease; expired lease cannot mutate.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-05",
         "verdict": "satisfied"
       },
       {
         "criterion": "Session/model switch resumes exact lineage with no rediscovery.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-06",
         "verdict": "satisfied"
       },
       {
         "criterion": "Crash/restart restores deterministic checkpoint and outstanding work.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-07",
         "verdict": "satisfied"
       },
       {
         "criterion": "Cross-lineage import requires explicit owner authorization and preserves both trees.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-08",
         "verdict": "satisfied"
       },
       {
         "criterion": "Tool admission and publisher reject forged/stale registry or lease.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-09",
         "verdict": "satisfied"
       },
       {
         "criterion": "CI anti-rollback catches removal/bypass of any workspace admission route.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-10",
         "verdict": "satisfied"
       },
       {
         "criterion": "Registry supports safe migration of existing worktrees without deletion.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-11",
         "verdict": "satisfied"
       },
       {
         "criterion": "Issue #574 and other Issue flows consume the global authority without introducing a second workspace authority.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-12",
         "verdict": "satisfied"
       },
       {
         "criterion": "No PR creation/merge or hosted publication without exact-head lineage proof.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-13",
         "verdict": "satisfied"
       },
       {
         "criterion": "Missing provider/runtime integration is reported BLOCKED, not falsely PASS.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for the four Codex findings on Issue #575 / PR #789: artifact-bound cross-workflow evidence replaces nonexistent jobs[].steps[].outputs; the newline-separated producer/consumer PR identity contract is exercised through the real shell loop; the long-running issuer resolves DPM/SPM context per authorization while signed prompt and DPM digest verification remains intact; manual-PR adoption runs once and ledger-independently. RED was reproduced for all four defects before implementation; the final focused rerun was 270 passed, the broader affected set of 537 tests was exercised with two brittle static/action-pinning assertions corrected and rerun green, mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-14",
         "verdict": "satisfied"
       }
     ],
     "adversarial_dimensions": [
       "authorization",
+      "bounded-linear-parsing",
       "caller-controlled-time-state",
       "context-freshness",
       "cross-workflow-evidence-binding",
       "cutoff-history",
+      "directory-traversal",
       "exact-head-binding",
       "fail-closed",
       "idempotency",
@@ -103,275 +105,288 @@
       "producer-consumer-contract",
       "replay",
       "restart-crash-retry",
+      "super-linear-regex",
+      "symlink-escape",
       "tamper-resistance",
-      "transaction-snapshot-consistency"
+      "transaction-snapshot-consistency",
+      "trusted-path-boundary"
     ],
     "base_ref": "main",
     "base_sha": "a4a9b9e173bb15afaed2c162bda9708e93eb2411",
     "defect_families": [
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-042",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-045",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-047",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-049",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-052",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-054",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-055",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-057",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-058",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-059",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-060",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-061",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement after the four Finding remediations: this family's applicable changed paths were re-reviewed against RED-first regressions; final focused suite 270 passed, the broader affected set of 537 tests was exercised, remediation mutation anchors passed, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-063",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for PRRT_kwDOTRDHr8682GTN: documented jobs/artifact API schemas, artifact digest and repository/workflow/run/attempt/HEAD/job bindings were verified; malformed, stale, expired, ambiguous and untrusted evidence fails closed; resolver least privilege and candidate isolation are unchanged.",
+        "evidence": "tests/test_issue_agent_resolution_reconcile.py::test_legitimate_workflow_input_paths_are_accepted and test_cli_input_paths_cannot_escape_the_trusted_workflow_root verify preserved artifact ingestion plus traversal/absolute-path refusal at the trusted ingress.",
         "family": "DFF-080",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for PRRT_kwDOTRDHr8682GTT: empty, single, multiple, duplicate and malformed PR identity cases pass through the actual --for-shell producer and real bash while-read loop; no malformed value reaches reconciliation.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-081",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for PRRT_kwDOTRDHr8682GTY: one live issuer object accepts an authorization minted after knowledge changes without restart, and refuses mismatched or unavailable contexts while preserving signed prompt_sha256 and dpm_context_sha256 checks.",
+        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
         "family": "DFF-082",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement for PRRT_kwDOTRDHr8682GTd: manual adoption is evaluated exactly once with zero, multiple and mixed ledgers; governed proof takes precedence; invalid receipts, moved heads and failed resolution still fail closed.",
+        "evidence": "tests/test_issue_agent_manual_pr_resolution.py::test_unauthorized_or_mismatched_owner_replies_are_never_adopted plus DFF-085 parser regressions confirm ledger-independent adoption still fails closed.",
         "family": "DFF-083",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "tests/test_issue_agent_resolution_reconcile.py::test_cli_input_paths_cannot_escape_the_trusted_workflow_root and test_symlink_input_paths_cannot_escape_the_trusted_workflow_root prove all four CLI paths are bound to RUNNER_TEMP/GITHUB_WORKSPACE and symlink components fail closed.",
+        "family": "DFF-084",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "tests/test_issue_agent_owner_tag_parser.py::test_valid_owner_test_tags_preserve_the_selector_contract, test_malformed_and_overlong_owner_test_tags_are_ignored, test_adversarial_owner_reply_input_is_bounded_and_linear and test_unclosed_owner_test_tag_does_not_backtrack prove bounded linear parsing with unchanged exact selector evidence.",
+        "family": "DFF-085",
         "outcome": "clear"
       }
     ],
@@ -385,7 +400,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "5977a40c04dc172953c48469f6e08b88214506e2",
+        "blob_sha": "4893492a2cb6045f5d87b41ef742840022d8d15e",
         "path": "scripts/hunter_resolution_reconcile_ingress.py",
         "previous_path": "",
         "status": "added"
@@ -415,7 +430,13 @@
         "status": "added"
       },
       {
-        "blob_sha": "bed4b2ae9f8d5c1b1342e5708f48cf7e5c0bc275",
+        "blob_sha": "56ae76a3b48d73494dd90d8002ca07bbd71a711e",
+        "path": "tests/test_issue_agent_owner_tag_parser.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "2dc52fb41f9416c6cb80299833c97fb0b1a09f4e",
         "path": "tests/test_issue_agent_resolution_reconcile.py",
         "previous_path": "",
         "status": "added"
@@ -445,7 +466,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "ba41d6fb1cf847bceef698f2724c4b022ebd5816",
+        "blob_sha": "296682ba0d4ba85ef2c5215e56ad28ed36680168",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -493,7 +514,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "92bd9b9cfcc7167957f230fd57c87e5000b019ec",
+        "blob_sha": "10d5cc6b65d8f66964eab2d66e3307a3678a0589",
         "path": "src/hunter/automation/issue_agent_control.py",
         "previous_path": "",
         "status": "modified"
@@ -577,11 +598,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "452956fe38ff4d9f4ff75d8548e9b332b6ce82999e083e3accc8fb5ec6fd711b"
+    "review_target_digest": "66a0ff2f698baff2969dc1895da2dc084937a739186f0bdfb766121aacc6a82b"
   },
-  "review_id": "6474d1440001166498c361325c25e84203f1c18187245999215651fc054680c9",
+  "review_id": "847914845500ce808aa9daaed0549cd84ffa2c4c41646d208ce49337d753cb3d",
   "review_request": {
-    "claims_id": "6474d1440001166498c361325c25e84203f1c18187245999215651fc054680c9",
+    "claims_id": "847914845500ce808aa9daaed0549cd84ffa2c4c41646d208ce49337d753cb3d",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"

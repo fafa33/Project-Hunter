@@ -34,6 +34,54 @@ _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _DIGEST = re.compile(r"^sha256:([0-9a-f]{64})$")
 _PR_NUMBER = re.compile(r"^[1-9][0-9]*$")
+#: Only paths minted by the trusted workflow may carry evidence into this
+#: boundary. GitHub sets RUNNER_TEMP/GITHUB_WORKSPACE; a caller cannot widen
+#: either by passing a different CLI value.
+_TRUSTED_ROOT_VARIABLES = ("RUNNER_TEMP", "GITHUB_WORKSPACE")
+_MAX_INPUT_PATH_COMPONENTS = 64
+
+
+def _trusted_roots() -> tuple[Path, ...]:
+    roots: list[Path] = []
+    for name in _TRUSTED_ROOT_VARIABLES:
+        value = os.environ.get(name)
+        if not value:
+            continue
+        try:
+            root = Path(value).resolve(strict=True)
+        except OSError:
+            continue
+        if root.is_dir():
+            roots.append(root)
+    if not roots:
+        raise ValueError("no trusted workflow input boundary is available")
+    return tuple(roots)
+
+
+def _workflow_input_path(raw: object, option: str) -> Path:
+    """Resolve one CLI path inside a trusted workflow root, never through a symlink."""
+
+    supplied = str(raw)
+    candidate = Path(supplied)
+    if ".." in candidate.parts or len(candidate.parts) > _MAX_INPUT_PATH_COMPONENTS:
+        raise ValueError(f"{option} is outside the trusted workflow input boundary")
+    absolute = candidate if candidate.is_absolute() else Path.cwd() / candidate
+    for root in _trusted_roots():
+        if not absolute.is_relative_to(root):
+            continue
+        current = root
+        for part in absolute.relative_to(root).parts:
+            current = current / part
+            if current.is_symlink():
+                raise ValueError(f"{option} escapes the trusted workflow input boundary through a symlink")
+        try:
+            resolved = absolute.resolve(strict=True)
+        except OSError as error:
+            raise ValueError(f"{option} is unreadable ({type(error).__name__})") from error
+        if not resolved.is_relative_to(root) or not resolved.is_file():
+            raise ValueError(f"{option} is outside the trusted workflow input boundary")
+        return resolved
+    raise ValueError(f"{option} is outside the trusted workflow input boundary")
 
 
 def select_resolved_pull_requests(
@@ -191,10 +239,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
-        event = json.loads(args.event.read_text(encoding="utf-8"))
-        jobs = json.loads(args.jobs.read_text(encoding="utf-8"))
-        artifacts = json.loads(args.artifacts.read_text(encoding="utf-8"))
-        archive = args.evidence_zip.read_bytes()
+        event_path = _workflow_input_path(args.event, "--event")
+        jobs_path = _workflow_input_path(args.jobs, "--jobs")
+        artifacts_path = _workflow_input_path(args.artifacts, "--artifacts")
+        archive_path = _workflow_input_path(args.evidence_zip, "--evidence-zip")
+        event = json.loads(event_path.read_text(encoding="utf-8"))
+        jobs = json.loads(jobs_path.read_text(encoding="utf-8"))
+        artifacts = json.loads(artifacts_path.read_text(encoding="utf-8"))
+        archive = archive_path.read_bytes()
     except (OSError, ValueError) as error:
         print(f"resolution reconcile ingress cannot read trusted evidence: {error}", file=sys.stderr)
         return 2

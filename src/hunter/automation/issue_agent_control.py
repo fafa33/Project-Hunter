@@ -125,8 +125,46 @@ _SHA64 = re.compile(r"[0-9a-f]{64}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}")
 #: ADR 0039 L7 manual-PR adoption: the same two bounded selectors the collector parses from an owner reply.
 _OWNER_FAMILY_TAG = re.compile(r"\[family:(DFF-[0-9]{3})\]", re.IGNORECASE)
-_OWNER_TEST_TAG = re.compile(r"\[test:([^\]]+::[^\]]+)\]", re.IGNORECASE)
+#: Bounded, linear replacement for ``r"\[test:([^\]]+::[^\]]+)\]"``. The old
+#: form backtracked super-linearly on owner-controlled colons without a closing
+#: bracket. These limits are part of the evidence contract, not tuning knobs.
+OWNER_TEST_PREFIX = "[test:"
+MAX_OWNER_TEST_SELECTOR_CHARS = 512
+MAX_OWNER_TEST_TAGS = 64
 COMMENTS_PAGE_SIZE = 100
+
+
+def owner_test_selectors(body: str) -> tuple[str, ...]:
+    """Return bounded ``[test:<path>::<selector>]`` values in encounter order.
+
+    Scanning only advances forward: each prefix or closing bracket is found at
+    most once, oversized/malformed tags are skipped, and both selector length
+    and tag count are capped. The caller still compares the exact uppercase
+    set against the signed receipt, so a skipped tag can never authorize.
+    """
+
+    selectors: list[str] = []
+    position = 0
+    while len(selectors) < MAX_OWNER_TEST_TAGS:
+        bracket = body.find("[", position)
+        if bracket < 0:
+            break
+        if body[bracket : bracket + len(OWNER_TEST_PREFIX)].lower() != OWNER_TEST_PREFIX:
+            position = bracket + 1
+            continue
+        content_start = bracket + len(OWNER_TEST_PREFIX)
+        close = body.find("]", content_start)
+        if close < 0:
+            break
+        position = close + 1
+        content = body[content_start:close]
+        if len(content) > MAX_OWNER_TEST_SELECTOR_CHARS:
+            continue
+        separator = content.rfind("::")
+        if separator <= 0 or separator + 2 >= len(content):
+            continue
+        selectors.append(content)
+    return tuple(selectors)
 
 
 class ControlRefused(RuntimeError):
@@ -1608,7 +1646,7 @@ def live_evidence_reply(
         family = _OWNER_FAMILY_TAG.search(body)
         if family is None or family.group(1).upper() != family_id.upper():
             continue
-        if {match.upper() for match in _OWNER_TEST_TAG.findall(body)} != wanted:
+        if {selector.upper() for selector in owner_test_selectors(body)} != wanted:
             continue
         identity = item.get("id")
         if type(identity) is int and identity > 0:

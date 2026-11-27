@@ -26,6 +26,15 @@ import yaml
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
+
+@pytest.fixture(autouse=True)
+def _trusted_workflow_root(monkeypatch: pytest.MonkeyPatch, tmp_path: pathlib.Path) -> None:
+    """Model the hosted boundary: every workflow-supplied path lives under RUNNER_TEMP."""
+
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+
+
 WORKFLOW_NAME = "Hunter / Issue Agent Reconcile"
 RESOLVER_JOB = "resolve-finding"
 RESOLVE_OUTPUT = "resolved_pr_numbers"
@@ -424,3 +433,78 @@ def test_scheduled_sweep_remains_the_recovery_path_only() -> None:
     on = _triggers(document)
     assert on["schedule"] == [{"cron": "*/5 * * * *"}]
     assert document["concurrency"]["cancel-in-progress"] is False
+
+
+def _ingress_cli(tmp_path: pathlib.Path, overrides: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    """Run the real CLI with one artifact-bound evidence set under the trusted root."""
+
+    script = ROOT / "scripts" / "hunter_resolution_reconcile_ingress.py"
+    evidence = _evidence(pr_numbers=[789])
+    payload, digest = _archive(evidence)
+    _write(tmp_path / "event.json", _event())
+    _write(tmp_path / "jobs.json", _jobs())
+    _write(tmp_path / "artifacts.json", _artifacts(digest=digest))
+    (tmp_path / "artifact.zip").write_bytes(payload)
+    options = {
+        "--event": str(tmp_path / "event.json"),
+        "--jobs": str(tmp_path / "jobs.json"),
+        "--artifacts": str(tmp_path / "artifacts.json"),
+        "--evidence-zip": str(tmp_path / "artifact.zip"),
+    }
+    options.update(overrides or {})
+    argv = [sys.executable, str(script)]
+    for name, value in options.items():
+        argv.extend((name, value))
+    argv.extend(("--repository", REPOSITORY, "--for-shell"))
+    return subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        check=False,
+        env={**os.environ, "PYTHONPATH": str(ROOT / "scripts")},
+    )
+
+
+def test_legitimate_workflow_input_paths_are_accepted(tmp_path: pathlib.Path) -> None:
+    result = _ingress_cli(tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "789\n"
+
+
+@pytest.mark.parametrize("option", ["--event", "--jobs", "--artifacts", "--evidence-zip"])
+def test_cli_input_paths_cannot_escape_the_trusted_workflow_root(tmp_path: pathlib.Path, option: str) -> None:
+    outside = tmp_path.parent / f"hunter-outside-{tmp_path.name}"
+    outside.mkdir(exist_ok=True)
+    evidence = _evidence(pr_numbers=[789])
+    payload, digest = _archive(evidence)
+    _write(outside / "event.json", _event())
+    _write(outside / "jobs.json", _jobs())
+    _write(outside / "artifacts.json", _artifacts(digest=digest))
+    (outside / "artifact.zip").write_bytes(payload)
+
+    escapes = {
+        "traversal": str(tmp_path / ".." / outside.name / "event.json"),
+        "absolute": str(outside / "event.json"),
+    }
+    for label, hostile in escapes.items():
+        result = _ingress_cli(tmp_path, {option: hostile})
+        assert result.returncode == 2, (label, option, result.stdout, result.stderr)
+        assert "trusted workflow input boundary" in result.stderr
+
+
+def test_symlink_input_paths_cannot_escape_the_trusted_workflow_root(tmp_path: pathlib.Path) -> None:
+    outside = tmp_path.parent / f"hunter-outside-{tmp_path.name}"
+    outside.mkdir(exist_ok=True)
+    evidence = _evidence(pr_numbers=[789])
+    payload, digest = _archive(evidence)
+    _write(outside / "event.json", _event())
+    (tmp_path / "linked-event.json").symlink_to(outside / "event.json")
+
+    result = _ingress_cli(tmp_path, {"--event": str(tmp_path / "linked-event.json")})
+    assert result.returncode == 2
+    assert "trusted workflow input boundary" in result.stderr
+
+    (tmp_path / "linked-dir").symlink_to(outside, target_is_directory=True)
+    result = _ingress_cli(tmp_path, {"--jobs": str(tmp_path / "linked-dir" / "jobs.json")})
+    assert result.returncode == 2
+    assert "trusted workflow input boundary" in result.stderr

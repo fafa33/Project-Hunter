@@ -3145,7 +3145,7 @@
     {
       "id": "DFF-080",
       "title": "unsupported-workflow-step-output-cross-workflow-evidence",
-      "invariant": "Cross-workflow evidence may use only documented, authenticated GitHub API surfaces. The workflow jobs response has no steps[].outputs field; a resolver identity must travel in a uniquely named immutable Actions artifact bound to the exact repository, workflow, run id, attempt, job and head, with a verified artifact digest and canonical evidence payload.",
+      "invariant": "Cross-workflow evidence may use only documented, authenticated GitHub API surfaces. The workflow jobs response has no steps[].outputs field; a resolver identity must travel in a uniquely named immutable Actions artifact bound to the exact repository, workflow, run id, attempt, job and head, with a verified artifact digest and canonical evidence payload. Every CLI-supplied evidence path must also remain inside the trusted workflow root (RUNNER_TEMP/GITHUB_WORKSPACE): `..`, absolute-path escape and symlink components are refused before any read.",
       "applicability": {
         "changed_paths": [
           ".github/workflows/hunter-governance-reconcile.yml",
@@ -3155,7 +3155,7 @@
         "rationale": "A producer that invents a response field and a consumer that trusts it can never interoperate against the live API; both sides of the cross-workflow channel plus the trusted ingress are one enforcement unit."
       },
       "prevention": {
-        "mechanism": "The resolver uploads resolution-evidence.json as a digest-bound artifact named for its exact run id and attempt without gaining actions:write. The trusted reconciler lists and downloads that artifact through the authenticated API and `select_resolved_pull_requests` validates the documented jobs/artifact shapes, exact run/repository/workflow/head bindings, artifact digest, schema and PR identities; any missing, stale, ambiguous or untrusted value yields no wake-up.",
+        "mechanism": "The resolver uploads resolution-evidence.json as a digest-bound artifact named for its exact run id and attempt without gaining actions:write. The trusted reconciler lists and downloads that artifact through the authenticated API and `select_resolved_pull_requests` validates the documented jobs/artifact shapes, exact run/repository/workflow/head bindings, artifact digest, schema and PR identities; any missing, stale, ambiguous or untrusted value yields no wake-up. `main()` resolves each CLI path through `_workflow_input_path` against trusted workflow roots before reading; traversal, external absolute paths and symlinked components fail closed with exit code 2.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_resolution_reconcile_ingress.py::select_resolved_pull_requests"
       },
@@ -3163,11 +3163,15 @@
         "tests/test_issue_agent_resolution_reconcile.py::test_jobs_api_shape_without_step_outputs_is_the_only_producer_identity",
         "tests/test_issue_agent_resolution_reconcile.py::test_successful_trusted_artifact_selects_only_the_affected_pr",
         "tests/test_issue_agent_resolution_reconcile.py::test_untrusted_ambiguous_or_stale_artifacts_fail_closed",
-        "tests/test_issue_agent_resolution_reconcile.py::test_mismatched_or_malformed_evidence_fails_closed"
+        "tests/test_issue_agent_resolution_reconcile.py::test_mismatched_or_malformed_evidence_fails_closed",
+        "tests/test_issue_agent_resolution_reconcile.py::test_legitimate_workflow_input_paths_are_accepted",
+        "tests/test_issue_agent_resolution_reconcile.py::test_cli_input_paths_cannot_escape_the_trusted_workflow_root",
+        "tests/test_issue_agent_resolution_reconcile.py::test_symlink_input_paths_cannot_escape_the_trusted_workflow_root"
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "Issue #575 / PR #789 review thread PRRT_kwDOTRDHr8682GTN, 2026-11-27: the trusted reconciler read `steps[].outputs` from the jobs API, a field GitHub does not expose. GitHub's documented jobs and artifact response schemas were verified before replacing that channel; no workflow authority or caller-shaped payload was added."
+        "Issue #575 / PR #789 review thread PRRT_kwDOTRDHr8682GTN, 2026-11-27: the trusted reconciler read `steps[].outputs` from the jobs API, a field GitHub does not expose. GitHub's documented jobs and artifact response schemas were verified before replacing that channel; no workflow authority or caller-shaped payload was added.",
+        "SonarCloud issue AaIfCc_g6-O7kMFOyZhr, 2026-11-28: the artifact-ingress fix validated payload binding but read CLI paths directly. Path provenance is part of the same trusted artifact boundary."
       ]
     },
     {
@@ -3236,7 +3240,7 @@
         "rationale": "The resolver call site and its proof/write helpers are one authority boundary: nesting a ledger-independent proof in a ledger-dependent loop makes the proof unreachable or duplicated."
       },
       "prevention": {
-        "mechanism": "cmd_resolve now runs a governed pass over verified Issue ledgers and a separate manual pass over sorted knowledge findings, skipping findings already handled or blocked by an indefinite governed proof. A shared apply_proof helper preserves the existing authorization, receipt, idempotency and exact-head checks; ledger failures are scoped to their governed issue and cannot stop the manual pass. Only a newly durable resolution publishes a PR identity.",
+        "mechanism": "cmd_resolve now runs a governed pass over verified Issue ledgers and a separate manual pass over sorted knowledge findings, skipping findings already handled or blocked by an indefinite governed proof. A shared apply_proof helper preserves the existing authorization, receipt, idempotency and exact-head checks; ledger failures are scoped to their governed issue and cannot stop the manual pass. Only a newly durable resolution publishes a PR identity. Owner `[test:...]` evidence is extracted by bounded linear `owner_test_selectors`; an unbounded regex is never used on owner-controlled reply bodies.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_issue_agent_lifecycle.py::cmd_resolve"
       },
@@ -3244,11 +3248,70 @@
         "tests/test_issue_agent_manual_pr_resolution.py::test_manual_adoption_runs_without_any_active_issue_ledger",
         "tests/test_issue_agent_manual_pr_resolution.py::test_manual_adoption_runs_with_multiple_and_mixed_ledgers",
         "tests/test_issue_agent_manual_pr_resolution.py::test_invalid_receipt_evidence_is_never_adopted",
-        "tests/test_issue_agent_manual_pr_resolution.py::test_a_head_that_moves_after_proof_is_never_mutated"
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_head_that_moves_after_proof_is_never_mutated",
+        "tests/test_issue_agent_owner_tag_parser.py::test_valid_owner_test_tags_preserve_the_selector_contract",
+        "tests/test_issue_agent_owner_tag_parser.py::test_malformed_and_overlong_owner_test_tags_are_ignored",
+        "tests/test_issue_agent_owner_tag_parser.py::test_adversarial_owner_reply_input_is_bounded_and_linear"
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "Issue #575 / PR #789 review thread PRRT_kwDOTRDHr8682GTd, 2026-11-27: manual adoption was nested inside the active Issue-ledger loop, so a scheduled run with no ledgers never evaluated the signed receipt. The fix keeps governed proof ledger-bound and evaluates manual evidence independently and once."
+        "Issue #575 / PR #789 review thread PRRT_kwDOTRDHr8682GTd, 2026-11-27: manual adoption was nested inside the active Issue-ledger loop, so a scheduled run with no ledgers never evaluated the signed receipt. The fix keeps governed proof ledger-bound and evaluates manual evidence independently and once.",
+        "SonarCloud issue AaIcXQzl9baHMF1NKqJi, 2026-11-28: owner-reply authority was guarded, but its selector regex used two greedy classes around `::` and could backtrack super-linearly on adversarial input."
+      ]
+    },
+    {
+      "id": "DFF-084",
+      "title": "untrusted-cli-path-escape-into-trusted-ingress",
+      "invariant": "A trusted ingress may read only paths minted by the workflow boundary. Directory traversal, absolute paths outside RUNNER_TEMP/GITHUB_WORKSPACE and symlink components must fail closed before any evidence read, while normal workflow artifact paths remain accepted.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_resolution_reconcile_ingress.py",
+          "tests/test_issue_agent_resolution_reconcile.py"
+        ],
+        "rationale": "The CLI path is the boundary of this ingress. Payload validation cannot repair evidence read from a caller-chosen external file, so both the resolver and its executable regressions are one enforcement unit."
+      },
+      "prevention": {
+        "mechanism": "`_workflow_input_path` rejects `..` components, requires absolute/relative paths to remain under an existing trusted workflow root, rejects every symlink component in that path, requires a regular file, and resolves exactly that file before JSON/zip reads. Missing roots or unreadable paths also fail closed.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_resolution_reconcile_ingress.py::_workflow_input_path"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_resolution_reconcile.py::test_legitimate_workflow_input_paths_are_accepted",
+        "tests/test_issue_agent_resolution_reconcile.py::test_cli_input_paths_cannot_escape_the_trusted_workflow_root",
+        "tests/test_issue_agent_resolution_reconcile.py::test_symlink_input_paths_cannot_escape_the_trusted_workflow_root"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "SonarCloud issue AaIfCc_g6-O7kMFOyZhr, 2026-11-28: DFF-080/081 validated what the ingress believed but not where its four CLI inputs came from. This family closes that missing provenance step without weakening the real artifact path used by hunter-governance-reconcile.yml."
+      ]
+    },
+    {
+      "id": "DFF-085",
+      "title": "super-linear-owner-evidence-tag-parsing",
+      "invariant": "Owner-controlled evidence tags must be parsed by bounded linear scanning. Regexes with multiple unbounded quantified classes separated by a literal delimiter are not admissible on comment bodies.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/issue_agent_control.py",
+          "tests/test_issue_agent_owner_tag_parser.py",
+          "tests/test_issue_agent_manual_pr_resolution.py"
+        ],
+        "rationale": "The collector parses owner replies before exact-head resolution; a super-linear parser on an adversarial comment can stall or exhaust the privileged resolver."
+      },
+      "prevention": {
+        "mechanism": "`owner_test_selectors` scans forward with `str.find`, caps selector length at 512 characters and tag count at 64, ignores malformed/overlong tags, and leaves the existing uppercase exact-set comparison against the signed receipt unchanged. No unbounded regex remains on this path.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/automation/issue_agent_control.py::owner_test_selectors"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_owner_tag_parser.py::test_valid_owner_test_tags_preserve_the_selector_contract",
+        "tests/test_issue_agent_owner_tag_parser.py::test_malformed_and_overlong_owner_test_tags_are_ignored",
+        "tests/test_issue_agent_owner_tag_parser.py::test_adversarial_owner_reply_input_is_bounded_and_linear",
+        "tests/test_issue_agent_owner_tag_parser.py::test_unclosed_owner_test_tag_does_not_backtrack",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_unauthorized_or_mismatched_owner_replies_are_never_adopted"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "SonarCloud issue AaIcXQzl9baHMF1NKqJi, 2026-11-28: DFF-060/083 guarded who may authorize but the `[test:...]` extraction still used `r\"\\[test:([^\\]]+::[^\\]]+)\\]\"`, which can backtrack super-linearly. The fix preserves the two-selector evidence contract with explicit bounds."
       ]
     }
   ],
