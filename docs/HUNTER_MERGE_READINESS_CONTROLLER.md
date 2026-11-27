@@ -66,6 +66,7 @@ authority or an instruction to relax required checks.
 | --- | --- | --- | --- |
 | Live PR Draft, mergeability, exact HEAD | GitHub PR API | Draft/unknown mergeability: pending; conflict: failure | Event wake-up plus bounded trusted sweep |
 | Unresolved threads and current changes-requested reviews | GitHub review API | Unresolved or changes requested: failure; API unavailable: no success | Review event plus trusted sweep |
+| Verified thread resolution (Issue #575) | Trusted Issue Agent resolver's durable PR-number output and workflow_run completion | Failed, ambiguous, duplicate or stale-head event: no wake-up; no false readiness | Scoped exact-head governance reconciliation; 5-minute sweep remains recovery for UI/manual resolutions |
 | Candidate admission and trusted preflight | Existing trusted exact-HEAD status | Pending/missing: pending; failure: failure | Existing candidate/governance workflows |
 | Knowledge Receipt and registered-Issue acceptance | Trusted exact-HEAD producer | Pending/missing: pending; failure: failure | Existing receipt/governance workflows |
 | Required Quality Gates, dependency-review and CodeQL | Current exact-HEAD check runs | Missing/in-progress: pending; terminal failure: failure | GitHub check events and trusted sweep |

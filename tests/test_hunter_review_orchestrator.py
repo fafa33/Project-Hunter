@@ -2689,7 +2689,8 @@ def test_reconcile_workflow_passes_expected_head_to_both_trusted_controllers():
     assert source.count('if [ "${') >= 1
     assert source.count('"-eq 5"') == 0  # Bash compares the numeric result, not a string.
     assert source.count(" -eq 5 ]") == 2
-    assert source.count("suppressing invocation outcome markers") == 2
+    # Two trusted controller calls plus the Issue #575 post-marker HEAD race.
+    assert source.count("suppressing invocation outcome markers") == 3
 
 
 def test_exact_head_codex_completion_prevents_new_collector_dispatch(monkeypatch):

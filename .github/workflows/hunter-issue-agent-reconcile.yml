@@ -109,6 +109,7 @@ jobs:
       - name: Install pinned runtime
         run: python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt .
       - name: Prove the exact head, answer and resolve the exact thread
+        id: resolve
         env:
           GITHUB_TOKEN: ${{ github.token }}
           HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}

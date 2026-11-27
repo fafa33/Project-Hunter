@@ -1394,6 +1394,7 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
     known = _knowledge_view(configuration, github)
     resolved = 0
     resolved_proofs: list[control.ResolutionProof] = []
+    reconciled_pr_numbers: set[int] = set()
     for issue in ([arguments.issue] if arguments.issue else _active_issues(configuration)):
         _head, state_view = control.load_ledger(store, configuration, provenance, issue)
         for finding_id in sorted(known.findings):
@@ -1513,6 +1514,10 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
                         recorded_by=writer.recorded_by(),
                         recorded_at=_timestamp(),
                     )
+                # ADR 0039 L7: only a newly durable resolution is eligible to wake
+                # trusted reconciliation. The idempotent already-resolved branch
+                # above deliberately does not publish a PR identity.
+                reconciled_pr_numbers.add(proof.pull_request_number)
                 resolved += 1
                 resolved_proofs.append(proof)
                 print(f"issue {issue}: resolved {finding_id[:12]} at {proof.remediated_head_sha[:12]}")
@@ -1520,14 +1525,21 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
                 print(f"issue {issue}: no-op ({error})")
             except state.LedgerConflictError:
                 print(f"issue {issue}: no-op (the knowledge ledger moved; the next pass re-decides)")
-    if resolved:
-        # A thread resolution does not wake a privileged workflow. The readiness
-        # status refreshes on the event-driven workflow_run chain while checks run,
-        # and otherwise on the trusted scheduled sweep (best-effort; GitHub may
-        # delay it). An operator can force a refresh with GitHub's own "Re-run all jobs"
-        # on a Merge Readiness run. This job deliberately holds no `actions: write` and
-        # never dispatches a status-writing workflow.
-        print("merge readiness refresh deferred to trusted scheduled sweep")
+    if reconciled_pr_numbers:
+        # ADR 0039 L7: this resolver still holds no `actions: write` and makes no
+        # privileged workflow call. It only publishes the affected PR identities
+        # after the signed knowledge append and verified thread resolution. The
+        # trusted workflow_run completion is the event-driven wake-up; the 5-minute
+        # sweep remains bounded recovery for events GitHub does not emit, including
+        # an owner resolving a thread outside this resolver.
+        numbers = ",".join(str(number) for number in sorted(reconciled_pr_numbers))
+        _output(resolved_pr_numbers=numbers)
+        print(
+            f"trusted issue-agent workflow completion wakes governance reconcile for PR #{numbers}; "
+            "scheduled sweep remains recovery"
+        )
+    elif resolved:
+        print("all resolved findings were already durable; scheduled sweep remains recovery")
     return 0 if resolved or arguments.issue else EXIT_NOOP
 
 

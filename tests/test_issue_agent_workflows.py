@@ -595,15 +595,16 @@ def test_resolve_finding_is_event_driven_for_pr_review_lifecycle() -> None:
     assert "scripts/hunter_issue_agent_lifecycle.py resolve-finding" in str(job["steps"])
 
 
-def test_resolve_finding_uses_trusted_scheduled_readiness() -> None:
-    """Thread resolution cannot dispatch a candidate-controlled privileged workflow."""
+def test_resolve_finding_publishes_scoped_reconcile_identity_without_dispatch() -> None:
+    """Thread resolution emits identity only; trusted completion performs the wake-up."""
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
     lifecycle = (root / "scripts/hunter_issue_agent_lifecycle.py").read_text()
     resolve_body = lifecycle.split("def cmd_resolve(", 1)[1].split("\ndef cmd_resume_bind(", 1)[0]
     assert 'github.dispatch("hunter-merge-readiness.yml"' not in resolve_body
-    assert "trusted scheduled sweep" in resolve_body
+    assert "_output(resolved_pr_numbers=" in resolve_body
+    assert "scheduled sweep remains recovery" in resolve_body
     assert "resolved_proofs.append(proof)" in resolve_body
     workflow = (root / ".github/workflows/hunter-issue-agent-reconcile.yml").read_text()
     resolve_job = workflow.split("  resolve-finding:", 1)[1].split("    steps:", 1)[0]

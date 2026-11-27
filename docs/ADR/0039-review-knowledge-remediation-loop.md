@@ -7,7 +7,10 @@ D1–D3, Issue #706). **Amended** 2026-11-12 by L11 (owner decisions, Issue #527
 finding must carry a fast-path Knowledge Receipt before it can be treated as complete; the policy itself is this
 amendment plus the mandatory lifecycle it encodes below. **Amended** 2026-11-27 by the L7 manual-PR resolution
 adoption (Issue #575): the resolver may resolve an exact finding thread on a manually created PR from signed
-receipt evidence, as specified in L7 below. This is a binding amendment of:
+receipt evidence, as specified in L7 below. **Amended** again 2026-11-27 by the owner-directed post-resolution
+reconciliation scope extension (Issue #575): a verified durable resolution publishes affected PR identities, and
+the trusted Issue Agent resolver workflow completion wakes the existing privileged governance reconciler, as
+specified in the L7 reconciliation subsection below. This is a binding amendment of:
 
 - ADR 0037 D6 (publication becomes create-only **or fast-forward from the bound head** for a remediation);
 - ADR 0037 D9/D1, which add a knowledge ledger and a remediation authorization next to the Issue ledger;
@@ -230,6 +233,25 @@ names a verified exact-head receipt and no governed proof exists. Missing, stale
 unauthenticated evidence is a no-op, and a reply that landed but whose resolve was refused is retried by reusing
 that reply — never by posting a duplicate. This closes the writer-provenance defect where the resolver recorded
 the non-existent job id `resolve` instead of the real trusted `resolve-finding` job.
+
+#### L7 post-resolution reconciliation wake-up (Issue #575, 2026-11-27)
+
+After a **newly durable** resolution (the signed `thread_resolved` append plus verified GitHub thread mutation),
+`cmd_resolve` publishes only the affected PR numbers through `GITHUB_OUTPUT`. It still has no `actions: write`,
+performs no workflow call, and never marks readiness itself. GitHub delivers a real `workflow_run` completion for
+the trusted `Hunter / Issue Agent Reconcile` run; the existing privileged `Hunter Governance Review Reconcile`
+workflow consumes that completion only when the run and its `resolve-finding` job both succeeded and exactly one
+well-formed PR-number output exists. The ingress rejects failed, cancelled, duplicated, malformed or
+caller-shaped evidence. The reconciler then scopes work to those PRs, re-derives each current HEAD from the live
+PR API, records a run/attempt marker at that exact HEAD, re-reads HEAD after the marker, and passes that HEAD as
+`--expected-head`; a moved head or duplicate marker fails closed. The global non-cancelling concurrency group
+serializes duplicate events, and the 5-minute sweep remains bounded recovery only.
+
+This covers automatic resolver runs and manually **dispatched resolver runs** through the same trusted completion
+event. GitHub emits no workflow event when an owner resolves a thread directly in the UI, so this ADR does **not**
+claim immediate reconciliation for that path; it remains on the existing sweep. No merge authorization, default-branch
+activation or production behavior is claimed before this implementation is deployed on the trusted default branch.
+DFF-063 records the invariant and its focused regression evidence.
 
 ### L8. Failure and restart
 

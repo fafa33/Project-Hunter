@@ -3103,6 +3103,40 @@
       "sources": [
         "Issue #575 / PR #789 exact-head Trusted Preflight run 45974936031, job 140424215026, 2026-11-27: hosted Pytest reported `anchor is not unique` for the refused-resolve and wrong-head mutation cases because the resolver implementation had changed their exact text. All 22 anchors were revalidated, the two decisions were retargeted without weakening either check, the two focused mutant cases were killed, and 134 affected remediation and manual-adoption tests passed locally."
       ]
+    },
+    {
+      "id": "DFF-063",
+      "title": "post-resolution-readiness-wakeup-asymmetry",
+      "invariant": "A verified thread resolution that changes the inputs to a downstream readiness gate must have an event-driven path from the trusted producer to that gate. The resolver must publish only affected PR identities after durable knowledge persistence; a trusted workflow_run completion may wake privileged reconciliation only when the resolver job succeeded and published unambiguous identities. Failed, ambiguous, duplicate or stale-head events must produce no readiness refresh, and github events that do not exist (such as an owner resolving a thread in the UI) must remain on the bounded scheduled sweep rather than being claimed as immediate.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-governance-reconcile.yml",
+          ".github/workflows/hunter-issue-agent-reconcile.yml",
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "scripts/hunter_resolution_reconcile_ingress.py",
+          "scripts/hunter_merge_readiness_v2.py",
+          "docs/CODE_WRITE_POLICY.json"
+        ],
+        "rationale": "The resolver's durable-write boundary, its workflow completion event, the trusted privileged reconciler's trigger/scope gate, and the readiness consumer are one lifecycle unit. A change to any one can leave a stale BLOCKING_FINDINGS status after resolution or let an untrusted/ambiguous event publish false readiness."
+      },
+      "prevention": {
+        "mechanism": "cmd_resolve emits `resolved_pr_numbers` through GITHUB_OUTPUT only after the signed knowledge append and verified thread mutation, and only for newly durable resolutions. Hunter Governance Review Reconcile adds the actual `Hunter / Issue Agent Reconcile` workflow_run completion, then reads that run's `resolve-finding` job outputs with the trusted Actions API; `hunter_resolution_reconcile_ingress.select_resolved_pull_requests` requires success, one resolver job, one well-formed numeric PR set, and rejects failure/cancellation/malformed/duplicate producer data. Reconciliation is scoped to those PRs, re-derives each current HEAD from the live PR API, publishes a run/attempt marker at that exact HEAD before invocation, re-reads HEAD after the marker, and passes `--expected-head` so a moved head fails closed. The resolver still holds no `actions: write` and makes no workflow call; the global non-cancelling concurrency group serializes duplicate events; the 5-minute sweep remains recovery only.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_issue_agent_lifecycle.py::cmd_resolve"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_resolution_reconcile.py::test_governance_reconcile_uses_the_actual_issue_agent_completion_event",
+        "tests/test_issue_agent_resolution_reconcile.py::test_resolver_publishes_scoped_output_without_gaining_workflow_authority",
+        "tests/test_issue_agent_resolution_reconcile.py::test_successful_resolver_output_selects_only_the_affected_pr",
+        "tests/test_issue_agent_resolution_reconcile.py::test_failed_or_incomplete_resolution_never_creates_false_readiness",
+        "tests/test_issue_agent_resolution_reconcile.py::test_duplicate_malformed_and_untrusted_outputs_fail_closed",
+        "tests/test_issue_agent_resolution_reconcile.py::test_manual_thread_resolution_without_a_trusted_resolver_output_is_recovery_only",
+        "tests/test_issue_agent_resolution_reconcile.py::test_reconcile_dedupes_events_and_rebinds_exact_head_before_refresh"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789, 2026-11-27: cmd_resolve explicitly deferred readiness refresh to the trusted 5-minute sweep after successful resolution. Owner-authorized scope extension recorded on Issue #575 required immediate post-resolution reconciliation without granting the resolver workflow authority. Issue #588 M1 knowledge and DFF-046 establish that a downstream gate's lifecycle transition must have an event-driven trusted prerequisite path and that schedules are recovery, not freshness guarantees. The fix reuses the existing privileged governance reconciler and its workflow_run mechanism; no new credential, privileged candidate execution path, merge authorization or production activation is claimed."
+      ]
     }
   ],
   "preventive_obligations": [

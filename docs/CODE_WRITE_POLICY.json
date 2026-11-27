@@ -457,6 +457,7 @@
       "scripts/hunter_issue_agent_issuer.py",
       "scripts/hunter_workspace_grant_publish.py",
       "scripts/hunter_issue_agent_lifecycle.py",
+      "scripts/hunter_resolution_reconcile_ingress.py",
       "scripts/hunter_issue_agent_provisioner.py",
       "scripts/hunter_issue_agent_trigger.py",
       "scripts/issue_agent_edge_transport.py",

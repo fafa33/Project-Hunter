@@ -43,6 +43,14 @@ name: Hunter Governance Review Reconcile
 # any review-request lookup or dispatch. Exact-head binding is unaffected: the
 # step passes only `--pr`, and the orchestrator re-derives the current HEAD from
 # trusted GitHub state rather than from this event's payload.
+#
+# Issue #575: verified Issue Agent thread resolution also needs an immediate
+# current-state refresh. The resolver has no workflow authority, so this trusted
+# workflow observes its real `workflow_run` completion, accepts only the scoped
+# PR identities published after durable knowledge persistence, and rebinds the
+# exact HEAD from live GitHub state before every invocation. The 5-minute sweep
+# remains recovery, including for thread resolutions GitHub does not emit as a
+# workflow event.
 
 on:
   push:
@@ -54,6 +62,7 @@ on:
       - Hunter / Trusted Preflight Upgrade
       - Hunter Governance Review
       - Hunter Reviewer Collector
+      - Hunter / Issue Agent Reconcile
     types:
       - completed
   # Bot-authored review events are approval-held by GitHub. The trusted
@@ -107,6 +116,9 @@ jobs:
           EVENT_WORKFLOW_RUN_TITLE: ${{ github.event.workflow_run.display_title }}
           EVENT_WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           EVENT_WORKFLOW_RUN_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          EVENT_WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          EVENT_WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          EVENT_WORKFLOW_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
         run: |
           set -euo pipefail
           # Event-driven reconciliation is deliberately scoped to the PR that
@@ -114,6 +126,8 @@ jobs:
           # multiplies API traffic and can exhaust the installation rate limit.
           # Scheduled/manual recovery remains the bounded full-sweep path.
           event_name="${{ github.event_name }}"
+          failures=0
+          resolution_marker=""
           if [[ "${event_name}" == "pull_request_target" ]]; then
             pr_numbers="${{ github.event.pull_request.number }}"
           elif [[ "${event_name}" == "workflow_run" && "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Governance Review" ]]; then
@@ -133,6 +147,36 @@ jobs:
             # this event, which cannot express them). A malformed or absent
             # title yields no PR number, which the loop below already skips.
             pr_numbers="$(printf '%s' "${EVENT_WORKFLOW_RUN_TITLE}" | grep -oE '^Hunter Reviewer Collector PR [0-9]+' | grep -oE '[0-9]+$' || true)"
+          elif [[ "${event_name}" == "workflow_run" && "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter / Issue Agent Reconcile" ]]; then
+            # Issue #575: the resolver job has no `actions: write`. Its own workflow
+            # run completion is the trusted wake-up, but only if the resolver job
+            # succeeded and published PR identities after its durable knowledge
+            # append. A failed, ambiguous or manually resolved thread yields no
+            # identity here and remains on the bounded scheduled sweep.
+            if [[ "${EVENT_WORKFLOW_RUN_CONCLUSION}" != "success" ]]; then
+              echo "::notice::Skipping resolution wake-up: resolver workflow conclusion ${EVENT_WORKFLOW_RUN_CONCLUSION}."
+              pr_numbers=""
+            else
+              jobs_json="$(mktemp)"
+              if ! gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${EVENT_WORKFLOW_RUN_ID}/attempts/${EVENT_WORKFLOW_RUN_ATTEMPT}/jobs?per_page=100" > "${jobs_json}"; then
+                echo "::error::Cannot read resolver jobs for run ${EVENT_WORKFLOW_RUN_ID}; skipping wake-up."
+                failures=1
+                pr_numbers=""
+              else
+                resolution_output="$(
+                  python scripts/hunter_resolution_reconcile_ingress.py \
+                    --event "${GITHUB_EVENT_PATH}" \
+                    --jobs "${jobs_json}" \
+                    --event-name "${event_name}"
+                )" || resolution_output="pr_numbers="
+                echo "${resolution_output}" >> "${GITHUB_OUTPUT}"
+                pr_numbers="${resolution_output#pr_numbers=}"
+                if [[ -n "${pr_numbers}" ]]; then
+                  resolution_marker="hunter-resolution-reconcile/${EVENT_WORKFLOW_RUN_ID}/${EVENT_WORKFLOW_RUN_ATTEMPT}"
+                fi
+              fi
+              rm -f "${jobs_json}"
+            fi
           elif [[ "${event_name}" == "workflow_run" ]]; then
             pr_numbers="$(
               gh pr list \
@@ -153,7 +197,6 @@ jobs:
             )"
           fi
 
-          failures=0
           while read -r pr_number; do
             [ -z "${pr_number}" ] && continue
             # Bind each invocation's failure marker to the live candidate HEAD
@@ -169,6 +212,43 @@ jobs:
               echo "::error::Cannot bind reconcile invocation to PR #${pr_number} HEAD; continuing."
               failures=1
               continue
+            fi
+            if [[ -n "${resolution_marker}" ]]; then
+              # One source run/attempt may reconcile a given exact head only once.
+              # The global concurrency group serializes this check with marker
+              # publication, so a duplicate event sees the existing marker.
+              marker_count="$(
+                gh api "repos/${GITHUB_REPOSITORY}/commits/${invocation_head}/statuses" \
+                  --paginate \
+                  --jq "[.[] | select(.context == \"${resolution_marker}\")] | length"
+              )" || marker_count=""
+              if [[ -z "${marker_count}" ]]; then
+                echo "::error::Cannot read resolution reconcile marker for PR #${pr_number}; continuing."
+                failures=1
+                continue
+              fi
+              if [[ "${marker_count}" != "0" ]]; then
+                echo "::notice::Duplicate resolution wake-up for PR #${pr_number}; already reconciled at ${invocation_head}."
+                continue
+              fi
+              if ! gh api "repos/${GITHUB_REPOSITORY}/statuses/${invocation_head}" \
+                -f state=pending \
+                -f context="${resolution_marker}" \
+                -f description="Resolution wake-up consumed at this exact HEAD" \
+                > /dev/null; then
+                echo "::error::Cannot record resolution reconcile marker for PR #${pr_number}; continuing."
+                failures=1
+                continue
+              fi
+              # Re-read the trusted PR after writing the marker. A push between
+              # the two reads makes this invocation stale; the new head keeps its
+              # own scheduled/event-driven path and is never refreshed here.
+              recheck_head="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" --jq '.head.sha')" || recheck_head=""
+              if [[ "${recheck_head}" != "${invocation_head}" ]]; then
+                echo "::warning::Reconcile HEAD race after marker for PR #${pr_number}; suppressing invocation outcome markers."
+                failures=1
+                continue
+              fi
             fi
             # Legacy invariant marker: if ! python scripts/hunter_governance_review_v2.py
             B=boot
