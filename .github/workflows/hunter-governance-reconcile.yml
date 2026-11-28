@@ -128,6 +128,19 @@ jobs:
           event_name="${{ github.event_name }}"
           failures=0
           resolution_marker=""
+          pr_numbers=""
+          jobs_json=""
+          artifacts_json=""
+          evidence_zip=""
+          create_trusted_resolution_input() {
+            local label="$1"
+            local created=""
+            if ! created="$(mktemp "${RUNNER_TEMP}/hunter-resolution-${label}.XXXXXX")"; then
+              echo "::error::Cannot create trusted ${label} input under RUNNER_TEMP; skipping wake-up."
+              return 1
+            fi
+            printf '%s\n' "${created}"
+          }
           if [[ "${event_name}" == "pull_request_target" ]]; then
             pr_numbers="${{ github.event.pull_request.number }}"
           elif [[ "${event_name}" == "workflow_run" && "${EVENT_WORKFLOW_RUN_NAME}" == "Hunter Governance Review" ]]; then
@@ -156,10 +169,19 @@ jobs:
             if [[ "${EVENT_WORKFLOW_RUN_CONCLUSION}" != "success" ]]; then
               echo "::notice::Skipping resolution wake-up: resolver workflow conclusion ${EVENT_WORKFLOW_RUN_CONCLUSION}."
               pr_numbers=""
+            elif [[ -z "${RUNNER_TEMP:-}" || ! -d "${RUNNER_TEMP}" ]]; then
+              echo "::error::RUNNER_TEMP must be a trusted directory for resolution ingress; skipping wake-up."
+              failures=1
+            elif ! jobs_json="$(create_trusted_resolution_input jobs)"; then
+              jobs_json=""
+              failures=1
+            elif ! artifacts_json="$(create_trusted_resolution_input artifacts)"; then
+              artifacts_json=""
+              failures=1
+            elif ! evidence_zip="$(create_trusted_resolution_input evidence)"; then
+              evidence_zip=""
+              failures=1
             else
-              jobs_json="$(mktemp)"
-              artifacts_json="$(mktemp)"
-              evidence_zip="$(mktemp)"
               artifact_id=""
               if ! gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${EVENT_WORKFLOW_RUN_ID}/attempts/${EVENT_WORKFLOW_RUN_ATTEMPT}/jobs?per_page=100" > "${jobs_json}"; then
                 echo "::error::Cannot read resolver jobs for run ${EVENT_WORKFLOW_RUN_ID}; skipping wake-up."
@@ -179,6 +201,7 @@ jobs:
                   echo "::error::Cannot download resolution artifact ${artifact_id}; skipping wake-up."
                   failures=1
                 else
+                  ingress_rc=0
                   pr_numbers="$(
                     python scripts/hunter_resolution_reconcile_ingress.py \
                       --event "${GITHUB_EVENT_PATH}" \
@@ -188,14 +211,23 @@ jobs:
                       --repository "${GITHUB_REPOSITORY}" \
                       --event-name "${event_name}" \
                       --for-shell
-                  )" || pr_numbers=""
+                  )" || ingress_rc=$?
+                  if [[ "${ingress_rc}" -ne 0 ]]; then
+                    echo "::error::Resolution ingress refused the exact artifact; no wake-up."
+                    failures=1
+                    pr_numbers=""
+                  fi
                   if [[ -n "${pr_numbers}" ]]; then
                     resolution_marker="hunter-resolution-reconcile/${EVENT_WORKFLOW_RUN_ID}/${EVENT_WORKFLOW_RUN_ATTEMPT}"
                   fi
                 fi
               fi
-              rm -f "${jobs_json}" "${artifacts_json}" "${evidence_zip}"
             fi
+            for resolution_input in "${jobs_json}" "${artifacts_json}" "${evidence_zip}"; do
+              if [[ -n "${resolution_input}" ]]; then
+                rm -f "${resolution_input}"
+              fi
+            done
           elif [[ "${event_name}" == "workflow_run" ]]; then
             pr_numbers="$(
               gh pr list \

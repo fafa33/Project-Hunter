@@ -3231,16 +3231,16 @@
     {
       "id": "DFF-083",
       "title": "manual-adoption-gated-by-unrelated-issue-ledgers",
-      "invariant": "Manual-PR adoption is ledger-independent evidence and must be evaluated exactly once over the verified knowledge findings, even with zero, unreadable or multiple Issue ledgers. Governed remediation remains ledger-bound and takes precedence; no Issue ledger failure may suppress, duplicate or bypass a signed-receipt adoption.",
+      "invariant": "Manual-PR adoption is ledger-independent evidence and must be evaluated exactly once over the verified knowledge findings, even with zero, unreadable or multiple Issue ledgers. Governed remediation remains ledger-bound and takes precedence; no Issue ledger failure, including a concurrent-ledger conflict during the signed append, may suppress, duplicate or bypass a signed-receipt adoption. A conflict defers only its own finding; every other governed and manual finding is still evaluated, no false resolution or receipt is published, and the next trusted pass re-decides the deferred finding from fresh exact-head and ledger evidence.",
       "applicability": {
         "changed_paths": [
           "scripts/hunter_issue_agent_lifecycle.py",
           "tests/test_issue_agent_manual_pr_resolution.py"
         ],
-        "rationale": "The resolver call site and its proof/write helpers are one authority boundary: nesting a ledger-independent proof in a ledger-dependent loop makes the proof unreachable or duplicated."
+        "rationale": "The resolver call site and its proof/write helpers are one authority boundary: nesting a ledger-independent proof in a ledger-dependent loop makes the proof unreachable or duplicated, while placing the append outside the per-finding conflict boundary lets one writer race abort every later finding."
       },
       "prevention": {
-        "mechanism": "cmd_resolve now runs a governed pass over verified Issue ledgers and a separate manual pass over sorted knowledge findings, skipping findings already handled or blocked by an indefinite governed proof. A shared apply_proof helper preserves the existing authorization, receipt, idempotency and exact-head checks; ledger failures are scoped to their governed issue and cannot stop the manual pass. Only a newly durable resolution publishes a PR identity. Owner `[test:...]` evidence is extracted by bounded linear `owner_test_selectors`; an unbounded regex is never used on owner-controlled reply bodies.",
+        "mechanism": "cmd_resolve runs a governed pass over verified Issue ledgers and a separate manual pass over sorted knowledge findings, skipping findings already handled or blocked by an indefinite governed proof. Both governed and manual `apply_proof` calls now sit inside a narrow per-finding `state.LedgerConflictError` boundary; the helper still preserves the exact-head proof, signed receipt, CAS/atomic ownership checks and idempotency. A conflict marks only that finding blocked and continues, never retries the same mutation in the same pass and never publishes a PR identity, receipt or false resolution. Only a newly durable resolution publishes a PR identity. Owner `[test:...]` evidence is extracted by bounded linear `owner_test_selectors`; an unbounded regex is never used on owner-controlled reply bodies.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_issue_agent_lifecycle.py::cmd_resolve"
       },
@@ -3249,6 +3249,8 @@
         "tests/test_issue_agent_manual_pr_resolution.py::test_manual_adoption_runs_with_multiple_and_mixed_ledgers",
         "tests/test_issue_agent_manual_pr_resolution.py::test_invalid_receipt_evidence_is_never_adopted",
         "tests/test_issue_agent_manual_pr_resolution.py::test_a_head_that_moves_after_proof_is_never_mutated",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_ledger_conflict_during_governed_proof_defers_only_that_finding",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_ledger_conflict_during_manual_adoption_does_not_stop_unrelated_findings",
         "tests/test_issue_agent_owner_tag_parser.py::test_valid_owner_test_tags_preserve_the_selector_contract",
         "tests/test_issue_agent_owner_tag_parser.py::test_malformed_and_overlong_owner_test_tags_are_ignored",
         "tests/test_issue_agent_owner_tag_parser.py::test_adversarial_owner_reply_input_is_bounded_and_linear"
@@ -3256,33 +3258,41 @@
       "lifecycle": "regression-tested",
       "sources": [
         "Issue #575 / PR #789 review thread PRRT_kwDOTRDHr8682GTd, 2026-11-27: manual adoption was nested inside the active Issue-ledger loop, so a scheduled run with no ledgers never evaluated the signed receipt. The fix keeps governed proof ledger-bound and evaluates manual evidence independently and once.",
-        "SonarCloud issue AaIcXQzl9baHMF1NKqJi, 2026-11-28: owner-reply authority was guarded, but its selector regex used two greedy classes around `::` and could backtrack super-linearly on adversarial input."
+        "SonarCloud issue AaIcXQzl9baHMF1NKqJi, 2026-11-28: owner-reply authority was guarded, but its selector regex used two greedy classes around `::` and could backtrack super-linearly on adversarial input.",
+        "Issue #575 / PR #789 independent review thread PRRT_kwDOTRDHr868-Cyj comment 4724595061, 2026-11-28: the prior DPM separated governed and manual passes but caught `LedgerConflictError` only around exact-head proof construction. An injected conflict from `apply_proof()` escaped to `knowledge.append()`, aborted the loop and stalled unaffected findings; the append is now inside the same narrow per-finding boundary on both paths."
       ]
     },
     {
       "id": "DFF-084",
-      "title": "untrusted-cli-path-escape-into-trusted-ingress",
-      "invariant": "A trusted ingress may read only paths minted by the workflow boundary. Directory traversal, absolute paths outside RUNNER_TEMP/GITHUB_WORKSPACE and symlink components must fail closed before any evidence read, while normal workflow artifact paths remain accepted.",
+      "title": "untrusted-cli-and-temp-input-escape-into-trusted-ingress",
+      "invariant": "A trusted ingress may read only paths minted by the workflow boundary. The producer must explicitly create every input under RUNNER_TEMP and validate that trusted root; directory traversal, absolute paths outside RUNNER_TEMP/GITHUB_WORKSPACE, symlink components, an unset/missing RUNNER_TEMP, and a refused ingress must all fail closed before any wake-up, while normal workflow artifact paths remain accepted.",
       "applicability": {
         "changed_paths": [
+          ".github/workflows/hunter-governance-reconcile.yml",
           "scripts/hunter_resolution_reconcile_ingress.py",
-          "tests/test_issue_agent_resolution_reconcile.py"
+          "tests/test_issue_agent_resolution_reconcile.py",
+          "tests/test_issue_575_workflow_temp_input_contract.py"
         ],
-        "rationale": "The CLI path is the boundary of this ingress. Payload validation cannot repair evidence read from a caller-chosen external file, so both the resolver and its executable regressions are one enforcement unit."
+        "rationale": "The producer's temp-file creation and the CLI path are the two halves of this ingress boundary. Payload validation cannot repair evidence read from a caller-chosen or host-default external file, so the workflow producer, ingress validator and their executable regressions are one enforcement unit."
       },
       "prevention": {
-        "mechanism": "`_workflow_input_path` rejects `..` components, requires absolute/relative paths to remain under an existing trusted workflow root, rejects every symlink component in that path, requires a regular file, and resolves exactly that file before JSON/zip reads. Missing roots or unreadable paths also fail closed.",
+        "mechanism": "The workflow validates that RUNNER_TEMP is set and is an existing directory before any resolver wake-up, then uses `mktemp \"${RUNNER_TEMP}/hunter-resolution-${label}.XXXXXX\"` for all three input files and removes them in a bounded loop. `_workflow_input_path` rejects `..` components, requires absolute/relative paths to remain under an existing trusted workflow root, rejects every symlink component in that path, requires a regular file, and resolves exactly that file before JSON/zip reads. An ingress nonzero exit is captured explicitly and forces `failures=1` with no PR identities; it is no longer hidden by `|| pr_numbers=\"\"`. Missing roots or unreadable paths also fail closed.",
         "boundary": "hosted-gate",
         "guard_reference": "scripts/hunter_resolution_reconcile_ingress.py::_workflow_input_path"
       },
       "regression_evidence": [
         "tests/test_issue_agent_resolution_reconcile.py::test_legitimate_workflow_input_paths_are_accepted",
         "tests/test_issue_agent_resolution_reconcile.py::test_cli_input_paths_cannot_escape_the_trusted_workflow_root",
-        "tests/test_issue_agent_resolution_reconcile.py::test_symlink_input_paths_cannot_escape_the_trusted_workflow_root"
+        "tests/test_issue_agent_resolution_reconcile.py::test_symlink_input_paths_cannot_escape_the_trusted_workflow_root",
+        "tests/test_issue_575_workflow_temp_input_contract.py::test_workflow_creates_ingress_inputs_inside_trusted_runner_temp",
+        "tests/test_issue_575_workflow_temp_input_contract.py::test_empty_and_invalid_evidence_never_wake_reconciliation",
+        "tests/test_issue_575_workflow_temp_input_contract.py::test_missing_runner_temp_fails_closed_without_creating_inputs",
+        "tests/test_issue_575_workflow_temp_input_contract.py::test_traversal_and_symlink_inputs_still_fail_closed"
       ],
       "lifecycle": "regression-tested",
       "sources": [
-        "SonarCloud issue AaIfCc_g6-O7kMFOyZhr, 2026-11-28: DFF-080/081 validated what the ingress believed but not where its four CLI inputs came from. This family closes that missing provenance step without weakening the real artifact path used by hunter-governance-reconcile.yml."
+        "SonarCloud issue AaIfCc_g6-O7kMFOyZhr, 2026-11-28: DFF-080/081 validated what the ingress believed but not where its four CLI inputs came from. This family closes that missing provenance step without weakening the real artifact path used by hunter-governance-reconcile.yml.",
+        "Issue #575 / PR #789 independent review thread PRRT_kwDOTRDHr868-Cyc comment 4724595051, 2026-11-28: the ingress rejected paths outside RUNNER_TEMP/GITHUB_WORKSPACE, but the workflow producer still called plain `mktemp`. With TMPDIR unset on the runner the three files landed in `/tmp`, and `|| pr_numbers=\"\"` hid the resulting ingress refusal. The producer now mints inputs explicitly under the validated RUNNER_TEMP and the regression executes the real shell step with distinct trusted roots."
       ]
     },
     {
@@ -3312,6 +3322,40 @@
       "lifecycle": "regression-tested",
       "sources": [
         "SonarCloud issue AaIcXQzl9baHMF1NKqJi, 2026-11-28: DFF-060/083 guarded who may authorize but the `[test:...]` extraction still used `r\"\\[test:([^\\]]+::[^\\]]+)\\]\"`, which can backtrack super-linearly. The fix preserves the two-selector evidence contract with explicit bounds."
+      ]
+    },
+    {
+      "id": "DFF-086",
+      "title": "non-executable-version-specific-preventive-fixtures",
+      "invariant": "A registered preventive selector is proof only when it executes real product APIs with positive test counts and zero skips, failures and errors on every overlapping product version it claims to cover. Fixtures may not depend on helper names present in only one version and then skip on the other; skips, missing selectors, missing product modules and malformed overlays must fail closed.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_ci_impact.py",
+          "scripts/hunter_preventive_obligations.py",
+          "tests/test_issue_575_preventive_obligations.py",
+          "docs/DEFECT_REGISTRY.json"
+        ],
+        "rationale": "The obligation registry, selector executor and version-adaptive fixtures are one prevention unit. A selector that is registered but cannot execute against a candidate's actual API surface records no evidence and can hide a known defect."
+      },
+      "prevention": {
+        "mechanism": "`execute_obligations` parses pytest JUnit counts and blocks any selector with zero tests, any skip, any failure, any error, a missing selector file or a dirty/unidentifiable tree, then hashes the final record. The Issue #575 discovery and onchain fixtures construct their own API-shaped inputs, adapt to both the current checkout and the isolated PR #788 product overlay, and never call `pytest.skip`; optional PR #788-only surfaces are asserted only when present. An executable regression runs all three selectors against an isolated `git archive` overlay of the exact PR #788 head, and a paired defective-overlay fixture proves missing product modules are blocked, not silently accepted.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_ci_impact.py::execute_obligations"
+      },
+      "regression_evidence": [
+        "tests/test_issue_575_preventive_obligations.py::test_case_a_surface_bound_signature_identity_collision",
+        "tests/test_issue_575_preventive_obligations.py::test_case_b_pagination_budget_does_not_discard_acquired_catalogue",
+        "tests/test_issue_575_preventive_obligations.py::test_case_c_explicit_limit_still_obeys_request_budget",
+        "tests/test_issue_575_preventive_obligations.py::test_discovery_preventive_cli_executes_every_mandatory_selector",
+        "tests/test_issue_575_preventive_obligations.py::test_onchain_preventive_cli_executes_every_mandatory_selector",
+        "tests/test_issue_575_preventive_obligations.py::test_pr788_product_overlay_executes_all_three_selectors",
+        "tests/test_issue_575_preventive_obligations.py::test_defective_product_overlays_are_blocked",
+        "tests/test_issue_575_preventive_obligations.py::test_missing_focused_test_fails_closed_in_bound_record",
+        "tests/test_issue_575_preventive_obligations.py::test_skipped_focused_test_is_blocked_in_bound_record"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 independent review thread PRRT_kwDOTRDHr868-Cyh comment 4724595058, 2026-11-28: the preventive registry named the correct PR #788 regression selectors, but their fixtures referenced helper classes and constructor fields that exist only on one side of the overlapping discovery/onchain APIs. On the other version those non-skippable selectors skipped, so the obligation data looked configured while no executable proof existed. The fixtures now build version-adaptive inputs, run against both API surfaces, and reject defective overlays."
       ]
     }
   ],

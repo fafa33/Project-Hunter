@@ -458,6 +458,7 @@ def _resolve_harness(
     ledger_failures: set[int],
     governed_findings: set[str],
     manual_findings: set[str],
+    conflict_appends: set[int] | None = None,
 ) -> tuple[list[str], list[tuple[str, list[Any]]], dict[str, int]]:
     findings = {
         identity: SimpleNamespace(
@@ -473,7 +474,8 @@ def _resolve_harness(
     view = SimpleNamespace(findings=findings)
     outputs: list[str] = []
     appends: list[tuple[str, list[Any]]] = []
-    calls = {"governed": 0, "manual": 0, "ledger": 0}
+    calls = {"governed": 0, "manual": 0, "ledger": 0, "resolve": 0, "append": 0}
+    conflicts = set() if conflict_appends is None else conflict_appends
 
     monkeypatch.setenv("GITHUB_RUN_ID", "300")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
@@ -510,15 +512,32 @@ def _resolve_harness(
 
     monkeypatch.setattr(control, "exact_head_proof", governed)
     monkeypatch.setattr(control, "manual_adoption_proof", manual)
-    monkeypatch.setattr(control, "resolve_thread", lambda *_a, **_k: 9001)
+
+    def resolve_thread(*_args: Any, **_kwargs: Any) -> int:
+        calls["resolve"] += 1
+        return 9001
+
+    monkeypatch.setattr(control, "resolve_thread", resolve_thread)
     monkeypatch.setattr(remediation, "evidence_reply", lambda *_a, **_k: "evidence reply")
-    monkeypatch.setattr(remediation, "proven_writes", lambda *_a, **_k: [SimpleNamespace(kind="finding_proven")])
-    monkeypatch.setattr(remediation, "resolution_writes", lambda *_a, **_k: [SimpleNamespace(kind="thread_resolved")])
+    monkeypatch.setattr(
+        remediation,
+        "proven_writes",
+        lambda _view, finding_id, **_k: [SimpleNamespace(kind="finding_proven", finding_id=finding_id)],
+    )
+    monkeypatch.setattr(
+        remediation,
+        "resolution_writes",
+        lambda _view, finding_id, **_k: [SimpleNamespace(kind="thread_resolved", finding_id=finding_id)],
+    )
     monkeypatch.setattr(knowledge, "read", lambda *_a, **_k: ("head", view))
     monkeypatch.setattr(knowledge, "proven_receipt_writes", lambda *_a, **_k: [])
     monkeypatch.setattr(knowledge, "verified_receipt_at_head", lambda *_a, **_k: True)
 
     def append(_store: Any, writes: list[Any], **_kwargs: Any) -> tuple[str, Any, int]:
+        index = calls["append"]
+        calls["append"] += 1
+        if index in conflicts:
+            raise state.LedgerConflictError("concurrent knowledge writer")
         appends.append(("head", list(writes)))
         return "head", view, len(writes)
 
@@ -565,3 +584,64 @@ def test_manual_adoption_runs_with_multiple_and_mixed_ledgers(monkeypatch: pytes
         "thread_resolved",
     ]
     assert "resolved_pr_numbers=788\n789\n" in outputs
+
+
+def test_ledger_conflict_during_governed_proof_defers_only_that_finding(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A conflicting governed append must not abort other findings or the manual pass."""
+
+    conflicted = "a" * 64
+    unaffected = "c" * 64
+    manual = "b" * 64
+    conflicts = {0}
+    outputs, appends, calls = _resolve_harness(
+        monkeypatch,
+        active_issues=[575],
+        ledger_failures=set(),
+        governed_findings={conflicted, unaffected},
+        manual_findings={manual},
+        conflict_appends=conflicts,
+    )
+    code = lifecycle.cmd_resolve(ct.CONFIG, argparse.Namespace(issue=None))
+    assert code == 0
+    assert calls["governed"] == 3  # every governed finding is re-decided; only the conflict is deferred
+    assert calls["manual"] == 1
+    assert calls["resolve"] == 2  # the conflicting finding never reaches a GitHub mutation
+    resolved_ids = [item.finding_id for _head, writes in appends for item in writes]
+    assert conflicted not in resolved_ids
+    assert unaffected in resolved_ids
+    assert manual in resolved_ids
+    assert "resolved_pr_numbers=788\n789\n" in outputs
+
+    # A later trusted pass with a quiet ledger remains valid for the deferred finding.
+    conflicts.clear()
+    assert lifecycle.cmd_resolve(ct.CONFIG, argparse.Namespace(issue=None)) == 0
+    assert conflicted in [item.finding_id for _head, writes in appends for item in writes]
+
+
+def test_ledger_conflict_during_manual_adoption_does_not_stop_unrelated_findings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Manual adoption is independently isolated per finding under a concurrent append."""
+
+    conflicted = "a" * 64
+    unaffected = "b" * 64
+    conflicts = {0}
+    outputs, appends, calls = _resolve_harness(
+        monkeypatch,
+        active_issues=[],
+        ledger_failures=set(),
+        governed_findings=set(),
+        manual_findings={conflicted, unaffected},
+        conflict_appends=conflicts,
+    )
+    code = lifecycle.cmd_resolve(ct.CONFIG, argparse.Namespace(issue=None))
+    assert code == 0
+    assert calls["manual"] == 2
+    assert calls["resolve"] == 2  # one GitHub mutation per evaluated finding, never a duplicate retry
+    resolved_ids = [item.finding_id for _head, writes in appends for item in writes]
+    assert resolved_ids == [unaffected]
+    assert "resolved_pr_numbers=789\n" in outputs
+
+    conflicts.clear()
+    assert lifecycle.cmd_resolve(ct.CONFIG, argparse.Namespace(issue=None)) == 0
+    assert conflicted in [item.finding_id for _head, writes in appends for item in writes]

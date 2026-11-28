@@ -1569,7 +1569,17 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
                 continue
             if proof is not None:
                 governed_handled.add(finding_id)
-                apply_proof(issue, finding_id, proof, manual=False)
+                # A concurrent knowledge writer is local to this finding. Defer
+                # only this proof; the next trusted pass re-decides it from a
+                # freshly verified ledger and exact-head proof.
+                try:
+                    apply_proof(issue, finding_id, proof, manual=False)
+                except state.LedgerConflictError:
+                    governed_blocked.add(finding_id)
+                    print(
+                        f"issue {issue}: no-op ({finding_id[:12]} ledger moved during proof; the next pass re-decides)"
+                    )
+                    continue
 
     # A manually created PR has no Issue ledger, authorization or PUBLISHED
     # record. Evaluate its signed Knowledge Receipt and owner disposition once
@@ -1586,7 +1596,11 @@ def cmd_resolve(configuration: control.Configuration, arguments: argparse.Namesp
             print(f"manual {finding_id[:12]}: no-op (the knowledge ledger moved; the next pass re-decides)")
             continue
         if proof is not None:
-            apply_proof(None, finding_id, proof, manual=True)
+            try:
+                apply_proof(None, finding_id, proof, manual=True)
+            except state.LedgerConflictError:
+                print(f"manual {finding_id[:12]}: no-op (the knowledge ledger moved; the next pass re-decides)")
+                continue
 
     # Even an empty result is published: the trusted reconciler must be able to
     # distinguish "no durable resolution" from a missing or unreadable artifact.

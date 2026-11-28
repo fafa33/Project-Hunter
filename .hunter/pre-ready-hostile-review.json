@@ -3,85 +3,85 @@
     "acceptance_criteria": [
       {
         "criterion": "All supported Agents resolve the same canonical repository/mission authority.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-01",
         "verdict": "satisfied"
       },
       {
         "criterion": "Wrong cwd/branch/repo/HEAD/checkpoint fails before reading or writing.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-02",
         "verdict": "satisfied"
       },
       {
         "criterion": "Missing checkpoint fails closed without fallback.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-03",
         "verdict": "satisfied"
       },
       {
         "criterion": "Unregistered worktree cannot execute or publish.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-04",
         "verdict": "satisfied"
       },
       {
         "criterion": "Two concurrent writers cannot hold the same active lease; expired lease cannot mutate.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-05",
         "verdict": "satisfied"
       },
       {
         "criterion": "Session/model switch resumes exact lineage with no rediscovery.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-06",
         "verdict": "satisfied"
       },
       {
         "criterion": "Crash/restart restores deterministic checkpoint and outstanding work.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-07",
         "verdict": "satisfied"
       },
       {
         "criterion": "Cross-lineage import requires explicit owner authorization and preserves both trees.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-08",
         "verdict": "satisfied"
       },
       {
         "criterion": "Tool admission and publisher reject forged/stale registry or lease.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-09",
         "verdict": "satisfied"
       },
       {
         "criterion": "CI anti-rollback catches removal/bypass of any workspace admission route.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-10",
         "verdict": "satisfied"
       },
       {
         "criterion": "Registry supports safe migration of existing worktrees without deletion.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-11",
         "verdict": "satisfied"
       },
       {
         "criterion": "Issue #574 and other Issue flows consume the global authority without introducing a second workspace authority.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-12",
         "verdict": "satisfied"
       },
       {
         "criterion": "No PR creation/merge or hosted publication without exact-head lineage proof.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-13",
         "verdict": "satisfied"
       },
       {
         "criterion": "Missing provider/runtime integration is reported BLOCKED, not falsely PASS.",
-        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the two SonarCloud findings: all four earlier Codex remediations remain intact; the trusted resolution ingress now binds every CLI input path to the workflow root and refuses traversal, external absolute paths and symlink escapes; owner [test:...] evidence is parsed by bounded linear scanning with preserved selector semantics. RED was demonstrated before implementation; focused regressions are 283 passed, including the four earlier remediation suites; Ruff, Black, Mypy, Architecture Index Guard, Artifact Guard and Defect Prevention Guard are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
+        "evidence": "Fresh exact staged-content Writer Finalizer judgement for Issue #575 / PR #789 after the three new Codex findings: all seven earlier Codex/Sonar remediations remain intact; resolution ingress inputs are explicitly minted under a validated RUNNER_TEMP and the real producer/consumer shell path is regression-tested with TMPDIR unset; mandatory discovery/onchain preventive selectors execute adaptive fixtures on the current product and an isolated exact PR #788 overlay with no skips and reject defective overlays; governed and manual apply_proof calls are inside narrow per-finding LedgerConflictError boundaries that defer only the conflicting finding and continue unrelated work. RED was demonstrated before implementation. Focused affected suites passed 99 tests, and Architecture Index Guard, Artifact Guard, Defect Prevention Guard, Ruff, Black and Mypy are green in the repository push toolchain. Hosted exact-head proof remains the sole production authority; no merge or deployment is authorized.",
         "id": "AC-575-14",
         "verdict": "satisfied"
       }
@@ -95,9 +95,11 @@
       "cutoff-history",
       "directory-traversal",
       "exact-head-binding",
+      "executable-fixture-compatibility",
       "fail-closed",
       "idempotency",
       "least-privilege",
+      "ledger-conflict-isolation",
       "ledger-independence",
       "malformed-unknown-authority",
       "monotonicity",
@@ -108,6 +110,7 @@
       "super-linear-regex",
       "symlink-escape",
       "tamper-resistance",
+      "temporary-input-provenance",
       "transaction-snapshot-consistency",
       "trusted-path-boundary"
     ],
@@ -115,278 +118,283 @@
     "base_sha": "a4a9b9e173bb15afaed2c162bda9708e93eb2411",
     "defect_families": [
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-001",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-002",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-003",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-004",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-005",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-006",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-007",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-008",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-009",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-010",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-011",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-012",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-013",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-014",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-015",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-016",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-019",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-020",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-021",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-022",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-023",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-024",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-025",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-026",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-027",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-028",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-029",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-033",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-035",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-036",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-037",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-038",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-040",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-042",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-043",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-044",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-045",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-046",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-047",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-049",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-052",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-054",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-055",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-057",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-058",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-059",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-060",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-061",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-063",
         "outcome": "clear"
       },
       {
-        "evidence": "tests/test_issue_agent_resolution_reconcile.py::test_legitimate_workflow_input_paths_are_accepted and test_cli_input_paths_cannot_escape_the_trusted_workflow_root verify preserved artifact ingestion plus traversal/absolute-path refusal at the trusted ingress.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-080",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-081",
         "outcome": "clear"
       },
       {
-        "evidence": "Fresh exact staged-content judgement: this family's applicable changed paths were re-reviewed against RED-first regressions; focused suite 283 passed, canonical deterministic guards are green, and hosted exact-head proof remains authoritative.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-082",
         "outcome": "clear"
       },
       {
-        "evidence": "tests/test_issue_agent_manual_pr_resolution.py::test_unauthorized_or_mismatched_owner_replies_are_never_adopted plus DFF-085 parser regressions confirm ledger-independent adoption still fails closed.",
+        "evidence": "Fresh exact staged-content judgement: an injected LedgerConflictError during apply_proof is contained per finding; unrelated governed and manual findings still execute, no false receipt/resolution or duplicate mutation occurs, and the next trusted pass recovers. Executed committed selectors: tests/test_issue_agent_manual_pr_resolution.py::test_ledger_conflict_during_governed_proof_defers_only_that_finding tests/test_issue_agent_manual_pr_resolution.py::test_ledger_conflict_during_manual_adoption_does_not_stop_unrelated_findings.",
         "family": "DFF-083",
         "outcome": "clear"
       },
       {
-        "evidence": "tests/test_issue_agent_resolution_reconcile.py::test_cli_input_paths_cannot_escape_the_trusted_workflow_root and test_symlink_input_paths_cannot_escape_the_trusted_workflow_root prove all four CLI paths are bound to RUNNER_TEMP/GITHUB_WORKSPACE and symlink components fail closed.",
+        "evidence": "Fresh exact staged-content judgement: the real workflow shell step creates all three ingress inputs under validated RUNNER_TEMP with TMPDIR unset, valid evidence reaches reconciliation, empty/invalid evidence does not wake it and missing RUNNER_TEMP, traversal and symlink escapes fail closed. Executed committed selectors: tests/test_issue_575_workflow_temp_input_contract.py::test_workflow_creates_ingress_inputs_inside_trusted_runner_temp tests/test_issue_575_workflow_temp_input_contract.py::test_missing_runner_temp_fails_closed_without_creating_inputs.",
         "family": "DFF-084",
         "outcome": "clear"
       },
       {
-        "evidence": "tests/test_issue_agent_owner_tag_parser.py::test_valid_owner_test_tags_preserve_the_selector_contract, test_malformed_and_overlong_owner_test_tags_are_ignored, test_adversarial_owner_reply_input_is_bounded_and_linear and test_unclosed_owner_test_tag_does_not_backtrack prove bounded linear parsing with unchanged exact selector evidence.",
+        "evidence": "Fresh exact staged-content judgement: applicable changed paths were re-reviewed against RED-first regressions; the focused affected suites passed 99 tests and the canonical deterministic guards are green; hosted exact-head proof remains authoritative.",
         "family": "DFF-085",
+        "outcome": "clear"
+      },
+      {
+        "evidence": "Fresh exact staged-content judgement: mandatory discovery and onchain selectors execute with positive counts and zero skips on the current product and an isolated exact PR #788 overlay, while defective overlays are blocked. Executed committed selectors: tests/test_issue_575_preventive_obligations.py::test_discovery_preventive_cli_executes_every_mandatory_selector tests/test_issue_575_preventive_obligations.py::test_onchain_preventive_cli_executes_every_mandatory_selector tests/test_issue_575_preventive_obligations.py::test_pr788_product_overlay_executes_all_three_selectors.",
+        "family": "DFF-086",
         "outcome": "clear"
       }
     ],
@@ -412,8 +420,14 @@
         "status": "added"
       },
       {
-        "blob_sha": "8417eec353856c78c1a147ace76dad2c94e64ba2",
+        "blob_sha": "e4d3130ba105ccb5945dd04a3c293d8a1d51e815",
         "path": "tests/test_issue_575_preventive_obligations.py",
+        "previous_path": "",
+        "status": "added"
+      },
+      {
+        "blob_sha": "3636e98b4ca5150c164de5f736b2feb75d8dc1c0",
+        "path": "tests/test_issue_575_workflow_temp_input_contract.py",
         "previous_path": "",
         "status": "added"
       },
@@ -424,7 +438,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "88938e9adc0b1a2b6002ec98fdd583b7d54d5782",
+        "blob_sha": "f71a39cd9ec5a40fce1ff8b8d06ab0daa496da14",
         "path": "tests/test_issue_agent_manual_pr_resolution.py",
         "previous_path": "",
         "status": "added"
@@ -442,7 +456,7 @@
         "status": "added"
       },
       {
-        "blob_sha": "6f8b83debd9b59d991d79909cb17d1f1ea61e176",
+        "blob_sha": "0cbd6c33576f6fa4a07fcb42e049a71acc49a46f",
         "path": ".github/workflows/hunter-governance-reconcile.yml",
         "previous_path": "",
         "status": "modified"
@@ -466,7 +480,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "296682ba0d4ba85ef2c5215e56ad28ed36680168",
+        "blob_sha": "774841b20ad2ad5b44b736f005a2908d73aef781",
         "path": "docs/DEFECT_REGISTRY.json",
         "previous_path": "",
         "status": "modified"
@@ -490,7 +504,7 @@
         "status": "modified"
       },
       {
-        "blob_sha": "00c5adbe49075d0b64a2ab247886981cf5efe084",
+        "blob_sha": "9d2c64a0eaa77f8a8a7dbf7d84cc5f9c55b309b1",
         "path": "scripts/hunter_issue_agent_lifecycle.py",
         "previous_path": "",
         "status": "modified"
@@ -598,11 +612,11 @@
         "status": "modified"
       }
     ],
-    "review_target_digest": "66a0ff2f698baff2969dc1895da2dc084937a739186f0bdfb766121aacc6a82b"
+    "review_target_digest": "f01a78583a2b944e19cdc1a34f70fcecf6f0d6ecdead210c237dd2a90d11a050"
   },
-  "review_id": "847914845500ce808aa9daaed0549cd84ffa2c4c41646d208ce49337d753cb3d",
+  "review_id": "8e87639cdedf8dbc452b5595eeb379581bd7e463c7386e9157027caaac54d54d",
   "review_request": {
-    "claims_id": "847914845500ce808aa9daaed0549cd84ffa2c4c41646d208ce49337d753cb3d",
+    "claims_id": "8e87639cdedf8dbc452b5595eeb379581bd7e463c7386e9157027caaac54d54d",
     "schema": "hunter.review-request.v1"
   },
   "schema": "hunter.pre-ready-hostile-review.v1"
