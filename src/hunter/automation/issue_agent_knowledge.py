@@ -181,7 +181,10 @@ EVIDENCE_SCHEMAS: Final = {
             "finding_id": SHA64,
             "remediated_head_sha": SHA40,
             "reply_comment_id": POSITIVE,
-        }
+        },
+        # A manually created PR is adopted from a signed Knowledge Receipt instead of a fabricated
+        # Issue Agent authorization. The digest binds this resolution to that exact signed record.
+        optional={"adoption_receipt_sha256": SHA64},
     ),
     "recurrence": _object({"family_id": _pattern(_FAMILY), "finding_id": SHA64}),
     # ADR 0039 L11 (Issue #527): the fast-path Knowledge Receipt. Deterministic, bounded,
@@ -568,9 +571,25 @@ def _fold(view: KnowledgeView, kind: str, evidence: dict[str, Any]) -> None:
         item.proven = dict(evidence)
         return
     if kind == "thread_resolved":
-        _require(item.proven is not None, "a thread is resolved only after exact-head proof")
-        assert item.proven is not None
-        _require(evidence["remediated_head_sha"] == item.proven["remediated_head_sha"], "resolution at another head")
+        adoption = evidence.get("adoption_receipt_sha256")
+        if adoption is None:
+            # ADR 0039 L7 governed path: an Issue Agent remediation proved this exact head.
+            _require(item.proven is not None, "a thread is resolved only after exact-head proof")
+            assert item.proven is not None
+            _require(
+                evidence["remediated_head_sha"] == item.proven["remediated_head_sha"], "resolution at another head"
+            )
+        else:
+            # Manual-PR adoption: the authority is a signed receipt at this exact head, never an
+            # invented finding_proven or PUBLISHED authorization. The digest must name that receipt.
+            _require(item.proven is None, "a governed proof cannot also claim manual adoption")
+            _require(
+                verified_manual_adoption_at_head(
+                    view, evidence["finding_id"], exact_head=evidence["remediated_head_sha"]
+                )
+                == adoption,
+                "resolution does not name the verified exact-head receipt",
+            )
         item.resolved = dict(evidence)
         return
     if kind == "recurrence":
@@ -805,6 +824,31 @@ def verified_receipt_at_head(view: KnowledgeView, finding_id: str, *, exact_head
         and bool(proof.get("regression_tests"))
         and set(receipt.get("regression_evidence", [])) == set(proof.get("regression_tests", []))
     )
+
+
+def verified_manual_adoption_at_head(view: KnowledgeView, finding_id: str, *, exact_head: str) -> str | None:
+    """The signed receipt digest that admits a manually created PR to L7 resolution, or ``None``.
+
+    This is the fail-closed counterpart of :func:`verified_receipt_at_head`: governed remediations carry
+    ``finding_proven`` and an authorization; manual PRs have neither. The only admissible authority is a
+    signed, matched-family ``knowledge_receipt`` whose correction commit is exactly this head, whose
+    fingerprint matches the authenticated finding and whose regression evidence is non-empty. It never
+    grants proof to a pending, stale, foreign or unclassified finding.
+    """
+
+    item = view.findings.get(finding_id)
+    if item is None or item.proven is not None or item.resolved is not None or item.receipt is None:
+        return None
+    receipt = item.receipt
+    if (
+        receipt.get("correction_commit") != exact_head
+        or receipt.get("outcome") != "matched-family"
+        or not receipt.get("family_id")
+        or not receipt.get("regression_evidence")
+        or receipt.get("fingerprint") != item.ingested.get("fingerprint")
+    ):
+        return None
+    return view.keys.get(("knowledge_receipt", finding_id))
 
 
 def proven_receipts_for_head(view: KnowledgeView, exact_head: str, *, planned: Sequence[Write] = ()) -> list[Write]:

@@ -2954,6 +2954,7 @@ def test_pre_push_admits_a_bound_multi_commit_range(monkeypatch, tmp_path: Path)
     monkeypatch.setattr(hunter_pre_push, "_run_mapped_regressions", lambda _head: 0)
     monkeypatch.setattr(hunter_pre_push, "_require_persistent_worktree", lambda _root: None)
     monkeypatch.setattr(hunter_pre_push, "_run_push_safety_lane", lambda: 0)
+    monkeypatch.setattr(hunter_pre_push, "_run_preventive_obligations", lambda _head: 0)
 
     class _Completed:
         returncode = 0
@@ -3990,6 +3991,7 @@ def test_malformed_review_evidence_does_not_block_an_ordinary_draft_push(monkeyp
     monkeypatch.setattr(hunter_pre_push, "_run_mapped_regressions", lambda _head: 0)
     monkeypatch.setattr(hunter_pre_push, "_require_persistent_worktree", lambda _root: None)
     monkeypatch.setattr(hunter_pre_push, "_run_push_safety_lane", lambda: 0)
+    monkeypatch.setattr(hunter_pre_push, "_run_preventive_obligations", lambda _head: 0)
     monkeypatch.setattr(hunter_pre_push.preflight, "run_quality_gates", lambda _gates: 0)
     monkeypatch.setattr(hunter_pre_push.review, "read_review_document", lambda: {"claims": []})
 

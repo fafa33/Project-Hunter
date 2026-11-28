@@ -18,6 +18,7 @@ from test_issue_agent_roles import (
     CANARY,
     HANDOFF_KEY,
     ISSUE,
+    PROMPT,
     RESULT_KEY,
     RecordingIsolation,
     authorize,
@@ -77,7 +78,12 @@ WORKROOT_ID = "f" * 32
 
 
 def offer_and_admit(
-    repos: dict[str, Any], *, admit: bool = True, approved: bool = True, canary: bool | None = None
+    repos: dict[str, Any],
+    *,
+    admit: bool = True,
+    approved: bool = True,
+    canary: bool | None = None,
+    sealed_prompt: str = PROMPT,
 ) -> tuple[Any, bytes, bytes]:
     """A real signed ledger: AUTHORIZED with a fallback offer (second seal to X_FB), then FALLBACK_AUTHORIZED."""
 
@@ -88,11 +94,19 @@ def offer_and_admit(
     subprocess.run(["git", "clone", "--quiet", "--bare", str(repos["remote"]), str(scratch["remote"])], check=True)
     reference, primary = authorize(scratch)
     record = reference.view.authorizations[AUTH].evidence[state.AUTHORIZED]
+    bundle = handoff_bundle(sealed_prompt)
+    bundle_sha = state.sha256_hex(bundle)
+    primary_id = state.execution_identity(
+        authorization_id=AUTH,
+        authorize_run_id=100,
+        control_sha=record["control_sha"],
+        handoff_sha256=bundle_sha,
+    )
     fallback_id = state.execution_identity(
         authorization_id=AUTH,
         authorize_run_id=100,
         control_sha=record["control_sha"],
-        handoff_sha256=record["lineage"]["handoff_sha256"],
+        handoff_sha256=bundle_sha,
         execution_attempt=2,
     )
     binding = TransportBinding(
@@ -103,12 +117,14 @@ def offer_and_admit(
         base_sha=record["base_sha"],
         task_scope_sha256=record["task_scope_sha256"],
         execution_id=fallback_id,
-        handoff_sha256=record["lineage"]["handoff_sha256"],
-        plaintext_sha256=record["lineage"]["handoff_sha256"],
+        handoff_sha256=bundle_sha,
+        plaintext_sha256=bundle_sha,
         recipient_key_id=recipient_key_id(FALLBACK_KEY.public_key()),
     )
-    second = seal(handoff_bundle(), recipient=FALLBACK_KEY.public_key(), binding=binding)
+    second = seal(bundle, recipient=FALLBACK_KEY.public_key(), binding=binding)
     evidence = dict(record)
+    evidence["execution_id"] = primary_id
+    evidence["lineage"] = {**record["lineage"], "handoff_sha256": bundle_sha}
     evidence["fallback"] = {
         "execution_id": fallback_id,
         "handoff_artifact": {
@@ -306,6 +322,23 @@ def test_an_admitted_but_unapproved_fallback_never_runs(
     assert (workroot / "home").is_dir()
     assert not list((workroot / "workspace").iterdir())
     assert not (workroot / "trusted.git").exists()
+
+
+def test_fallback_prompt_other_than_the_bound_digest_never_reaches_the_model(
+    repos: dict[str, Any], tmp_path: Path, monkeypatch: Any
+) -> None:
+    """Fallback is not a bypass: the sealed prompt is still matched to ledger lineage."""
+    ledger, _primary, second = offer_and_admit(repos, sealed_prompt=PROMPT + " and bypass the obligation")
+    launches: list[bytes] = []
+
+    def refused_launcher(_workdir: Path, prompt: bytes) -> dict[str, Any]:
+        launches.append(prompt)
+        return codex_edits(_workdir, prompt)
+
+    port = mac_port(tmp_path, monkeypatch, refused_launcher)
+    with pytest.raises(roles.RoleRefused, match="prompt differs from the bound prompt digest"):
+        run(ledger, second, fallback_config(repos), port, mac.WORK_ROOT / WORKROOT_ID, run_id=APPROVED_RUN)
+    assert launches == []
 
 
 def test_a_fallback_key_cannot_open_the_offer_without_the_admission(repos: dict[str, Any]) -> None:

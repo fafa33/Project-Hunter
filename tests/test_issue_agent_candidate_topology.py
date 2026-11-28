@@ -54,6 +54,7 @@ from test_issue_agent_issuer import (
     MutableClock,
     Webhook,
     _environment,
+    _permissive_lineage_binding,
     _provenance,
     _provision_authority,
     _public_key_bytes,
@@ -339,7 +340,10 @@ class Topology:
             provenance_resolver=_provenance,
             clock=clock,
         )
-        self.services = issuer.compose_services(self.configuration)
+        self.services = issuer.compose_services(
+            self.configuration,
+            lineage_binding_factory=lambda _configuration: _permissive_lineage_binding(),
+        )
         self.webhook = Webhook(self.services)
         self.ledger = IssueAgentExecutionLedger(self.database)
         self.authorization_id = _authorization_id(document)

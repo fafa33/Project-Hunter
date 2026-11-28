@@ -3012,6 +3012,415 @@
       "sources": [
         "Issue #588 / PR #757; stuck collector run 44354491426 despite exact-head Codex completion; Hosted Pre-PR run 44362780632 and Trusted Preflight run 44362790081 exposed GITHUB_ACTIONS-only context leakage; fixed on signed PR #757 lineage after repository binding was added."
       ]
+    },
+    {
+      "id": "DFF-059",
+      "title": "resolver-writer-job-id-not-a-trusted-workflow-job",
+      "invariant": "A resolver's recorded ledger writer job id must name a job that actually exists in the trusted workflow and is allowlisted for that role. A fabricated id such as `resolve` can never be produced by any trusted run, so every resolution record fails authentic run provenance and the review-to-resolution loop stalls while the finding stays open. The trusted identity must be bound in one canonical allowlist and re-verified against the live first-attempt run on the default branch; any other job id, attempt, event, branch, head or repository identity is refused fail-closed.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-issue-agent-reconcile.yml",
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "src/hunter/automation/issue_agent_control.py"
+        ],
+        "rationale": "The resolver's writer identity is minted in the lifecycle command and validated in the control-domain provenance allowlist against the workflow's real job. A drift between the two, or a new resolver entry point, silently makes every resolution record untrustworthy."
+      },
+      "prevention": {
+        "mechanism": "`control.WRITERS[RECONCILE_WORKFLOW]` binds role `reconcile` to the real trusted job id `resolve-finding` (the job in `hunter-issue-agent-reconcile.yml`); `cmd_resolve` records exactly that job; `control.run_provenance` authenticates the run against a live first-attempt default-branch run and refuses the former fabricated `resolve` id and every other job/attempt/event/branch/head/repository mismatch. No privileged write authority is added and no record is accepted from an untrusted run.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/automation/issue_agent_control.py::run_provenance"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_manual_pr_resolution.py::test_the_trusted_resolve_finding_job_identity_is_allowed",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_cmd_resolve_records_the_actual_trusted_workflow_job",
+        "tests/test_issue_agent_control.py::test_a_record_from_any_other_run_is_invalid",
+        "tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 exact-head resolver investigation, 2026-11-27: `cmd_resolve` minted the writer as (`reconcile`, `resolve`, RECONCILE_WORKFLOW), but the workflow's real resolver job is `resolve-finding` and `WRITERS[RECONCILE_WORKFLOW]` allowed only job `reconcile` for role `reconcile`, so every resolution record failed real run provenance. Fixed by binding the real job id in the allowlist and recording it in the resolver; no trust, signature, repository, attempt or HEAD check was relaxed."
+      ]
+    },
+    {
+      "id": "DFF-060",
+      "title": "manual-pr-confirmed-finding-cannot-be-resolved-from-signed-evidence",
+      "invariant": "A reviewer finding the owner confirmed and corrected on a manually created pull request must be resolvable even though that PR has no Issue Agent execution ledger, no remediation authorization and no `PUBLISHED` record. The only admissible authority is a signed, exact-head Knowledge Receipt whose family and regression selectors match the owner's authenticated `confirmed` disposition reply on the exact thread, backed by a successful hosted exact-head Pre-PR Preflight. Missing, stale, moved-head, ambiguous, unauthenticated or mismatched evidence must be a no-op; no authorization, `finding_proven` record, `PUBLISHED` state or second reply may be fabricated, and the exact head and thread must be re-read immediately before the single thread mutation so an interrupted resolve retries by reusing the existing reply.",
+      "applicability": {
+        "changed_paths": [
+          "docs/ADR/0039-review-knowledge-remediation-loop.md",
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "src/hunter/automation/issue_agent_control.py",
+          "src/hunter/automation/issue_agent_knowledge.py",
+          "src/hunter/automation/issue_agent_remediation.py"
+        ],
+        "rationale": "This scope owns the exact-head proof, receipt schema/fold and resolver path. A change to any of them can reopen the gap where a confirmed, evidenced finding on a manually created PR can never be resolved, or can be resolved from forged or stale evidence."
+      },
+      "prevention": {
+        "mechanism": "ADR 0039 L7 resolution-only adoption: `control.manual_adoption_proof` requires an open, unproven finding with a signed `matched-family` receipt at the live exact head, a unique exact thread with no current unresolved repeat, an authenticated owner `confirmed` reply carrying the same head/family/test selectors, and a successful first-attempt exact-head Pre-PR Preflight. `knowledge.verified_manual_adoption_at_head`, `remediation.resolution_writes(..., adoption_receipt_sha256=...)` and the ledger fold independently re-check the receipt digest and forbid any governed proof on this path. `resolve_thread` re-reads the live head and thread before mutating and reuses an existing valid reply instead of posting a duplicate. Publication remains Hunter-agent-only and unchanged.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/automation/issue_agent_control.py::manual_adoption_proof"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_manually_created_pr_is_adopted_from_signed_receipt_evidence",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_manual_adoption_resolves_the_exact_thread_and_records_it_once",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_an_interrupted_resolve_retries_without_a_second_reply",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_thread_already_resolved_by_the_owner_needs_no_mutation",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_head_that_moves_after_proof_is_never_mutated",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_invalid_receipt_evidence_is_never_adopted",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_unauthorized_or_mismatched_owner_replies_are_never_adopted",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_current_thread_repeating_the_claim_blocks_adoption",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_missing_or_failed_exact_head_preflight_blocks_adoption",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_resolution_record_requires_the_signed_receipt_digest",
+        "tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789, 2026-11-27: PR #789 was created manually, so `control.exact_head_proof` could never resolve its two confirmed-and-corrected threads (findings 4716015777 / 4716015788, exact remediation replies 4717097703 / 4717100862, signed Knowledge Ledger head a5a9abc7ec4e92bacafaaf50ce460da3fb023535). The canonical resolver required a `proven` classification and exactly one `PUBLISHED` remediation authorization at head, neither of which exists for a manual PR; adding a resolution-only signed-receipt adoption closes that gap without fabricating lifecycle facts."
+      ]
+    },
+    {
+      "id": "DFF-061",
+      "title": "stale-mutation-anchor-disables-resolution-invariant-proof",
+      "invariant": "A mutation proof that cannot apply its exact-text anchor is not evidence that a weakened invariant was observed. When a resolver implementation changes, every mutation anchor for its load-bearing decisions must be retargeted to the current decision in the same change; an absent or duplicated anchor must fail before the mutant suite runs, never be mistaken for a killed mutant.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/issue_agent_control.py",
+          "src/hunter/automation/issue_agent_remediation.py",
+          "tests/test_issue_agent_remediation_mutation.py"
+        ],
+        "rationale": "The resolver's exact-thread and exact-head decisions and the mutation anchors that weaken them are one enforcement unit. A change to either side can leave a security invariant unproven while the suite still exits nonzero for the wrong reason."
+      },
+      "prevention": {
+        "mechanism": "`test_every_mutation_anchor_is_unique` requires every configured anchor to occur exactly once before any mutant runs; `Mutant.apply` keeps the same fail-closed check at application time. The resolver mutants now target the current load-bearing decisions: `resolve_thread` returns a resolution id only when GitHub reports `isResolved is True`, and governed `resolution_writes` refuses a head that differs from `item.proven[\"remediated_head_sha\"]` while manual adoption still requires the signed receipt digest at that head. No assertion is weakened or skipped and no mutation is disabled.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/automation/issue_agent_control.py::resolve_thread"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_remediation_mutation.py::test_every_mutation_anchor_is_unique",
+        "tests/test_issue_agent_remediation_mutation.py::test_a_weakened_decision_is_always_observed"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 exact-head Trusted Preflight run 45974936031, job 140424215026, 2026-11-27: hosted Pytest reported `anchor is not unique` for the refused-resolve and wrong-head mutation cases because the resolver implementation had changed their exact text. All 22 anchors were revalidated, the two decisions were retargeted without weakening either check, the two focused mutant cases were killed, and 134 affected remediation and manual-adoption tests passed locally."
+      ]
+    },
+    {
+      "id": "DFF-063",
+      "title": "post-resolution-readiness-wakeup-asymmetry",
+      "invariant": "A verified thread resolution that changes the inputs to a downstream readiness gate must have an event-driven path from the trusted producer to that gate. The resolver must publish only affected PR identities after durable knowledge persistence; a trusted workflow_run completion may wake privileged reconciliation only when the resolver job succeeded and published unambiguous identities. Failed, ambiguous, duplicate or stale-head events must produce no readiness refresh, and github events that do not exist (such as an owner resolving a thread in the UI) must remain on the bounded scheduled sweep rather than being claimed as immediate.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-governance-reconcile.yml",
+          ".github/workflows/hunter-issue-agent-reconcile.yml",
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "scripts/hunter_resolution_reconcile_ingress.py",
+          "scripts/hunter_merge_readiness_v2.py",
+          "docs/CODE_WRITE_POLICY.json"
+        ],
+        "rationale": "The resolver's durable-write boundary, its workflow completion event, the trusted privileged reconciler's trigger/scope gate, and the readiness consumer are one lifecycle unit. A change to any one can leave a stale BLOCKING_FINDINGS status after resolution or let an untrusted/ambiguous event publish false readiness."
+      },
+      "prevention": {
+        "mechanism": "cmd_resolve writes a canonical evidence document to an authenticated Actions artifact only after the signed knowledge append and verified thread mutation, and only newly durable resolutions add PR identities. The artifact is keyed by the exact resolver run id and attempt. Hunter Governance Review Reconcile adds the actual `Hunter / Issue Agent Reconcile` workflow_run completion, then reads that run's successful `resolve-finding` job and uniquely named artifact through the authenticated Actions API; `hunter_resolution_reconcile_ingress.select_resolved_pull_requests` verifies the documented job/artifact response shapes, artifact digest, repository, workflow, run id, attempt, HEAD, schema and PR identities, and rejects failure/cancellation/stale/ambiguous/malformed/untrusted data. The newline-separated PR identities are consumed by a real shell `while read` loop. Reconciliation is scoped to those PRs, re-derives each current HEAD from the live PR API, publishes a run/attempt marker at that exact HEAD before invocation, re-reads HEAD after the marker, and passes `--expected-head` so a moved head fails closed. The resolver still holds no `actions: write` and makes no workflow call; the global non-cancelling concurrency group serializes duplicate events; the 5-minute sweep remains recovery only.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_issue_agent_lifecycle.py::cmd_resolve"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_resolution_reconcile.py::test_governance_reconcile_uses_the_actual_issue_agent_completion_event",
+        "tests/test_issue_agent_resolution_reconcile.py::test_resolver_publishes_an_authenticated_artifact_without_gaining_workflow_authority",
+        "tests/test_issue_agent_resolution_reconcile.py::test_successful_trusted_artifact_selects_only_the_affected_pr",
+        "tests/test_issue_agent_resolution_reconcile.py::test_jobs_api_shape_without_step_outputs_is_the_only_producer_identity",
+        "tests/test_issue_agent_resolution_reconcile.py::test_failed_or_incomplete_resolution_never_creates_false_readiness",
+        "tests/test_issue_agent_resolution_reconcile.py::test_untrusted_ambiguous_or_stale_artifacts_fail_closed",
+        "tests/test_issue_agent_resolution_reconcile.py::test_mismatched_or_malformed_evidence_fails_closed",
+        "tests/test_issue_agent_resolution_reconcile.py::test_resolve_output_contract_runs_through_the_real_shell_loop",
+        "tests/test_issue_agent_resolution_reconcile.py::test_reconcile_consumes_the_artifact_output_contract_and_rebinds_exact_head",
+        "tests/test_issue_agent_resolution_reconcile.py::test_manual_thread_resolution_without_a_trusted_artifact_is_recovery_only",
+        "tests/test_issue_agent_resolution_reconcile.py::test_scheduled_sweep_remains_the_recovery_path_only"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789, 2026-11-27: cmd_resolve explicitly deferred readiness refresh to the trusted 5-minute sweep after successful resolution. Owner-authorized scope extension recorded on Issue #575 required immediate post-resolution reconciliation without granting the resolver workflow authority. Issue #588 M1 knowledge and DFF-046 establish that a downstream gate's lifecycle transition must have an event-driven trusted prerequisite path and that schedules are recovery, not freshness guarantees. The fix reuses the existing privileged governance reconciler and its workflow_run mechanism; no new credential, privileged candidate execution path, merge authorization or production activation is claimed."
+      ]
+    },
+    {
+      "id": "DFF-080",
+      "title": "unsupported-workflow-step-output-cross-workflow-evidence",
+      "invariant": "Cross-workflow evidence may use only documented, authenticated GitHub API surfaces. The workflow jobs response has no steps[].outputs field; a resolver identity must travel in a uniquely named immutable Actions artifact bound to the exact repository, workflow, run id, attempt, job and head, with a verified artifact digest and canonical evidence payload. Every CLI-supplied evidence path must also remain inside the trusted workflow root (RUNNER_TEMP/GITHUB_WORKSPACE): `..`, absolute-path escape and symlink components are refused before any read.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-governance-reconcile.yml",
+          ".github/workflows/hunter-issue-agent-reconcile.yml",
+          "scripts/hunter_resolution_reconcile_ingress.py"
+        ],
+        "rationale": "A producer that invents a response field and a consumer that trusts it can never interoperate against the live API; both sides of the cross-workflow channel plus the trusted ingress are one enforcement unit."
+      },
+      "prevention": {
+        "mechanism": "The resolver uploads resolution-evidence.json as a digest-bound artifact named for its exact run id and attempt without gaining actions:write. The trusted reconciler lists and downloads that artifact through the authenticated API and `select_resolved_pull_requests` validates the documented jobs/artifact shapes, exact run/repository/workflow/head bindings, artifact digest, schema and PR identities; any missing, stale, ambiguous or untrusted value yields no wake-up. `main()` resolves each CLI path through `_workflow_input_path` against trusted workflow roots before reading; traversal, external absolute paths and symlinked components fail closed with exit code 2.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_resolution_reconcile_ingress.py::select_resolved_pull_requests"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_resolution_reconcile.py::test_jobs_api_shape_without_step_outputs_is_the_only_producer_identity",
+        "tests/test_issue_agent_resolution_reconcile.py::test_successful_trusted_artifact_selects_only_the_affected_pr",
+        "tests/test_issue_agent_resolution_reconcile.py::test_untrusted_ambiguous_or_stale_artifacts_fail_closed",
+        "tests/test_issue_agent_resolution_reconcile.py::test_mismatched_or_malformed_evidence_fails_closed",
+        "tests/test_issue_agent_resolution_reconcile.py::test_legitimate_workflow_input_paths_are_accepted",
+        "tests/test_issue_agent_resolution_reconcile.py::test_cli_input_paths_cannot_escape_the_trusted_workflow_root",
+        "tests/test_issue_agent_resolution_reconcile.py::test_symlink_input_paths_cannot_escape_the_trusted_workflow_root"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 review thread PRRT_kwDOTRDHr8682GTN, 2026-11-27: the trusted reconciler read `steps[].outputs` from the jobs API, a field GitHub does not expose. GitHub's documented jobs and artifact response schemas were verified before replacing that channel; no workflow authority or caller-shaped payload was added.",
+        "SonarCloud issue AaIfCc_g6-O7kMFOyZhr, 2026-11-28: the artifact-ingress fix validated payload binding but read CLI paths directly. Path provenance is part of the same trusted artifact boundary."
+      ]
+    },
+    {
+      "id": "DFF-081",
+      "title": "producer-consumer-pr-identity-format-mismatch",
+      "invariant": "A validated producer output and its shell consumer must share one executable contract. Comma-separated PR identities cannot be consumed by a newline-separated `while read` loop, so the trusted producer must emit one numeric PR identity per line and the real loop must observe empty, single, multiple and duplicate cases without malformed values reaching the loop.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-governance-reconcile.yml",
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "scripts/hunter_resolution_reconcile_ingress.py"
+        ],
+        "rationale": "The lifecycle producer, artifact ingress and privileged reconciliation shell loop are one data contract; a format change in only one surface silently drops every wake-up."
+      },
+      "prevention": {
+        "mechanism": "cmd_resolve emits newline-separated identities through a multiline-safe GITHUB_OUTPUT delimiter; the ingress `--for-shell` mode emits bare newline-separated identities; the trusted workflow passes that output directly to the existing `while read -r pr_number` loop. The regression executes that actual shell loop against empty, single, duplicate and malformed evidence files.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_resolution_reconcile_ingress.py::_write_output"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_resolution_reconcile.py::test_resolve_output_contract_runs_through_the_real_shell_loop",
+        "tests/test_issue_agent_resolution_reconcile.py::test_reconcile_consumes_the_artifact_output_contract_and_rebinds_exact_head",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_manual_adoption_runs_with_multiple_and_mixed_ledgers"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 review thread PRRT_kwDOTRDHr8682GTT, 2026-11-27: the resolver wrote `resolved_pr_numbers=788,789` while the privileged consumer loop reads one line at a time. The fix validates identities at the ingress and tests the real shell boundary, not a simulated split."
+      ]
+    },
+    {
+      "id": "DFF-082",
+      "title": "long-running-issuer-frozen-dpm-context",
+      "invariant": "A long-running issuer must resolve the signed authorization's trusted DPM/SPM knowledge context per authorization before claim. It may never compile with a process-startup snapshot that can diverge from the knowledge view used by the signer, and the measured prompt and DPM context digests must still be compared with the signed AUTHORIZED lineage before dispatch.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_issue_agent_issuer.py",
+          "src/hunter/evidence_intelligence/engineering_context_authority.py"
+        ],
+        "rationale": "The sign job and issuer are two halves of one DPM-to-SPM lineage. Freezing only the issuer side makes valid later authorizations impossible and creates a stale-context bypass surface."
+      },
+      "prevention": {
+        "mechanism": "production_lineage_binding no longer reads the knowledge ledger at process startup. Before each ledger claim, prepare_authorization invokes a request-scoped context resolver that re-reads the anchored signed knowledge ledger, builds an EngineeringContextAuthority for that authorization, compiles through a request-local governed ingress, and verifies prompt_sha256 and dpm_context_sha256 against signed lineage with hmac.compare_digest. Missing, unavailable or mismatched contexts fail closed before dispatch.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_issue_agent_issuer.py::prepare_authorization"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_issuer_context_freshness.py::test_a_live_issuer_accepts_authorization_minted_after_knowledge_changes",
+        "tests/test_issue_agent_issuer_context_freshness.py::test_a_mismatched_knowledge_context_is_refused_without_restart",
+        "tests/test_issue_agent_issuer_context_freshness.py::test_an_unavailable_knowledge_context_is_refused",
+        "tests/test_issue575_eca_execution_binding.py::test_composition_root_passes_explicit_eca_into_the_smart_prompt_machine"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 review thread PRRT_kwDOTRDHr8682GTY, 2026-11-27: the deployable issuer composed once at startup and froze the DPM overlay, while the signer read knowledge when minting each authorization. One live issuer object now accepts an authorization minted after knowledge changes without restart and refuses mismatched or unavailable contexts."
+      ]
+    },
+    {
+      "id": "DFF-083",
+      "title": "manual-adoption-gated-by-unrelated-issue-ledgers",
+      "invariant": "Manual-PR adoption is ledger-independent evidence and must be evaluated exactly once over the verified knowledge findings, even with zero, unreadable or multiple Issue ledgers. Governed remediation remains ledger-bound and takes precedence; no Issue ledger failure, including a concurrent-ledger conflict during the signed append, may suppress, duplicate or bypass a signed-receipt adoption. A conflict defers only its own finding; every other governed and manual finding is still evaluated, no false resolution or receipt is published, and the next trusted pass re-decides the deferred finding from fresh exact-head and ledger evidence.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_issue_agent_lifecycle.py",
+          "tests/test_issue_agent_manual_pr_resolution.py"
+        ],
+        "rationale": "The resolver call site and its proof/write helpers are one authority boundary: nesting a ledger-independent proof in a ledger-dependent loop makes the proof unreachable or duplicated, while placing the append outside the per-finding conflict boundary lets one writer race abort every later finding."
+      },
+      "prevention": {
+        "mechanism": "cmd_resolve runs a governed pass over verified Issue ledgers and a separate manual pass over sorted knowledge findings, skipping findings already handled or blocked by an indefinite governed proof. Both governed and manual `apply_proof` calls now sit inside a narrow per-finding `state.LedgerConflictError` boundary; the helper still preserves the exact-head proof, signed receipt, CAS/atomic ownership checks and idempotency. A conflict marks only that finding blocked and continues, never retries the same mutation in the same pass and never publishes a PR identity, receipt or false resolution. Only a newly durable resolution publishes a PR identity. Owner `[test:...]` evidence is extracted by bounded linear `owner_test_selectors`; an unbounded regex is never used on owner-controlled reply bodies.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_issue_agent_lifecycle.py::cmd_resolve"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_manual_pr_resolution.py::test_manual_adoption_runs_without_any_active_issue_ledger",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_manual_adoption_runs_with_multiple_and_mixed_ledgers",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_invalid_receipt_evidence_is_never_adopted",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_a_head_that_moves_after_proof_is_never_mutated",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_ledger_conflict_during_governed_proof_defers_only_that_finding",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_ledger_conflict_during_manual_adoption_does_not_stop_unrelated_findings",
+        "tests/test_issue_agent_owner_tag_parser.py::test_valid_owner_test_tags_preserve_the_selector_contract",
+        "tests/test_issue_agent_owner_tag_parser.py::test_malformed_and_overlong_owner_test_tags_are_ignored",
+        "tests/test_issue_agent_owner_tag_parser.py::test_adversarial_owner_reply_input_is_bounded_and_linear"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 review thread PRRT_kwDOTRDHr8682GTd, 2026-11-27: manual adoption was nested inside the active Issue-ledger loop, so a scheduled run with no ledgers never evaluated the signed receipt. The fix keeps governed proof ledger-bound and evaluates manual evidence independently and once.",
+        "SonarCloud issue AaIcXQzl9baHMF1NKqJi, 2026-11-28: owner-reply authority was guarded, but its selector regex used two greedy classes around `::` and could backtrack super-linearly on adversarial input.",
+        "Issue #575 / PR #789 independent review thread PRRT_kwDOTRDHr868-Cyj comment 4724595061, 2026-11-28: the prior DPM separated governed and manual passes but caught `LedgerConflictError` only around exact-head proof construction. An injected conflict from `apply_proof()` escaped to `knowledge.append()`, aborted the loop and stalled unaffected findings; the append is now inside the same narrow per-finding boundary on both paths."
+      ]
+    },
+    {
+      "id": "DFF-084",
+      "title": "untrusted-cli-and-temp-input-escape-into-trusted-ingress",
+      "invariant": "A trusted ingress may read only paths minted by the workflow boundary. The producer must explicitly create every input under RUNNER_TEMP and validate that trusted root; directory traversal, absolute paths outside RUNNER_TEMP/GITHUB_WORKSPACE, symlink components, an unset/missing RUNNER_TEMP, and a refused ingress must all fail closed before any wake-up, while normal workflow artifact paths remain accepted.",
+      "applicability": {
+        "changed_paths": [
+          ".github/workflows/hunter-governance-reconcile.yml",
+          "scripts/hunter_resolution_reconcile_ingress.py",
+          "tests/test_issue_agent_resolution_reconcile.py",
+          "tests/test_issue_575_workflow_temp_input_contract.py"
+        ],
+        "rationale": "The producer's temp-file creation and the CLI path are the two halves of this ingress boundary. Payload validation cannot repair evidence read from a caller-chosen or host-default external file, so the workflow producer, ingress validator and their executable regressions are one enforcement unit."
+      },
+      "prevention": {
+        "mechanism": "The workflow validates that RUNNER_TEMP is set and is an existing directory before any resolver wake-up, then uses `mktemp \"${RUNNER_TEMP}/hunter-resolution-${label}.XXXXXX\"` for all three input files and removes them in a bounded loop. `_workflow_input_path` rejects `..` components, requires absolute/relative paths to remain under an existing trusted workflow root, rejects every symlink component in that path, requires a regular file, and resolves exactly that file before JSON/zip reads. An ingress nonzero exit is captured explicitly and forces `failures=1` with no PR identities; it is no longer hidden by `|| pr_numbers=\"\"`. Missing roots or unreadable paths also fail closed.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_resolution_reconcile_ingress.py::_workflow_input_path"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_resolution_reconcile.py::test_legitimate_workflow_input_paths_are_accepted",
+        "tests/test_issue_agent_resolution_reconcile.py::test_cli_input_paths_cannot_escape_the_trusted_workflow_root",
+        "tests/test_issue_agent_resolution_reconcile.py::test_symlink_input_paths_cannot_escape_the_trusted_workflow_root",
+        "tests/test_issue_575_workflow_temp_input_contract.py::test_workflow_creates_ingress_inputs_inside_trusted_runner_temp",
+        "tests/test_issue_575_workflow_temp_input_contract.py::test_empty_and_invalid_evidence_never_wake_reconciliation",
+        "tests/test_issue_575_workflow_temp_input_contract.py::test_missing_runner_temp_fails_closed_without_creating_inputs",
+        "tests/test_issue_575_workflow_temp_input_contract.py::test_traversal_and_symlink_inputs_still_fail_closed"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "SonarCloud issue AaIfCc_g6-O7kMFOyZhr, 2026-11-28: DFF-080/081 validated what the ingress believed but not where its four CLI inputs came from. This family closes that missing provenance step without weakening the real artifact path used by hunter-governance-reconcile.yml.",
+        "Issue #575 / PR #789 independent review thread PRRT_kwDOTRDHr868-Cyc comment 4724595051, 2026-11-28: the ingress rejected paths outside RUNNER_TEMP/GITHUB_WORKSPACE, but the workflow producer still called plain `mktemp`. With TMPDIR unset on the runner the three files landed in `/tmp`, and `|| pr_numbers=\"\"` hid the resulting ingress refusal. The producer now mints inputs explicitly under the validated RUNNER_TEMP and the regression executes the real shell step with distinct trusted roots."
+      ]
+    },
+    {
+      "id": "DFF-085",
+      "title": "super-linear-owner-evidence-tag-parsing",
+      "invariant": "Owner-controlled evidence tags must be parsed by bounded linear scanning. Regexes with multiple unbounded quantified classes separated by a literal delimiter are not admissible on comment bodies.",
+      "applicability": {
+        "changed_paths": [
+          "src/hunter/automation/issue_agent_control.py",
+          "tests/test_issue_agent_owner_tag_parser.py",
+          "tests/test_issue_agent_manual_pr_resolution.py"
+        ],
+        "rationale": "The collector parses owner replies before exact-head resolution; a super-linear parser on an adversarial comment can stall or exhaust the privileged resolver."
+      },
+      "prevention": {
+        "mechanism": "`owner_test_selectors` scans forward with `str.find`, caps selector length at 512 characters and tag count at 64, ignores malformed/overlong tags, and leaves the existing uppercase exact-set comparison against the signed receipt unchanged. No unbounded regex remains on this path.",
+        "boundary": "hosted-gate",
+        "guard_reference": "src/hunter/automation/issue_agent_control.py::owner_test_selectors"
+      },
+      "regression_evidence": [
+        "tests/test_issue_agent_owner_tag_parser.py::test_valid_owner_test_tags_preserve_the_selector_contract",
+        "tests/test_issue_agent_owner_tag_parser.py::test_malformed_and_overlong_owner_test_tags_are_ignored",
+        "tests/test_issue_agent_owner_tag_parser.py::test_adversarial_owner_reply_input_is_bounded_and_linear",
+        "tests/test_issue_agent_owner_tag_parser.py::test_unclosed_owner_test_tag_does_not_backtrack",
+        "tests/test_issue_agent_manual_pr_resolution.py::test_unauthorized_or_mismatched_owner_replies_are_never_adopted"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "SonarCloud issue AaIcXQzl9baHMF1NKqJi, 2026-11-28: DFF-060/083 guarded who may authorize but the `[test:...]` extraction still used `r\"\\[test:([^\\]]+::[^\\]]+)\\]\"`, which can backtrack super-linearly. The fix preserves the two-selector evidence contract with explicit bounds."
+      ]
+    },
+    {
+      "id": "DFF-086",
+      "title": "non-executable-version-specific-preventive-fixtures",
+      "invariant": "A registered preventive selector is proof only when it executes real product APIs with positive test counts and zero skips, failures and errors on every overlapping product version it claims to cover. Fixtures may not depend on helper names present in only one version and then skip on the other; skips, missing selectors, missing product modules and malformed overlays must fail closed.",
+      "applicability": {
+        "changed_paths": [
+          "scripts/hunter_ci_impact.py",
+          "scripts/hunter_preventive_obligations.py",
+          "tests/test_issue_575_preventive_obligations.py",
+          "docs/DEFECT_REGISTRY.json"
+        ],
+        "rationale": "The obligation registry, selector executor and version-adaptive fixtures are one prevention unit. A selector that is registered but cannot execute against a candidate's actual API surface records no evidence and can hide a known defect."
+      },
+      "prevention": {
+        "mechanism": "`execute_obligations` parses pytest JUnit counts and blocks any selector with zero tests, any skip, any failure, any error, a missing selector file or a dirty/unidentifiable tree, then hashes the final record. The Issue #575 discovery and onchain fixtures construct their own API-shaped inputs, adapt to both the current checkout and the isolated PR #788 product overlay, and never call `pytest.skip`; optional PR #788-only surfaces are asserted only when present. An executable regression runs all three selectors against an isolated `git archive` overlay of the exact PR #788 head, and a paired defective-overlay fixture proves missing product modules are blocked, not silently accepted.",
+        "boundary": "hosted-gate",
+        "guard_reference": "scripts/hunter_ci_impact.py::execute_obligations"
+      },
+      "regression_evidence": [
+        "tests/test_issue_575_preventive_obligations.py::test_case_a_surface_bound_signature_identity_collision",
+        "tests/test_issue_575_preventive_obligations.py::test_case_b_pagination_budget_does_not_discard_acquired_catalogue",
+        "tests/test_issue_575_preventive_obligations.py::test_case_c_explicit_limit_still_obeys_request_budget",
+        "tests/test_issue_575_preventive_obligations.py::test_discovery_preventive_cli_executes_every_mandatory_selector",
+        "tests/test_issue_575_preventive_obligations.py::test_onchain_preventive_cli_executes_every_mandatory_selector",
+        "tests/test_issue_575_preventive_obligations.py::test_pr788_product_overlay_executes_all_three_selectors",
+        "tests/test_issue_575_preventive_obligations.py::test_defective_product_overlays_are_blocked",
+        "tests/test_issue_575_preventive_obligations.py::test_missing_focused_test_fails_closed_in_bound_record",
+        "tests/test_issue_575_preventive_obligations.py::test_skipped_focused_test_is_blocked_in_bound_record"
+      ],
+      "lifecycle": "regression-tested",
+      "sources": [
+        "Issue #575 / PR #789 independent review thread PRRT_kwDOTRDHr868-Cyh comment 4724595058, 2026-11-28: the preventive registry named the correct PR #788 regression selectors, but their fixtures referenced helper classes and constructor fields that exist only on one side of the overlapping discovery/onchain APIs. On the other version those non-skippable selectors skipped, so the obligation data looked configured while no executable proof existed. The fixtures now build version-adaptive inputs, run against both API surfaces, and reject defective overlays."
+      ]
+    }
+  ],
+  "preventive_obligations": [
+    {
+      "id": "PO-575-A",
+      "finding_ids": [
+        "PRRT_kwDOTRDHr868k0Fl",
+        "4713782946"
+      ],
+      "families": [
+        "DFF-062",
+        "DFF-078",
+        "PRH-142"
+      ],
+      "changed_paths": [
+        "src/hunter/onchain/engine.py",
+        "src/hunter/onchain/evidence.py",
+        "src/hunter/onchain/repository.py",
+        "tests/test_onchain_capital_flow_acquisition.py"
+      ],
+      "selectors": [
+        "tests/test_issue_575_preventive_obligations.py::test_case_a_surface_bound_signature_identity_collision"
+      ]
+    },
+    {
+      "id": "PO-575-B",
+      "finding_ids": [
+        "PRRT_kwDOTRDHr868k0Fo",
+        "4713782951"
+      ],
+      "families": [
+        "DFF-065",
+        "PRH-146"
+      ],
+      "changed_paths": [
+        "src/hunter/discovery/engine.py",
+        "src/hunter/discovery/providers.py",
+        "tests/test_discovery_engine.py",
+        "tests/test_discovery_providers.py"
+      ],
+      "selectors": [
+        "tests/test_issue_575_preventive_obligations.py::test_case_b_pagination_budget_does_not_discard_acquired_catalogue"
+      ]
+    },
+    {
+      "id": "PO-575-C",
+      "finding_ids": [
+        "PRRT_kwDOTRDHr868k0Fu",
+        "4713782958"
+      ],
+      "families": [
+        "DFF-064",
+        "DFF-079",
+        "PRH-145"
+      ],
+      "changed_paths": [
+        "src/hunter/discovery/engine.py",
+        "src/hunter/discovery/providers.py",
+        "tests/test_discovery_engine.py",
+        "tests/test_discovery_providers.py"
+      ],
+      "selectors": [
+        "tests/test_issue_575_preventive_obligations.py::test_case_c_explicit_limit_still_obeys_request_budget"
+      ]
     }
   ]
 }

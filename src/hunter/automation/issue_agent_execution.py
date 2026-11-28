@@ -57,6 +57,7 @@ configuration, and every execution runs in its own isolated workspace.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -1714,6 +1715,8 @@ class GovernedIssueAgentExecutionService:
         "_verifier",
         "_issuer_verifier",
         "_clock",
+        "_dpm",
+        "_expected_lineage",
     )
 
     def __init__(
@@ -1727,6 +1730,8 @@ class GovernedIssueAgentExecutionService:
         verifier: PromptAutomationVerifier,
         issuer_verifier: IssueAgentAuthorizationVerifier,
         clock: Clock | None = None,
+        engineering_context_authority: EngineeringContextAuthority | None = None,
+        expected_lineage: Mapping[str, str] | None = None,
     ) -> None:
         if not isinstance(configuration, IssueAgentExecutionConfiguration):
             raise IssueAgentConfigurationError("the composition root requires captured bootstrap configuration")
@@ -1752,8 +1757,26 @@ class GovernedIssueAgentExecutionService:
         self._verifier = verifier
         self._issuer_verifier = issuer_verifier
         self._clock = clock or SystemClock()
+        if engineering_context_authority is None:
+            # Direct construction keeps the legacy default for isolated tests.
+            # The production composition root below supplies an explicit,
+            # overlay-bound authority and therefore does not use this fallback.
+            engineering_context_authority = EngineeringContextAuthority()
+        self._dpm = engineering_context_authority
+        if expected_lineage is not None:
+            required_digests = ("prompt_sha256", "dpm_context_sha256")
+            if any(
+                not isinstance(expected_lineage.get(key), str) or not expected_lineage[key] for key in required_digests
+            ):
+                raise IssueAgentConfigurationError(
+                    "expected execution lineage must bind prompt and DPM context digests"
+                )
+        self._expected_lineage = expected_lineage
         composed = compose_governed_compilation(
-            repository=repository, source_handling_resolver=source_handling_resolver, clock=self._clock
+            repository=repository,
+            source_handling_resolver=source_handling_resolver,
+            clock=self._clock,
+            engineering_context_authority=engineering_context_authority,
         )
         self._boundary, self._machine, self._ingress = composed.boundary, composed.machine, composed.ingress
 
@@ -1764,6 +1787,8 @@ class GovernedIssueAgentExecutionService:
         provenance_resolver: ProvenanceResolver,
         environ: Mapping[str, str] | None = None,
         clock: Clock | None = None,
+        knowledge_overlay: tuple[dict[str, Any], ...] | None = None,
+        expected_lineage: Mapping[str, str] | None = None,
     ) -> GovernedIssueAgentExecutionService:
         """Compose the production path from operational configuration only.
 
@@ -1772,11 +1797,19 @@ class GovernedIssueAgentExecutionService:
         configuration value; there is deliberately no default, so an unwired
         deployment cannot silently resolve provenance as "absent but fine".
         """
+        if expected_lineage is None:
+            raise IssueAgentConfigurationError(
+                "production execution requires prompt and DPM context digests bound at authorization"
+            )
         source = os.environ if environ is None else environ
         configuration = IssueAgentExecutionConfiguration.from_environment(source)
         resolver = build_production_source_handling_resolver(
             configuration,
             provenance_resolver=provenance_resolver,
+        )
+        dpm = EngineeringContextAuthority(
+            registry_path=configuration.repository_checkout / "docs" / "DEFECT_REGISTRY.json",
+            knowledge_overlay=knowledge_overlay or (),
         )
         return cls(
             configuration=configuration,
@@ -1787,6 +1820,8 @@ class GovernedIssueAgentExecutionService:
             verifier=PromptAutomationVerifier.from_environment(environ=source),
             issuer_verifier=IssueAgentAuthorizationVerifier.from_environment(environ=source),
             clock=clock,
+            engineering_context_authority=dpm,
+            expected_lineage=expected_lineage,
         )
 
     def execute(self, document: str | bytes) -> IssueAgentExecutionReceipt:
@@ -1835,6 +1870,20 @@ class GovernedIssueAgentExecutionService:
 
         compiled = self._ingress.compile(request, implementation_scope=signed.implementation_scope)
         envelope = compiled.envelope
+        artifact = compiled.compilation.orchestration.build_result.prompt_artifact
+        if artifact is None:
+            raise IssueAgentExecutionError("no concrete prompt artifact was compiled for execution")
+        prompt_sha256 = hashlib.sha256(artifact.content.encode("utf-8")).hexdigest()
+        dpm_context_sha256 = hashlib.sha256(
+            self._dpm.canonical_json(ISSUE_AGENT_TASK_KEY, scope=signed.implementation_scope).encode("utf-8")
+        ).hexdigest()
+        if self._expected_lineage is not None:
+            bound_prompt = str(self._expected_lineage["prompt_sha256"])
+            bound_dpm = str(self._expected_lineage["dpm_context_sha256"])
+            if not hmac.compare_digest(bound_prompt, prompt_sha256):
+                raise IssueAgentExecutionError("execution prompt digest differs from signed authorization lineage")
+            if not hmac.compare_digest(bound_dpm, dpm_context_sha256):
+                raise IssueAgentExecutionError("execution DPM context digest differs from signed authorization lineage")
         envelope.verify_issuer_signature(self._verifier)
         if envelope.build_record_id != compiled.compilation.manifest.build_record_id:
             raise IssueAgentExecutionError("signed envelope and persisted build refer to different lineage")

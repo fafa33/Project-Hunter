@@ -30,6 +30,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+import hunter_ci_impact as impact
 import hunter_connector_write_ingress as ingress
 import hunter_governance_review_v2 as governance
 import hunter_pr_preflight as preflight
@@ -253,6 +254,18 @@ def _run_mapped_regressions(head_sha: str) -> int:
         env=_test_subprocess_environment(),
     )
     return completed.returncode
+
+
+def _run_preventive_obligations(head_sha: str) -> int:
+    """Execute applicable known-defect obligations at the existing push boundary.
+
+    This is not a new gate and not trusted proof: it is the deterministic local
+    pre-publication check that refuses a candidate whose focused preventive
+    obligations were not actually executed successfully. Hosted exact-HEAD
+    verification remains independently authoritative.
+    """
+    base = provenance.resolve_governed_base(head_sha)
+    return impact.enforce_preventive_obligations(base, head_sha)
 
 
 def _lane_label(mode: str) -> str:
@@ -570,6 +583,9 @@ def enforce_credential_free_candidate_safety(lines: Iterable[str]) -> int:
     result = _run_push_safety_lane()
     if result != 0:
         return result or 1
+    preventive = _run_preventive_obligations(head)
+    if preventive != 0:
+        return preventive or 1
     _require_clean_tree()
     if _run_git("rev-parse", "HEAD") != head:
         raise RuntimeError("candidate safety HEAD changed during validation")
@@ -634,6 +650,10 @@ def enforce_pre_push(lines: Iterable[str]) -> int:
         if mapped_result != 0:
             print("[Hunter Pre-Push] BLOCKED: mapped regression tests failed", file=sys.stderr)
             return mapped_result
+        preventive_result = _run_preventive_obligations(before_head)
+        if preventive_result != 0:
+            print("[Hunter Pre-Push] BLOCKED: applicable preventive obligations failed", file=sys.stderr)
+            return preventive_result
 
     after_head = _run_git("rev-parse", "HEAD")
     if after_head != before_head:

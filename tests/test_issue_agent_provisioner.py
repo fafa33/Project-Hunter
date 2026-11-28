@@ -44,6 +44,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from issue_agent_edge_transport import MAX_REQUEST_BYTES
 from issue_agent_wire import EdgeTransportClientMixin, issue_body_with_scope
+from test_issue_agent_issuer import _permissive_lineage_binding
 
 from hunter.automation.agent_fallback_runtime import AgentFallbackRuntimeReceipt
 from hunter.automation.issue_agent_execution import (
@@ -565,6 +566,7 @@ def _issuer_services(
         fallback=fallback,
         ingress=ingress,
         boundary=boundary,
+        lineage_binding=_permissive_lineage_binding(),
     )
 
 

@@ -179,10 +179,10 @@ MUTANTS: list[Mutant] = [
     ),
     Mutant(
         "src/hunter/automation/issue_agent_control.py",
-        '    thread = resolved.get("resolveReviewThread", {}).get("thread") if isinstance(resolved, Mapping) else None\n'
-        '    return int(posted["id"]) if isinstance(thread, Mapping) and thread.get("isResolved") is True else None',
-        '    thread = resolved.get("resolveReviewThread", {}).get("thread") if isinstance(resolved, Mapping) else None\n'
-        '    return int(posted["id"])',
+        '    result = resolved.get("resolveReviewThread", {}).get("thread") if isinstance(resolved, Mapping) else None\n'
+        '    return reply_id if isinstance(result, Mapping) and result.get("isResolved") is True else None',
+        '    result = resolved.get("resolveReviewThread", {}).get("thread") if isinstance(resolved, Mapping) else None\n'
+        "    return reply_id",
         note="a refused resolve reported as a resolution",
     ),
     # --- ADR 0039 L2/L7: the anchored proof and resolution records ------------------------------
@@ -202,9 +202,10 @@ MUTANTS: list[Mutant] = [
     ),
     Mutant(
         "src/hunter/automation/issue_agent_remediation.py",
-        '    if item is None or item.proven is None or item.proven["remediated_head_sha"] != remediated_head_sha:\n'
-        "        return []",
-        "    if item is None:\n        return []",
+        "    if adoption_receipt_sha256 is None:\n"
+        '        if item.proven is None or item.proven["remediated_head_sha"] != remediated_head_sha:\n'
+        "            return []",
+        "    if adoption_receipt_sha256 is None:\n" "        if item.proven is None:\n" "            return []",
         note="a thread resolved at a head other than the proven one",
     ),
     Mutant(
@@ -215,6 +216,14 @@ MUTANTS: list[Mutant] = [
         note="a classification for a finding nobody ingested",
     ),
 ]
+
+
+def test_every_mutation_anchor_is_unique() -> None:
+    """A drifted exact-text anchor must fail before any expensive mutant is applied."""
+
+    for mutant in MUTANTS:
+        count = mutant.path.read_bytes().count(mutant.old.encode())
+        assert count == 1, f"{mutant.note}: expected exactly one anchor in {mutant.path.name}, found {count}"
 
 
 @pytest.mark.parametrize("mutant", MUTANTS, ids=[mutant.note for mutant in MUTANTS])

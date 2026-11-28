@@ -553,28 +553,36 @@ def resolution_writes(
     *,
     remediated_head_sha: str,
     reply_comment_id: int,
+    adoption_receipt_sha256: str | None = None,
 ) -> list[knowledge.Write]:
     """ADR 0039 L2/L7 (RD-6): the exact thread resolution, keyed by the finding and bound to the exact head.
 
-    Only reachable once ``finding_proven`` exists at that head, so the resolution record cannot be written
-    before the proof, and the reply comment id must already exist, so it cannot be written before the reply.
+    A governed remediation is reachable only once ``finding_proven`` exists at that head. A manually
+    created PR is reachable only once a signed, matched-family Knowledge Receipt is verified at that head
+    and its digest is named here. In both modes the reply comment id must already exist, so the record
+    cannot be written before the reply, and the ledger fold re-checks the same barrier.
     """
 
     item = view.findings.get(finding_id)
-    if item is None or item.proven is None or item.proven["remediated_head_sha"] != remediated_head_sha:
+    if item is None or item.resolved is not None or reply_comment_id < 1:
         return []
-    if item.resolved is not None or reply_comment_id < 1:
-        return []
-    return [
-        knowledge.Write(
-            "thread_resolved",
-            {
-                "finding_id": finding_id,
-                "remediated_head_sha": remediated_head_sha,
-                "reply_comment_id": reply_comment_id,
-            },
-        )
-    ]
+    evidence: dict[str, Any] = {
+        "finding_id": finding_id,
+        "remediated_head_sha": remediated_head_sha,
+        "reply_comment_id": reply_comment_id,
+    }
+    if adoption_receipt_sha256 is None:
+        if item.proven is None or item.proven["remediated_head_sha"] != remediated_head_sha:
+            return []
+    else:
+        if (
+            item.proven is not None
+            or knowledge.verified_manual_adoption_at_head(view, finding_id, exact_head=remediated_head_sha)
+            != adoption_receipt_sha256
+        ):
+            return []
+        evidence["adoption_receipt_sha256"] = adoption_receipt_sha256
+    return [knowledge.Write("thread_resolved", evidence)]
 
 
 def evidence_reply(finding_id: str, *, remediated_head_sha: str, family: str, tests: Sequence[str]) -> str:

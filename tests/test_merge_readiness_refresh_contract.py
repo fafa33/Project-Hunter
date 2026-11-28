@@ -63,7 +63,11 @@ def test_resolving_a_finding_neither_dispatches_nor_gains_actions_write():
     resolve = source.split("def cmd_resolve", 1)[1].split("\ndef cmd_resume_bind", 1)[0]
     code = "\n".join(line for line in resolve.splitlines() if not line.strip().startswith("#"))
     assert "dispatches" not in code and "workflow_run" not in code and "workflow run" not in code
-    assert "merge readiness refresh deferred to trusted scheduled sweep" in code
+    # The resolver publishes only affected PR identities after durable writes;
+    # the trusted workflow_run completion, not this job, wakes reconciliation.
+    assert "_output(resolved_pr_numbers=" in code
+    assert "scheduled sweep remains recovery" in code
+    assert "deferred" not in code
 
 
 def test_the_latency_and_recovery_are_documented_as_a_bounded_sweep():

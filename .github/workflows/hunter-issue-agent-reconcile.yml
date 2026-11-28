@@ -109,7 +109,20 @@ jobs:
       - name: Install pinned runtime
         run: python -m pip install --disable-pip-version-check --only-binary ':all:' -c requirements/ci-constraints.txt .
       - name: Prove the exact head, answer and resolve the exact thread
+        id: resolve
         env:
           GITHUB_TOKEN: ${{ github.token }}
           HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY: ${{ secrets.HUNTER_ISSUE_AGENT_STATE_SIGNING_KEY }}
+          HUNTER_RESOLUTION_EVIDENCE_PATH: ${{ runner.temp }}/resolution-evidence.json
         run: python scripts/hunter_issue_agent_lifecycle.py resolve-finding
+      # The jobs API has no `steps[].outputs`. The trusted reconciler therefore
+      # reads this immutable, digest-bound artifact from the authenticated
+      # Actions API, keyed by this exact run id and attempt.
+      - name: Publish scoped resolution evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hunter-resolution-reconcile-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/resolution-evidence.json
+          if-no-files-found: error
+          retention-days: 1

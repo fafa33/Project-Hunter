@@ -23,6 +23,9 @@ ever committed; all secrets are environment/repository secrets only.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
@@ -30,7 +33,7 @@ import re
 import secrets
 import signal
 import threading
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -43,6 +46,9 @@ from issue_agent_edge_transport import (
     setup_logging,
 )
 
+from hunter.automation import issue_agent_control as control
+from hunter.automation import issue_agent_knowledge as knowledge
+from hunter.automation import issue_agent_state as state
 from hunter.automation.agent_fallback_runtime import AgentFallbackRuntimeReceipt
 from hunter.automation.issue_agent_execution import (
     EVIDENCE_DATABASE_ENV,
@@ -84,6 +90,10 @@ from hunter.automation.n8n_handoff import serialize_prompt_automation_handoff
 from hunter.automation.workspace_authority import WorkspaceAuthorityMismatch, WorkspaceRegistry
 from hunter.automation.workspace_authority_client import WorkspaceAuthorityClient
 from hunter.automation.workspace_provisioning import provision_verified_dispatch
+from hunter.evidence_intelligence.engineering_context_authority import (
+    ENGINEERING_IMPLEMENT_TASK_KEY,
+    EngineeringContextAuthority,
+)
 from hunter.evidence_intelligence.engineering_task_ingress import GovernedEngineeringTaskIngress
 from hunter.evidence_intelligence.intake import EvidenceIntelligenceIntakeService
 from hunter.evidence_intelligence.pre_model import PreModelInvariantError
@@ -130,6 +140,146 @@ def _new_instance_id() -> str:
     mistake another instance's live execution for its own leftover work.
     """
     return f"{_ISSUER_INSTANCE_PREFIX}-{secrets.token_hex(6)}"
+
+
+#: A verified ``AUTHORIZED`` evidence view, never a caller-supplied receipt.
+LineageEvidenceSource = Callable[[IssueAgentAuthorization], Mapping[str, Any]]
+#: The exact-dispatch guard run immediately before the durable dispatch record.
+LineageDispatchGuard = Callable[[SignedIssueAgentAuthorization, str, str], None]
+#: A request-scoped authority resolved from the trusted knowledge ledger for one authorization.
+ContextResolver = Callable[[IssueAgentAuthorization], EngineeringContextAuthority | None]
+
+
+@dataclass(frozen=True, slots=True)
+class LineageBinding:
+    """The overlay-bound context and the exact-dispatch guard for an execution."""
+
+    knowledge_overlay: tuple[dict[str, Any], ...]
+    engineering_context_authority: EngineeringContextAuthority
+    verify_dispatch: LineageDispatchGuard
+    resolve_context: ContextResolver | None = None
+
+
+def bind_dispatch_to_lineage(evidence: LineageEvidenceSource) -> LineageDispatchGuard:
+    """Bind the measured prompt and DPM context to one signed authorization evidence view."""
+
+    def verify(
+        signed: SignedIssueAgentAuthorization,
+        prompt_sha256: str,
+        dpm_context_sha256: str,
+    ) -> None:
+        authorization = signed.authorization
+        bound = evidence(authorization)
+        if not hmac.compare_digest(
+            str(bound.get("authorization_envelope_sha256", "")),
+            state.sha256_hex(signed.to_json().encode("utf-8")),
+        ):
+            raise IssueAgentExecutionError("authorization differs from the signed execution lineage")
+        scope = signed.implementation_scope
+        scope_digest = state.sha256_hex(
+            state.canonical_json(
+                {
+                    "task_id": scope.task_id,
+                    "branch_pattern": scope.branch_pattern,
+                    "base_ref": scope.base_ref,
+                    "base_sha": scope.base_sha,
+                    "allowed_paths": list(scope.allowed_paths),
+                    "prohibited_paths": list(scope.prohibited_paths),
+                }
+            )
+        )
+        if not hmac.compare_digest(str(bound.get("task_scope_sha256", "")), scope_digest):
+            raise IssueAgentExecutionError("implementation scope differs from signed execution lineage")
+        lineage = bound.get("lineage")
+        if not isinstance(lineage, Mapping):
+            raise IssueAgentExecutionError("signed execution lineage is unavailable")
+        for name, measured in (
+            ("prompt_sha256", prompt_sha256),
+            ("dpm_context_sha256", dpm_context_sha256),
+        ):
+            bound_digest = lineage.get(name)
+            if not isinstance(bound_digest, str) or not hmac.compare_digest(bound_digest, measured):
+                raise IssueAgentExecutionError(f"{name} differs from signed authorization lineage")
+
+    return verify
+
+
+def _github_auth_header(environ: Mapping[str, str]) -> str:
+    token = environ.get("GITHUB_TOKEN", "").strip()
+    if not token:
+        raise IssueAgentConfigurationError("GITHUB_TOKEN is required to read signed execution lineage")
+    return "AUTHORIZATION: basic " + base64.b64encode(f"x-access-token:{token}".encode()).decode()
+
+
+def production_lineage_binding(
+    configuration: IssuerConfiguration,
+    *,
+    environ: Mapping[str, str] | None = None,
+) -> LineageBinding:
+    """Load the signed knowledge overlay and bind dispatch to the signed ledger lineage.
+
+    Both inputs come from existing trusted authorities: the repository-pinned
+    trust roots and anchored knowledge ledger, and the verified Issue state
+    ledger. No caller-supplied prompt digest, judgement prose, or local receipt
+    can satisfy this guard.
+    """
+    source = os.environ if environ is None else environ
+    token = source.get("GITHUB_TOKEN", "").strip()
+    if not token:
+        raise IssueAgentConfigurationError("GITHUB_TOKEN is required to read signed execution lineage")
+    trusted = control.load_configuration(configuration.repository_checkout)
+    github = control.GitHubRest(configuration.repository, token)
+    provenance = control.run_provenance(github, trusted)
+    control.require_anchor(github, trusted, knowledge.KNOWLEDGE_LEDGER_REF)
+    store = state.GitLedgerStore(
+        f"https://github.com/{configuration.repository}.git",
+        auth_header=_github_auth_header(source),
+    )
+
+    def resolve_context(authorization: IssueAgentAuthorization) -> EngineeringContextAuthority:
+        """Read the anchored knowledge view for this authorization, not for the process.
+
+        The sign job reads the same trusted ledger when it mints ``AUTHORIZED``. A
+        long-running issuer that froze the overlay at boot could compile against
+        a different knowledge context; the signed prompt/DPM digest guard below
+        then refuses the dispatch. Resolving per authorization removes that
+        asymmetry without ever substituting merely-current context for signed
+        lineage.
+        """
+
+        _head, knowledge_view = knowledge.read(store, trust=trusted.trust, provenance=provenance)
+        overlay = tuple(knowledge.overlay_families(knowledge_view))
+        return EngineeringContextAuthority(
+            registry_path=configuration.repository_checkout / "docs" / "DEFECT_REGISTRY.json",
+            knowledge_overlay=overlay,
+        )
+
+    def evidence(authorization: IssueAgentAuthorization) -> Mapping[str, Any]:
+        _, entries = store.read(authorization.issue_number)
+        verified = state.verify_chain(
+            [entry.record for entry in entries],
+            repository_id=trusted.repository_id,
+            issue_number=authorization.issue_number,
+            trust=trusted.trust,
+            provenance=provenance,
+            indexes=[entry.index for entry in entries],
+        )
+        if verified.active != authorization.authorization_id:
+            raise IssueAgentExecutionError("authorization is not the active signed lineage")
+        bound = verified.authorizations[authorization.authorization_id].evidence.get(state.AUTHORIZED)
+        if bound is None:
+            raise IssueAgentExecutionError("signed authorization lineage is unavailable")
+        return bound
+
+    return LineageBinding(
+        knowledge_overlay=(),
+        engineering_context_authority=EngineeringContextAuthority(
+            registry_path=configuration.repository_checkout / "docs" / "DEFECT_REGISTRY.json",
+            knowledge_overlay=(),
+        ),
+        verify_dispatch=bind_dispatch_to_lineage(evidence),
+        resolve_context=resolve_context,
+    )
 
 
 #: Required environment variables for operational configuration
@@ -226,10 +376,16 @@ class IssuerServices:
     fallback: IssueAgentFallbackRuntime
     ingress: GovernedEngineeringTaskIngress
     boundary: IssueSourceTransientIntakeBoundary
+    lineage_binding: LineageBinding
 
 
-def compose_services(configuration: IssuerConfiguration) -> IssuerServices:
+def compose_services(
+    configuration: IssuerConfiguration,
+    *,
+    lineage_binding_factory: Callable[[IssuerConfiguration], LineageBinding] | None = None,
+) -> IssuerServices:
     """Compose all services from captured bootstrap configuration."""
+    binding = (lineage_binding_factory or production_lineage_binding)(configuration)
     resolver = build_production_source_handling_resolver(
         configuration,
         provenance_resolver=configuration.provenance_resolver,
@@ -254,6 +410,7 @@ def compose_services(configuration: IssuerConfiguration) -> IssuerServices:
         routes=ISSUE_AGENT_ROUTE_REGISTRY,
         source_handling_resolver=resolver,
         clock=configuration.clock,
+        engineering_context_authority=binding.engineering_context_authority,
     )
     ingress = GovernedEngineeringTaskIngress(
         machine=machine,
@@ -273,6 +430,29 @@ def compose_services(configuration: IssuerConfiguration) -> IssuerServices:
         fallback=fallback,
         ingress=ingress,
         boundary=boundary,
+        lineage_binding=binding,
+    )
+
+
+def _ingress_for_authority(
+    services: IssuerServices, authority: EngineeringContextAuthority
+) -> GovernedEngineeringTaskIngress:
+    """Compile one authorization with its own verified knowledge authority."""
+
+    if authority is services.lineage_binding.engineering_context_authority:
+        return services.ingress
+    machine = SmartPromptMachine(
+        repository=services.repository,
+        profiles=ISSUE_AGENT_PROFILE_REGISTRY,
+        routes=ISSUE_AGENT_ROUTE_REGISTRY,
+        source_handling_resolver=services.source_handling_resolver,
+        clock=services.configuration.clock,
+        engineering_context_authority=authority,
+    )
+    return GovernedEngineeringTaskIngress(
+        machine=machine,
+        routes=ISSUE_AGENT_ROUTE_REGISTRY,
+        profiles=ISSUE_AGENT_PROFILE_REGISTRY,
     )
 
 
@@ -317,6 +497,21 @@ def prepare_authorization(
         processed_at=services.configuration.clock.now(),
     )
 
+    # Resolve the signer's knowledge context before consuming the authorization.
+    # The ledger-backed production resolver rereads the anchored knowledge view
+    # for every authorization; a missing or untrusted context is refused here.
+    authority = services.lineage_binding.engineering_context_authority
+    resolver = services.lineage_binding.resolve_context
+    if resolver is not None:
+        try:
+            resolved_authority = resolver(authorization)
+        except Exception as error:
+            raise IssueAgentExecutionError("authorization knowledge context is unavailable") from error
+        if resolved_authority is None:
+            raise IssueAgentExecutionError("authorization knowledge context is unavailable")
+        authority = resolved_authority
+    ingress = _ingress_for_authority(services, authority)
+
     services.ledger.claim(
         authorization,
         claimed_at=services.configuration.clock.now(),
@@ -329,11 +524,26 @@ def prepare_authorization(
             processed_at=services.configuration.clock.now(),
         )
 
-        compiled = services.ingress.compile(request, implementation_scope=signed.implementation_scope)
+        # Reuse the canonical ingress when the authorization needs no new context;
+        # otherwise compile through the request-scoped ingress above. Both paths
+        # use the one GovernedEngineeringTaskIngress implementation.
+        if ingress is services.ingress:
+            compiled = services.ingress.compile(request, implementation_scope=signed.implementation_scope)
+        else:
+            compiled = ingress.compile(request, implementation_scope=signed.implementation_scope)
         envelope = compiled.envelope
         envelope.verify_issuer_signature(services.configuration.prompt_verifier)
         if envelope.build_record_id != compiled.compilation.manifest.build_record_id:
             raise IssueAgentExecutionError("signed envelope and persisted build refer to different lineage")
+
+        artifact = compiled.compilation.orchestration.build_result.prompt_artifact
+        if artifact is None:
+            raise IssueAgentExecutionError("no concrete prompt artifact was compiled for execution")
+        prompt_sha256 = hashlib.sha256(artifact.content.encode("utf-8")).hexdigest()
+        dpm_context_sha256 = hashlib.sha256(
+            authority.canonical_json(ENGINEERING_IMPLEMENT_TASK_KEY, scope=signed.implementation_scope).encode("utf-8")
+        ).hexdigest()
+        services.lineage_binding.verify_dispatch(signed, prompt_sha256, dpm_context_sha256)
 
         handoff_document = serialize_prompt_automation_handoff(envelope)
 
